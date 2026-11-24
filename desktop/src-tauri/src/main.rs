@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    solnet_desktop_lib::run()
+    a09f_desktop_lib::run()
 }

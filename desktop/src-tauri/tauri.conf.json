@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SolNet",
+  "productName": "a09f",
   "version": "0.1.0",
   "identifier": "test.solanum.desktop",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "SolNet",
+        "title": "a09f",
         "width": 980,
         "height": 660,
         "minWidth": 720,
