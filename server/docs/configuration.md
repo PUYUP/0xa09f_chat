@@ -136,9 +136,19 @@ Module aktif: `modules/protocol/charybdis` (kompatibel solanum),
 
 ## soju/config
 
-Tidak berubah (tidak ada secret di dalamnya). User/network dibuat via
-`sojuctl` — sekarang **otomatis oleh test** (`tests/test_soju.py` menjalankan
-`sojuctl user create/update` + `network create` yang idempotent).
+Tidak ada secret di dalamnya — password user/network dibuat via `sojuctl`
+(**otomatis oleh test** `tests/test_soju.py`, idempotent).
+
+Directive penting:
+
+- `auth internal` — user disimpan di SQLite `/db/soju.db`
+- `disable-inactive-user 30d` — user yang disconnect >30 hari di-disable:
+  upstream diputus (tidak ada ghost session di solanum), data tetap utuh
+- `enable-user-on-auth true` — login SASL sukses me-re-enable user
+  otomatis, jadi user yang absen lama bisa langsung balik tanpa intervensi admin
+- `message-store db` — history disimpan di SQLite; pesan tidak pernah
+  dihapus otomatis (belum pakai `message-expiry`)
+- `listen unix+admin:///db/soju-admin.sock` — socket admin untuk `sojuctl`
 
 ## scripts/generate-certs.sh
 

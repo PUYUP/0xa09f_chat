@@ -7,6 +7,8 @@ tls /soju-tls/tls-cert.pem /soju-tls/tls-key.pem
 hostname irc.solanum.test
 title "SolNet Bouncer"
 auth internal
+disable-inactive-user 30d
+enable-user-on-auth true
 
 db sqlite3 /db/soju.db
 message-store db
