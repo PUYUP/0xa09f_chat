@@ -50,7 +50,9 @@ fn send(line: String, state: State<IrcState>) -> Result<(), String> {
         return Err("not connected".to_string());
     };
     let mut s = stream.lock().unwrap();
-    writeln!(s, "{line}").map_err(|e| e.to_string())?;
+    // IRC requires CRLF line endings; writeln! would only send \n.
+    s.write_all(format!("{line}\r\n").as_bytes())
+        .map_err(|e| e.to_string())?;
     s.flush().map_err(|e| e.to_string())
 }
 
