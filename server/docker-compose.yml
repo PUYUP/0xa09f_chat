@@ -31,7 +31,7 @@ services:
       - ./solanum/etc:/etc/solanum:ro
       - ./solanum/etc/motd:/usr/local/etc/ircd.motd:ro
       - solanum-logs:/var/log/solanum
-      - solanum-state:/var/lib/solanum     # ban.db + runtime state
+      - solanum-state:/var/local                # bandb ban.db (/var/local/ban.db)
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6667"]
       interval: 10s
@@ -40,7 +40,8 @@ services:
       start_period: 20s
     logging: *default-logging
     networks:
-      - ircnet
+      ircnet:
+        ipv4_address: 172.30.99.10
 
   atheme:
     image: s0fx2/atheme-irc-services@sha256:29f42d1e01ae198e21f80867e0b7924297f5edfa9c5b532c4d0dae4a8461523b
@@ -63,7 +64,8 @@ services:
       start_period: 20s
     logging: *default-logging
     networks:
-      - ircnet
+      ircnet:
+        ipv4_address: 172.30.99.20
 
   soju:
     image: codeberg.org/emersion/soju@sha256:c695fb996dce168fb39449415c7523b17189ed81b48c107d4728fc93fb30e799
@@ -88,7 +90,8 @@ services:
       start_period: 15s
     logging: *default-logging
     networks:
-      - ircnet
+      ircnet:
+        ipv4_address: 172.30.99.30
 
 volumes:
   soju-db:

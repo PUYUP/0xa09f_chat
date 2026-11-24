@@ -1,171 +1,152 @@
 # Konfigurasi
 
+## Prerequisite: `.env` + sertifikat
+
+```bash
+cd server
+cp .env.example .env          # isi password/port sesuai kebutuhan
+./scripts/generate-certs.sh   # generate TLS cert self-signed (sekali saja)
+docker compose up -d --build
+```
+
+- `.env` — gitignored; berisi link password, password user soju, port host,
+  subnet, `ATHEME_HOST`.
+- `scripts/generate-certs.sh` — generate cert solanum (`ssl-*.pem`, `dh.pem`)
+  dan soju (`tls-*.pem`) dengan SAN `irc.solanum.test,localhost,127.0.0.1`.
+  Semua file cert **di-gitignore** — regenerate dengan script ini.
+- Password link disuntik via **templating**: `*.conf.tmpl` di-render oleh
+  entrypoint container memakai env dari `.env` (via `env_file`).
+
 ## docker-compose.yml
 
-Tiga service dalam satu bridge network `ircnet` (`172.30.99.0/24`, subnet statis supaya
-hostname internal konsisten):
+Tiga service dalam bridge network `ircnet` (subnet dari `IRC_SUBNET`,
+default `172.30.99.0/24`). IP statis dipakai lagi untuk ketiga container:
 
-| Service  | IP            | Ports diekspos ke host                          |
-|----------|---------------|--------------------------------------------------|
-| solanum  | 172.30.99.10  | `6667` plain, `6697` TLS                        |
-| atheme   | 172.30.99.20  | tidak ada (hanya internal)                       |
-| soju     | 172.30.99.30  | `16667` plain, `16697` TLS                       |
+| Service  | IP            | Ports ke host (default)                    |
+|----------|---------------|--------------------------------------------|
+| solanum  | 172.30.99.10  | `6667` plain, `6697` TLS                  |
+| atheme   | 172.30.99.20  | tidak ada (internal)                       |
+| soju     | 172.30.99.30  | `16667` plain, `16697` TLS                 |
 
-Named volumes:
+Kenapa IP statis: `connect` block solanum mencocokkan `host` terhadap IP
+peer — nama docker DNS (`atheme`) **tidak** cocok (error `Invalid host`).
+`ATHEME_HOST` di `.env` harus sama dengan `ipv4_address` atheme.
+
+Image di-pin:
+
+- solanum: build dari commit persis (`SOLANUM_COMMIT`, default HEAD yang
+  teruji `92afd03…`) — Solanum tidak punya tag rilis.
+- atheme/soju: pinned by `@sha256:` digest — reproducible, tidak ikut
+  `latest` yang berubah.
+
+Healthcheck + `depends_on: service_healthy`:
+
+- solanum: bash `/dev/tcp` ke `127.0.0.1:6667`
+- atheme: `pgrep atheme-services` + `nc -z solanum 6667`
+- soju: `sojuctl server status`
+
+Logging: semua service pakai json-file driver `max-size: 10m, max-file: 3`
+(anchor `x-logging`) supaya log docker tidak memenuhi disk.
+
+Volumes:
 
 - `solanum-logs` → `/var/log/solanum`
+- `solanum-state` → `/var/local` — **ban.db solanum ada di `/var/local/ban.db`**
+  (path compile-time `DBPATH`; flag `-banfile` adalah dead code seperti
+  `-motdfile`)
 - `atheme-data` → `/atheme/var`
-- `soju-db` → `/db` (SQLite soju + admin socket)
-- `soju-uploads` → `/uploads`
+- `soju-db` → `/db`, `soju-uploads` → `/uploads`
 
 Bind mounts:
 
-- `./solanum/etc` → `/etc/solanum` (ro) — config, TLS, motd sumber
-- `./solanum/etc/motd` → `/usr/local/etc/ircd.motd` (ro) — lihat catatan MOTD di bawah
-- `./atheme/etc` → `/atheme/etc` — config + `services.db` (persisten di repo)
-- `./soju/config` → `/soju-config` (ro)
-- `./soju` → `/soju-tls` (ro) — cert/key/motd
+- `./solanum/etc` → `/etc/solanum` (ro) — `ircd.conf.tmpl`, motd, cert
+- `./solanum/etc/motd` → `/usr/local/etc/ircd.motd` (ro)
+- `./atheme/etc` → `/atheme/etc` — `atheme.conf.tmpl`; `atheme.conf` hasil
+  render di-generate di sini (gitignored); `services.db` persisten
+- `./atheme/entrypoint.sh` → `/render-entrypoint.sh` (ro) — render lalu
+  delegasi ke `/entrypoint.sh` bawaan image
+- `./soju/config` → `/soju-config` (ro), `./soju` → `/soju-tls` (ro)
 
-## solanum/etc/ircd.conf
+## solanum/Dockerfile
 
-Bagian penting:
+Multi-stage: `builder` (debian slim + toolchain + git) compile meson →
+`stage-1` runtime slim hanya berisi `/usr/local` hasil install + library
+runtime (`libssl3`, `libsqlite3-0`, `libltdl7`, `netbase`, `ca-certificates`).
+Image runtime ~ratusan MB, tanpa gcc/git/meson.
 
-- `serverinfo`: `name = "irc.solanum.test"`, `sid = "10A"`, `network_name = "SolNet"`
-- `listen`: satu blok `port = 6667; sslport = 6697;` — TLS diport yang sama via upgrade
-- `auth`/`class`: semua user masuk class `users`
-- `operator "admin"`: password **sudah di-hash** (`$6$` = SHA-512 crypt). Ubah dengan
-  `mkpasswd`/`openssl passwd -6` sebelum dipakai serius.
-- `connect "services.int"`: blok uplink untuk Atheme.
-  - `host = "172.30.99.20"` — IP statis container atheme
-  - `send_password`/`accept_password` — harus cocok dengan `uplink{}` di atheme.conf
-    (arah dibalik: `send` di solanum = `receive` di atheme)
-  - `port = 6667`, `class = "server"`, `flags = topicburst`
-- `service { name = "services.int"; }` — menandai services.int sebagai service server
-- `identify_service = "NickServ@services.int"` — dipakai SASL/ACCOUNTNOTIFY
-- `path`: `/usr/local/modules` + `/usr/local/modules/autoload`
+Build arg `SOLANUM_COMMIT` (default SHA yang teruji) di-fetch dengan
+`git fetch --depth 1 origin <sha>` — reproducible.
 
-### Catatan MOTD (penting)
+Catatan dependency yang pernah jadi masalah:
 
-Flag `-motdfile` di solanum **tidak berfungsi** di versi ini — `cache_user_motd()` selalu
-membaca path compile-time `/usr/local/etc/ircd.motd` (`ETCPATH/ircd.motd`). Karena itu
-`docker-compose.yml` me-mount `./solanum/etc/motd` langsung ke path tersebut. Jangan hapus
-mount itu, kalau tidak client dapat `422 MOTD File is missing`.
+- `netbase` wajib ( `/etc/services`, `/etc/protocols` ) untuk `getaddrinfo`
+  → authd.
+- `/var/local` harus writable `ircd` — ban.db SQLite bandb.
+- User `ircd` uid 1001 — solanum menolak root.
+- `/etc/ld.so.conf.d/solanum.conf` didaftarkan manual untuk
+  `/usr/local/lib/x86_64-linux-gnu`.
 
-### TLS
+## solanum/entrypoint.sh
 
-`ssl-cert.pem`, `ssl-key.pem`, `dh.pem` self-signed untuk `irc.solanum.test`. Regenerate:
+1. Hapus stale pidfile.
+2. Render `/etc/solanum/ircd.conf.tmpl` → `/tmp/ircd.conf` via `sed`,
+   substitusi `__LINK_SOLANUM_SEND__`, `__LINK_SOLANUM_ACCEPT__`,
+   `__ATHEME_HOST__` dari env.
+3. `exec solanum -foreground -configfile /tmp/ircd.conf ...`
 
-```bash
-openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout solanum/etc/ssl-key.pem -out solanum/etc/ssl-cert.pem \
-  -days 3650 -subj "/CN=irc.solanum.test"
-openssl dhparam -out solanum/etc/dh.pem 2048   # lambat, opsional untuk dev
-```
+## solanum/etc/ircd.conf.tmpl
 
-## solanum/Dockerfile + entrypoint.sh
-
-- Base `debian:bookworm-slim`; dependency build: `meson`, `ninja`, `flex`, `bison`,
-  `libsqlite3-dev`, `libltdl-dev`, `libssl-dev`, **`netbase`**.
-- `netbase` wajib: menyediakan `/etc/services` dan `/etc/protocols`. Tanpa itu `getaddrinfo`
-  gagal → `authd` melaporkan `DNS: no name servers!` dan helper restart terus.
-- Build: `git clone --depth 1` solanum → `meson setup build --prefix=/usr/local` →
-  `meson compile` → `meson install`.
-- User `ircd` (uid 1001) — solanum menolak jalan sebagai root (`Don't run ircd as root!!!`).
-  `/var/lib/solanum` dan `/var/log/solanum` di-chown ke `ircd` — wajib, karena helper `bandb`
-  membuka SQLite ban.db di situ dan `exit(1)` kalau gagal (menjatuhkan seluruh ircd).
-- `entrypoint.sh`: hapus stale pidfile (`/tmp/solanum.pid`, `/var/lib/solanum/solanum.pid`)
-  lalu `exec solanum -foreground` dengan path eksplisit. Tanpa cleanup pidfile, restart
-  kena false-positive "daemon is already running".
-
-## atheme/etc/atheme.conf
-
-Config Atheme 7.2.x (image `s0fx2/atheme-irc-services`, format module path lama dengan
-prefix `modules/`).
-
-Module yang diaktifkan:
-
-- `modules/protocol/charybdis` — protokol server-link yang kompatibel dengan Solanum
-  (image tidak punya `solanum.so`; charybdis adalah pengganti yang benar)
-- `modules/backend/opensex` — database backend (satu-satunya yang dipakai)
-- `modules/crypto/pbkdf2v2` — hashing password
-- `modules/nickserv/*`, `modules/chanserv/*`, `modules/hostserv/*`, `modules/helpserv/*`,
-  `modules/transport/xmlrpc`, dll — services standar
-
-Blok penting:
+Sama seperti konfig sebelumnya, bedanya blok `connect "services.int"`:
 
 ```conf
-serverinfo {
-    name = "services.int";      # nama server services di jaringan
-    numeric = "00A";            # SID services
-    netname = "SolNet";
-}
-
-uplink "irc.solanum.test" {
-    host = "solanum";                       # docker DNS → 172.30.99.20? tidak:
-                                            # resolve ke container solanum
-    port = 6667;
-    send_password = "change-me-atheme-to-solanum";    # = accept_password di solanum
-    receive_password = "change-me-solanum-to-atheme";# = send_password di solanum
-}
+connect "services.int" {
+	host = "__ATHEME_HOST__";              # → 172.30.99.20 dari .env
+	send_password = "__LINK_SOLANUM_SEND__";
+	accept_password = "__LINK_SOLANUM_ACCEPT__";
+	port = 6667;
+	class = "server";
+	flags = topicburst;
+};
 ```
 
-Catatan:
+Arah password (mudah tertukar):
 
-- `services.db` ada di `atheme/etc/` — ikut ter-mount, jadi data registrasi persisten
-  di repo (bukan di volume).
-- `#mta` dikomentari — pengiriman email dimatikan, jadi services tidak memanggil
-  `/usr/sbin/sendmail` (registrasi pakai `registeremail = "noreply@solanum.test"`).
-- Atheme butuh waktu reconnect kalau solanum restart — normal, dia retry tiap ~10 detik.
+- solanum `send_password` = password yang solanum kirim = Atheme
+  `receive_password` → env `LINK_SOLANUM_SEND`
+- solanum `accept_password` = password yang diharapkan solanum = Atheme
+  `send_password` → env `LINK_SOLANUM_ACCEPT`
+
+## atheme/etc/atheme.conf.tmpl + entrypoint.sh
+
+`atheme.conf.tmpl` = config Atheme 7.2 dengan dua placeholder di blok
+`uplink "irc.solanum.test"`:
+
+```conf
+send_password = "__LINK_SOLANUM_ACCEPT__";     # = solanum accept_password
+receive_password = "__LINK_SOLANUM_SEND__";    # = solanum send_password
+```
+
+`atheme/entrypoint.sh` me-render ke `/atheme/etc/atheme.conf` lalu
+`exec /entrypoint.sh` (entrypoint asli image: cek writable + start
+`atheme-services -n`).
+
+Module aktif: `modules/protocol/charybdis` (kompatibel solanum),
+`modules/backend/opensex`, `modules/crypto/pbkdf2v2`, services standar.
+`#mta` dikomentari — email mati.
 
 ## soju/config
 
-```conf
-listen ircs://:6697                          # TLS untuk client
-listen irc+insecure://:6667                  # plain untuk client
-listen unix+admin:///db/soju-admin.sock      # socket admin untuk sojuctl
+Tidak berubah (tidak ada secret di dalamnya). User/network dibuat via
+`sojuctl` — sekarang **otomatis oleh test** (`tests/test_soju.py` menjalankan
+`sojuctl user create/update` + `network create` yang idempotent).
 
-tls /soju-tls/tls-cert.pem /soju-tls/tls-key.pem
-hostname irc.solanum.test                    # nama network yang dilihat client
-title "SolNet Bouncer"
-auth internal                                # user internal (bukan PAM)
+## scripts/generate-certs.sh
 
-db sqlite3 /db/.soju.db → /db/soju.db        # via named volume soju-db
-message-store db                             # simpan history di DB yang sama
-motd /soju-tls/motd
-```
+Generate ulang semua cert dengan SAN. Jalankan saat:
 
-Catatan format:
-
-- `title` harus di-quote kalau lebih dari satu kata.
-- `motd` butuh **path file**, bukan teks inline.
-- `listen unix+admin://` butuh prefix `://`; container image tidak punya `/tmp`, jadi
-  socket ditaruh di `/db` (volume writable).
-- Scheme upstream yang didukung `sojuctl`: `ircs`, `irc+insecure`, `irc+unix`.
-  Bare `host:port` default ke TLS — untuk plain wajib `irc+insecure://`.
-
-## soju user & upstream (dibuat via sojuctl)
-
-Disimpan di SQLite `/db/soju.db` (volume `soju-db`), jadi persist antar restart:
+- pertama kali setup (file cert di-gitignore)
+- cert mau di-rotate
 
 ```bash
-docker exec soju /sojuctl -config /soju-config user create \
-    -username pointilis -password <password> -admin
-
-docker exec soju /sojuctl -config /soju-config user run pointilis \
-    network create -addr irc+insecure://solanum:6667 \
-    -name solanum -nick soluser -realname "Soju Test" -enabled true
-```
-
-Update addr network yang sudah ada:
-
-```bash
-docker exec soju /sojuctl -config /soju-config user run pointilis \
-    network update solanum -addr irc+insecure://solanum:6667
-```
-
-Lihat status:
-
-```bash
-docker exec soju /sojuctl -config /soju-config user run pointilis network status
-docker exec soju /sojuctl -config /soju-config user status pointilis
+cd server && ./scripts/generate-certs.sh
 ```

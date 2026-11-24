@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsqlite3-dev \
     libltdl-dev \
     libssl-dev \
+    git \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -50,9 +51,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /usr/local /usr/local
 
+# bandb's SQLite ban.db lives at the compile-time DBPATH /var/local/ban.db
+# (the -banfile CLI flag is dead code in this Solanum version), so /var/local
+# must be writable by ircd.
 RUN useradd -r -u 1001 -d /var/lib/solanum ircd \
-    && mkdir -p /var/log/solanum /var/lib/solanum \
-    && chown -R ircd:ircd /var/log/solanum /var/lib/solanum /usr/local
+    && mkdir -p /var/log/solanum /var/lib/solanum /var/local \
+    && chown -R ircd:ircd /var/log/solanum /var/lib/solanum /var/local /usr/local
 
 USER ircd
 

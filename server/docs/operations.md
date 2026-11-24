@@ -3,13 +3,20 @@
 ## Perintah sehari-hari
 
 ```bash
-docker compose up -d --build     # start / rebuild setelah ubah Dockerfile
-docker compose ps                # status semua container
+docker compose up -d --build     # start / rebuild setelah ubah Dockerfile/config
+docker compose ps                # status + health semua container
 docker compose logs -f <svc>     # tail log (solanum|atheme|soju)
 docker compose restart <svc>     # restart satu service
 docker compose down              # stop semua (volume tetap ada)
 docker compose down -v           # stop + hapus SEMUA volume (data hilang!)
 ```
+
+Healthcheck jalan per service (`docker inspect <c> --format '{{.State.Health.Status}}'`):
+solanum probe TCP 6667, atheme `pgrep`+`nc` ke solanum, soju `sojuctl server status`.
+`depends_on: service_healthy` membuat atheme/soju menunggu solanum benar-benar ready.
+
+Setelah ubah `.env` atau `*.tmpl`: `docker compose up -d` (recreate) —
+config di-render ulang oleh entrypoint saat start.
 
 ## Cek kesehatan link
 
@@ -31,14 +38,14 @@ docker exec soju /sojuctl -config /soju-config user run pointilis network status
 
 | Data                        | Lokasi                              | Persist? |
 |-----------------------------|-------------------------------------|----------|
-| solanum ban.db              | `/var/lib/solanum` (container fs)   | tidak — reset tiap recreate |
+| solanum ban.db              | `/var/local/ban.db` (volume `solanum-state`) | ya |
 | solanum logs                | volume `solanum-logs`               | ya       |
 | atheme services.db          | `./atheme/etc/services.db` (repo)   | ya       |
 | soju users/networks/history | volume `soju-db` → `/db/soju.db`    | ya       |
 | soju uploads                 | volume `soju-uploads`               | ya       |
 
-Catatan: `ban.db` solanum masih di container layer — kalau mau persist,
- tambahkan volume `/var/lib/solanum`. Untuk dev lokal biasanya tidak masalah.
+Catatan: path ban.db adalah compile-time `/var/local/ban.db` — flag
+`-banfile` di solanum adalah dead code (sama seperti `-motdfile`).
 
 ## Reload config tanpa restart
 
@@ -57,9 +64,11 @@ Cek `docker logs solanum`. Penyebab yang sudah pernah terjadi:
 |---------------------------------------------|----------------|
 | `Don't run ircd as root!!!`                 | image jalan sbg root — Dockerfile harus `USER ircd` |
 | `authd: DNS: no name servers!`              | image kurang `netbase` → `/etc/services`+`/etc/protocols` hilang; `getaddrinfo` gagal. Tambah `netbase` di apt install |
-| `bandb failure: Unable to open sqlite database` | `/var/lib/solanum` tidak writable oleh `ircd` → ircd exit. `chown ircd:ircd` di Dockerfile |
+| `bandb failure: Unable to open sqlite database` | `/var/local` tidak writable oleh `ircd` (ban.db path = `/var/local/ban.db`) → ircd exit. `chown ircd:ircd /var/local` di Dockerfile |
 | `daemon is already running`                 | stale pidfile → `entrypoint.sh` hapus `/tmp/solanum.pid` |
 | `422 MOTD File is missing` ke client        | mount `./solanum/etc/motd` → `/usr/local/etc/ircd.motd` hilang |
+| `Access denied, invalid host for server services.int` | `host` di `connect` block tidak cocok dengan IP peer — pakai IP statis (`ATHEME_HOST` = `ipv4_address` atheme), bukan nama docker DNS |
+| TLS `access_denied` setelah burst koneksi  | throttle solanum (`throttle_duration=60`) — tunggu ±1 menit |
 
 ### atheme tidak link
 
@@ -96,8 +105,11 @@ Cek `docker logs solanum`. Penyebab yang sudah pernah terjadi:
 Lihat [testing.md](testing.md). Ringkas:
 
 ```bash
-python3 tests/test_solanum.py    # direct ke solanum:6667
-python3 tests/test_soju.py       # via bouncer:16667 + SASL
+python3 tests/test_solanum.py          # direct ke solanum:6667
+python3 tests/test_solanum.py --tls    # direct TLS :6697
+python3 tests/test_soju.py             # via bouncer:16667 + SASL (self-setup)
+python3 tests/test_soju.py --tls       # via bouncer TLS :16697
+python3 tests/test_tls.py              # handshake TLS kedua listener
 ```
 
 ## Security notes (dev only!)

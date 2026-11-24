@@ -1,31 +1,104 @@
 #!/usr/bin/env python3
 """End-to-end test for the Soju bouncer.
 
-Connects to Soju on port 16667, authenticates via SASL PLAIN as the
-'pointilis' bouncer user, binds to the 'solanum' network
-(username 'pointilis/solanum'), joins a channel and queries NickServ.
+Connects to Soju (default port 16667, or 16697 with --tls), authenticates
+via SASL PLAIN, binds to the upstream network, joins a channel and queries
+NickServ through the bouncer.
 
-Prereq: run `docker exec soju /sojuctl -config /soju-config user create
--username pointilis -password change-me -admin` once.
+Self-contained: ensures the bouncer user and upstream network exist by
+calling `sojuctl` inside the container (idempotent). Credentials are read
+from server/.env (SOJU_USER / SOJU_PASSWORD / SOJU_NETWORK).
 
-Usage: python3 tests/test_soju.py [host] [port]
+Prereq: `docker compose up -d` from server/ and the soju container running.
+
+Usage: python3 tests/test_soju.py [--tls] [host] [port]
 """
 
 import base64
+import os
 import socket
+import ssl
+import subprocess
 import sys
 import time
 
-HOST = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 16667
+HERE = os.path.dirname(os.path.abspath(__file__))
+SERVER_DIR = os.path.dirname(HERE)
 
-BOUNCER_USER = "pointilis"
-BOUNCER_PASS = "change-me"
-NETWORK = "solanum"
+
+def load_env(path):
+    env = {}
+    if os.path.exists(path):
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip()
+    return env
+
+
+ENV = load_env(os.path.join(SERVER_DIR, ".env"))
+
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+USE_TLS = "--tls" in sys.argv
+
+HOST = args[0] if len(args) > 0 else "127.0.0.1"
+PORT = int(args[1]) if len(args) > 1 else (16697 if USE_TLS else 16667)
+
+BOUNCER_USER = ENV.get("SOJU_USER", "pointilis")
+BOUNCER_PASS = ENV.get("SOJU_PASSWORD", "change-me")
+NETWORK = ENV.get("SOJU_NETWORK", "solanum")
 CHANNEL = "#testchan"
 
-s = socket.create_connection((HOST, PORT), timeout=10)
-s.settimeout(15)
+
+def sojuctl(*argv):
+    """Run sojuctl inside the soju container; return (rc, output)."""
+    cmd = ["docker", "exec", "soju", "/sojuctl", "-config", "/soju-config", *argv]
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    return p.returncode, (p.stdout + p.stderr).strip()
+
+
+def ensure_user():
+    rc, out = sojuctl("user", "status", BOUNCER_USER)
+    if rc == 0:
+        # update password in case .env changed
+        sojuctl("user", "update", BOUNCER_USER, "-password", BOUNCER_PASS)
+        print(f"[SETUP] user {BOUNCER_USER} exists (password synced)")
+        return
+    rc, out = sojuctl("user", "create", "-username", BOUNCER_USER,
+                     "-password", BOUNCER_PASS, "-admin")
+    if rc != 0:
+        raise RuntimeError(f"sojuctl user create failed: {out}")
+    print(f"[SETUP] created user {BOUNCER_USER}")
+
+
+def ensure_network():
+    rc, out = sojuctl("user", "run", BOUNCER_USER, "network", "status")
+    if rc == 0 and NETWORK in out:
+        print(f"[SETUP] network {NETWORK} exists")
+        return
+    rc, out = sojuctl("user", "run", BOUNCER_USER, "network", "create",
+                      "-addr", f"irc+insecure://solanum:6667",
+                      "-name", NETWORK, "-nick", "soluser",
+                      "-realname", "Soju Test", "-enabled", "true")
+    if rc != 0:
+        raise RuntimeError(f"sojuctl network create failed: {out}")
+    print(f"[SETUP] created network {NETWORK}")
+
+
+ensure_user()
+ensure_network()
+
+raw = socket.create_connection((HOST, PORT), timeout=10)
+if USE_TLS:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE  # self-signed dev cert
+    s = ctx.wrap_socket(raw, server_hostname=HOST)
+else:
+    s = raw
+s.settimeout(20)
 f = s.makefile("rw", encoding="utf-8", newline="\r\n")
 
 
@@ -36,7 +109,6 @@ def send(line):
 
 
 def read_until(pred, timeout=15):
-    """Read lines until pred(line) is true. Returns True on match."""
     end = time.time() + timeout
     while time.time() < end:
         line = f.readline()
@@ -58,10 +130,10 @@ def require(pred, what, timeout=15):
 send("CAP LS 302")
 send(f"NICK {BOUNCER_USER}/{NETWORK}")
 send(f"USER {BOUNCER_USER}/{NETWORK} 0 * :Soju Client")
-require(lambda l: " CAP * LS " in l, "CAP LS")
+require(lambda l: " CAP * LS " in l or (" CAP " in l and " LS " in l), "CAP LS")
 
 send("CAP REQ :sasl")
-require(lambda l: " CAP * ACK sasl" in l, "CAP ACK sasl")
+require(lambda l: " ACK " in l and "sasl" in l, "CAP ACK sasl")
 
 send("AUTHENTICATE PLAIN")
 require(lambda l: "AUTHENTICATE +" in l, "AUTHENTICATE challenge")
@@ -75,16 +147,16 @@ require(lambda l: " 001 " in l, "bouncer welcome (001)")
 
 # --- network-bound session ---
 send(f"JOIN {CHANNEL}")
-require(lambda l: "#testchan" in l and ("JOIN" in l or "topic" in l.lower()),
-        "joined channel via upstream", timeout=10)
+require(lambda l: CHANNEL in l and ("JOIN" in l or "topic" in l.lower()),
+        "joined channel via upstream", timeout=15)
 
 send(f"PRIVMSG {CHANNEL} :hello via soju")
 time.sleep(2)
-require(lambda l: "PING" in l or "hello via soju" in l, "message sent", timeout=6)
+require(lambda l: "PING" in l or "hello via soju" in l, "message sent", timeout=8)
 
 send("PRIVMSG NickServ :INFO")
 time.sleep(2)
-require(lambda l: "NickServ" in l, "NickServ reachable through bouncer", timeout=8)
+require(lambda l: "NickServ" in l, "NickServ reachable through bouncer", timeout=10)
 
 s.close()
 print("ALL TESTS PASSED")

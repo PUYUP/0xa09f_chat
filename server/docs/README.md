@@ -2,11 +2,11 @@
 
 Stack IRC lengkap yang berjalan di atas Docker Compose:
 
-| Service  | Peran                        | Image                                   | Port host         |
-|----------|------------------------------|-----------------------------------------|-------------------|
-| solanum  | IRC daemon (server)          | `solanum-local` (build dari source)     | `6667`, `6697`    |
-| atheme   | IRC services (NickServ dll)  | `s0fx2/atheme-irc-services:latest`      | internal only     |
-| soju     | Bouncer                     | `codeberg.org/emersion/soju:latest`     | `16667`, `16697`  |
+| Service  | Peran                        | Image                                   | Port host (default) |
+|----------|------------------------------|-----------------------------------------|---------------------|
+| solanum  | IRC daemon (server)          | `solanum-local` (build dari source)     | `6667`, `6697`      |
+| atheme   | IRC services (NickServ dll)  | `s0fx2/atheme-irc-services` (pinned)    | internal only       |
+| soju     | Bouncer                     | `codeberg.org/emersion/soju` (pinned)   | `16667`, `16697`    |
 
 ## Arsitektur
 
@@ -20,60 +20,66 @@ Stack IRC lengkap yang berjalan di atas Docker Compose:
   :16667/:16697└────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **solanum** — IRC daemon utama. Menerima client langsung di `6667` (plain) dan `6697` (TLS). Atheme
-  terhubung sebagai server "services" via port `6667` di jaringan internal.
-- **atheme** — services (NickServ, ChanServ, dll). Dial-out ke `solanum:6667` dengan password TS6.
-  Muncul di jaringan sebagai `services.int` (numeric `00A`).
-- **soju** — bouncer. Client connect dengan SASL, soju meneruskan ke solanum sebagai nick upstream
-  (`soluser`). Menyimpan riwayat pesan di SQLite.
+- **solanum** — IRC daemon utama. Menerima client langsung di `6667` (plain)
+  dan `6697` (TLS). Atheme terhubung sebagai server "services" via `6667`.
+- **atheme** — services (NickServ, ChanServ, dll). Dial-out ke `solanum:6667`
+  dengan password TS6. Muncul sebagai `services.int` (numeric `00A`).
+- **soju** — bouncer. Client connect dengan SASL, soju meneruskan ke solanum
+  sebagai nick upstream (`soluser`). History pesan di SQLite.
 
-Identitas jaringan:
-
-- Server IRC: `irc.solanum.test`, SID `10A`, nama network `SolNet`
-- Services: `services.int`
-- Bouncer: hostname iklan `irc.solanum.test`, judul `SolNet Bouncer`
+Identitas jaringan: server `irc.solanum.test` SID `10A`, network `SolNet`,
+services `services.int`, bouncer `SolNet Bouncer`.
 
 ## Quickstart
 
 ```bash
-docker compose up -d --build    # build solanum + start semua service
-docker compose ps               # cek status
-docker compose logs -f solanum  # tail log
+cd server
+cp .env.example .env            # sesuaikan password/port
+./scripts/generate-certs.sh     # generate TLS cert (sekali saja)
+docker compose up -d --build
+docker compose ps               # semua harus (healthy)
 ```
 
-Semua service `restart: unless-stopped` — stack otomatis bangkit setelah Docker restart.
+Semua service `restart: unless-stopped` + healthcheck — stack otomatis
+bangkit dan saling menunggu (`depends_on: service_healthy`).
 
 ## Dokumentasi
 
-- [configuration.md](configuration.md) — penjelasan tiap file konfigurasi
+- [configuration.md](configuration.md) — `.env`, templating config, image
+  pinning, healthcheck, volume
 - [usage.md](usage.md) — cara connect sebagai client, perintah NickServ/ChanServ
 - [operations.md](operations.md) — manajemen service, logs, persistence, troubleshooting
-- [testing.md](testing.md) — test suite di `tests/`
+- [testing.md](testing.md) — test suite di `tests/` (self-contained)
 
 ## Struktur repo
 
 ```
-.
-├── docker-compose.yml          # definisi 3 service + network + volumes
+server/
+├── docker-compose.yml          # 3 service + network + volumes + healthcheck
+├── .env.example                # template env (copy ke .env, gitignored)
+├── scripts/generate-certs.sh   # generate TLS cert self-signed + SAN
 ├── solanum/
-│   ├── Dockerfile              # build solanum dari source (Debian bookworm-slim)
-│   ├── entrypoint.sh           # foreground mode + cleanup pidfile
+│   ├── Dockerfile              # multi-stage build, pinned commit
+│   ├── entrypoint.sh           # render config + foreground + cleanup pidfile
 │   └── etc/
-│       ├── ircd.conf           # konfigurasi solanum
-│       ├── motd                # MOTD (di-mount ke /usr/local/etc/ircd.motd)
-│       ├── ssl-cert.pem        # sertifikat TLS self-signed
-│       ├── ssl-key.pem
-│       └── dh.pem              # DH parameters
-├── atheme/etc/
-│   ├── atheme.conf             # konfigurasi services
-│   └── services.db             # database Atheme (persistent)
+│       ├── ircd.conf.tmpl      # template config (placeholder __VAR__)
+│       ├── motd                # MOTD (mount ke /usr/local/etc/ircd.motd)
+│       └── ssl-*.pem, dh.pem   # cert TLS (generated, gitignored)
+├── atheme/
+│   ├── entrypoint.sh           # render atheme.conf lalu delegasi ke image entrypoint
+│   └── etc/
+│       ├── atheme.conf.tmpl    # template config services
+│       └── services.db         # database Atheme (persistent, gitignored)
 ├── soju/
 │   ├── config                  # konfigurasi soju
 │   ├── motd                    # MOTD bouncer
-│   ├── tls-cert.pem            # sertifikat TLS bouncer
-│   └── tls-key.pem
+│   └── tls-*.pem               # cert TLS bouncer (generated, gitignored)
 ├── tests/
-│   ├── test_solanum.py         # test koneksi langsung ke solanum
-│   └── test_soju.py            # test bouncer + upstream
+│   ├── test_solanum.py         # direct solanum (plain + --tls)
+│   ├── test_soju.py            # via bouncer + SASL (self-setup user/network)
+│   └── test_tls.py             # handshake TLS kedua listener
 └── docs/                       # dokumentasi ini
 ```
+
+Catatan: file cert/private key dan `.env` **tidak di-commit** — generate
+dengan `scripts/generate-certs.sh` dan `cp .env.example .env`.
