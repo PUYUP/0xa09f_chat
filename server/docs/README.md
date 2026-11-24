@@ -8,6 +8,7 @@ Stack IRC lengkap yang berjalan di atas Docker Compose:
 | atheme   | IRC services (NickServ dll)  | `s0fx2/atheme-irc-services` (pinned)    | internal only       |
 | soju     | Bouncer                     | `codeberg.org/emersion/soju` (pinned)   | `16667`, `16697`    |
 | postgres | Database soju (users, networks, message history) | `postgres:17-alpine` (pinned) | internal only |
+| register | Pendaftaran akun mandiri (tombol "Create account" di app desktop a09f) | `a09f-register` (build lokal, `server/register/`) | `16680` |
 
 ## Arsitektur
 

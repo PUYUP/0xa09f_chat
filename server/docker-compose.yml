@@ -137,6 +137,36 @@ services:
       ircnet:
         ipv4_address: 172.30.99.30
 
+  # Self-service "Create account" for the a09f desktop app. Creates a soju
+  # user + per-user upstream network through soju's admin socket (soju-db).
+  register:
+    build:
+      context: ./register
+    image: a09f-register:latest
+    container_name: register
+    restart: unless-stopped
+    environment:
+      UPSTREAM_ADDR: irc+insecure://solanum:6667
+      NETWORK_NAME: ${SOJU_NETWORK:-solanum}
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${REGISTER_PORT:-16680}:8080"    # account registration (HTTP)
+    volumes:
+      - ./soju/config:/soju-config:ro
+      - soju-db:/db
+    depends_on:
+      soju:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    logging: *default-logging
+    networks:
+      ircnet:
+        ipv4_address: 172.30.99.50
+
 volumes:
   postgres-data:
   soju-db:

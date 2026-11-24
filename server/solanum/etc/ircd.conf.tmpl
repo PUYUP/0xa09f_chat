@@ -62,6 +62,15 @@ listen {
 	sslport = 6697;
 };
 
+/* soju: every bouncer user's upstream connection comes from this one IP, so
+ * it must not count against per-IP class limits (number_per_ip = 10 would cap
+ * the whole service at 10 accounts). Listed before the catch-all block. */
+auth {
+	user = "*@__SOJU_HOST__";
+	class = "users";
+	flags = exceed_limit;
+};
+
 auth {
 	user = "*@*";
 	class = "users";
@@ -121,6 +130,9 @@ secure {
 
 exempt {
 	ip = "127.0.0.1";
+	/* soju: after a solanum restart all bouncer users reconnect at once from
+	 * this IP; without this they get "Reconnecting too fast, throttled." */
+	ip = "__SOJU_HOST__";
 };
 
 channel {

@@ -43,14 +43,16 @@ memakai resource lebih kalau tidak dipakai):
 |----------|---------|-------|
 | solanum | `default_max_clients`, class users `max_number` | 50000 |
 | solanum | `number_per_ip_global` / `number_per_cidr` | 500 / 5000 (client lokal semua lewat IP gateway docker — jangan terlalu rendah) |
+| solanum | IP soju (`SOJU_HOST`, default `172.30.99.30`) | `auth { flags = exceed_limit; }` + `exempt {}`: bebas dari `number_per_ip = 10` dan throttle reconnect (4/60 dtk) — semua user bouncer berbagi satu IP |
 | solanum/soju/postgres | `ulimits nofile` | 65536 |
 | soju | `message-expiry` | 365d — history setahun, tabel `Message` tidak tumbuh tak terbatas |
 | postgres | `shared_buffers` / `work_mem` / `max_connections` | 256MB / 16MB / 200 (`synchronous_commit` tetap on — durability tidak dikorbankan) |
 
 Catatan: solanum single-threaded per instance — scale horizontal-nya
-adalah clone service + TS6 link (shard), bukan threading. Soju adalah
-scaling layer sesungguhnya: semua user lewat bouncer = solanum hanya
-melihat ~1 upstream conn per network.
+adalah clone service + TS6 link (shard), bukan threading. Soju menahan
+koneksi *client* (banyak perangkat per user → 1 koneksi upstream), tapi
+tiap **akun** soju tetap punya 1 koneksi upstream sendiri ke solanum, semua
+dari IP soju — itu sebabnya IP soju di-exempt dari batas per-IP & throttle.
 
 ### Kalau user mulai banyak (puluhan ribu)
 
@@ -89,6 +91,74 @@ Catatan: path ban.db adalah compile-time `/var/local/ban.db` — flag
   MOTD di-reload via `SIGUSR1`.
 - **atheme**: `kill -HUP 1` di container.
 - **soju**: `kill -HUP 1` — reload config/tls/motd (tapi bukan `listen`/`db`/`log`).
+
+## Pendaftaran akun (service `register`)
+
+`server/register/` — HTTP kecil (Python stdlib) yang dipakai tombol
+**Create account** di app desktop. Untuk tiap akun baru ia menjalankan
+`sojuctl` lewat admin socket soju (volume `soju-db`):
+
+1. `user create -username <id> -password <pw> -nick <id> -realname <id>` (non-admin)
+2. `user run <id> network create -addr irc+insecure://solanum:6667 -name solanum -nick <id> -auto-away true`
+   (auto-away = away saat tidak ada perangkat tersambung → app menampilkan *Offline*)
+
+Jadi tiap akun punya nick IRC sendiri (bukan `soluser` bersama). Kalau langkah
+2 gagal, user dari langkah 1 dihapus lagi (rollback).
+
+```bash
+curl -s http://127.0.0.1:16680/health
+curl -s -XPOST http://127.0.0.1:16680/register \
+  -H 'Content-Type: application/json' -d '{"username":"budi","password":"rahasia123"}'
+docker logs register          # log request (tanpa body/password)
+```
+
+Aturan: ID `^[a-z][a-z0-9_-]{2,15}$`, tidak boleh nama reserved / `*serv`;
+password 8–128 karakter tanpa karakter kontrol. Rate limit per IP:
+30 percobaan & 5 akun per jam (env `MAX_ATTEMPTS_PER_HOUR`,
+`MAX_CREATES_PER_HOUR`). Port host `REGISTER_PORT` (default `16680`),
+bind ke `BIND_ADDR`. Siapa pun yang bisa menjangkau port ini bisa membuat
+akun — jangan expose ke publik tanpa proteksi tambahan (captcha/invite).
+
+Rebuild service ini **tanpa** menyentuh dependensinya:
+
+```bash
+docker compose up -d --build --no-deps register
+```
+
+Tanpa `--no-deps`, compose ikut me-rebuild/restart `solanum` (register → soju →
+solanum), semua upstream soju putus, lalu reconnect bareng dari satu IP dan
+kena throttle solanum ("Reconnecting too fast") sampai beberapa menit.
+
+Akun NickServ: app desktop yang mendaftarkan akun NickServ (password sama,
+email `<id>@users.a09f.invalid`) saat sign in pertama, lalu mengatur
+`sasl set-plain` di soju. Cek: `sojuctl user run <id> sasl status -network solanum`.
+
+Hapus akun: `docker exec soju /sojuctl -config /soju-config user delete <id>`
+lalu ulangi dengan token konfirmasi yang dicetak.
+
+## Room bawaan `#lobby` & `#a09f-presence`
+
+App desktop otomatis join `#lobby` kalau akun belum ada di room mana pun.
+Room ini (dan room tersembunyi `#a09f-presence`, MLOCK `+nts`, dipakai app
+untuk pesan status teman) didaftarkan ke ChanServ oleh
+`scripts/setup-rooms.py` (idempotent, ada jeda antar perintah supaya tidak
+kena flood protection Atheme):
+
+- founder: akun NickServ `a09f` (`LOBBY_OWNER`), password di `.env`
+  (`LOBBY_OWNER_PASSWORD`, dibuat otomatis kalau belum ada)
+- `GUARD ON` — ChanServ selalu di dalam room, jadi room tidak hilang saat kosong
+- `KEEPTOPIC` + `TOPICLOCK ON`, `MLOCK +nt`, topik sambutan
+
+```bash
+python3 scripts/setup-rooms.py                      # setup / cek ulang
+python3 scripts/setup-rooms.py --op-via-soju cebong # kalau room sudah berisi
+                                                    # dan owner belum op
+```
+
+`--op-via-soju <user>` meminta koneksi bouncer user tsb (yang op di room)
+mengirim `MODE #lobby +o a09f` via `sojuctl ... network quote`, jadi tidak
+perlu ada yang keluar room. Solanum men-throttle reconnect cepat dari IP
+yang sama ("Reconnecting too fast") — tunggu ±1 menit antar run.
 
 ## Troubleshooting
 

@@ -8,6 +8,7 @@ rm -f /tmp/solanum.pid /var/local/solanum.pid
 sed -e "s|__LINK_SOLANUM_SEND__|${LINK_SOLANUM_SEND:-}|g" \
     -e "s|__LINK_SOLANUM_ACCEPT__|${LINK_SOLANUM_ACCEPT:-}|g" \
     -e "s|__ATHEME_HOST__|${ATHEME_HOST:-atheme}|g" \
+    -e "s|__SOJU_HOST__|${SOJU_HOST:-172.30.99.30}|g" \
     /etc/solanum/ircd.conf.tmpl > /tmp/ircd.conf
 
 exec solanum -foreground -logfile /dev/stdout \
