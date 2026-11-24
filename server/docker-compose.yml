@@ -1,0 +1,98 @@
+name: irc
+
+# Reusable logging config: cap docker json-file logs so they can't fill the disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  ircnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${IRC_SUBNET:-172.30.99.0/24}
+
+services:
+  solanum:
+    build:
+      context: ./solanum
+      args:
+        SOLANUM_COMMIT: ${SOLANUM_COMMIT:-92afd03482ae6b0df1c5ba1d6b8886d2d626dbf3}
+    image: solanum-local:latest
+    container_name: solanum
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${SOLANUM_PORT:-6667}:6667"        # IRC plaintext
+      - "${SOLANUM_TLS_PORT:-6697}:6697"    # IRC over TLS (self-signed)
+    volumes:
+      - ./solanum/etc:/etc/solanum:ro
+      - ./solanum/etc/motd:/usr/local/etc/ircd.motd:ro
+      - solanum-logs:/var/log/solanum
+      - solanum-state:/var/lib/solanum     # ban.db + runtime state
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6667"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    logging: *default-logging
+    networks:
+      - ircnet
+
+  atheme:
+    image: s0fx2/atheme-irc-services@sha256:29f42d1e01ae198e21f80867e0b7924297f5edfa9c5b532c4d0dae4a8461523b
+    container_name: atheme
+    restart: unless-stopped
+    env_file: .env
+    entrypoint: /render-entrypoint.sh
+    volumes:
+      - ./atheme/etc:/atheme/etc
+      - ./atheme/entrypoint.sh:/render-entrypoint.sh:ro
+      - atheme-data:/atheme/var
+    depends_on:
+      solanum:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f atheme-services >/dev/null && nc -z solanum 6667"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    logging: *default-logging
+    networks:
+      - ircnet
+
+  soju:
+    image: codeberg.org/emersion/soju@sha256:c695fb996dce168fb39449415c7523b17189ed81b48c107d4728fc93fb30e799
+    container_name: soju
+    restart: unless-stopped
+    ports:
+      - "${SOJU_PORT:-16667}:6667"          # bouncer plaintext
+      - "${SOJU_TLS_PORT:-16697}:6697"      # bouncer TLS (self-signed)
+    volumes:
+      - ./soju/config:/soju-config:ro
+      - ./soju:/soju-tls:ro
+      - soju-db:/db
+      - soju-uploads:/uploads
+    depends_on:
+      solanum:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/sojuctl", "-config", "/soju-config", "server", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    logging: *default-logging
+    networks:
+      - ircnet
+
+volumes:
+  soju-db:
+  soju-uploads:
+  atheme-data:
+  solanum-logs:
+  solanum-state:

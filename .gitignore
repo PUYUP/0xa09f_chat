@@ -1,0 +1,27 @@
+# Secrets & local env
+.env
+server/.env
+
+# Generated configs (rendered from *.tmpl at container start)
+server/atheme/etc/atheme.conf
+
+# Runtime data
+server/atheme/etc/services.db
+server/atheme/etc/services.db.new
+server/soju/config.local
+
+# Generated TLS material (run server/scripts/generate-certs.sh)
+server/solanum/etc/ssl-cert.pem
+server/solanum/etc/ssl-key.pem
+server/solanum/etc/dh.pem
+server/soju/tls-cert.pem
+server/soju/tls-key.pem
+
+# Python
+__pycache__/
+*.pyc
+
+# OS / editor
+.DS_Store
+*.swp
+.devin/
