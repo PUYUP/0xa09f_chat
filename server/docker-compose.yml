@@ -25,8 +25,8 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "${SOLANUM_PORT:-6667}:6667"        # IRC plaintext
-      - "${SOLANUM_TLS_PORT:-6697}:6697"    # IRC over TLS (self-signed)
+      - "${BIND_ADDR:-127.0.0.1}:${SOLANUM_PORT:-6667}:6667"        # IRC plaintext
+      - "${BIND_ADDR:-127.0.0.1}:${SOLANUM_TLS_PORT:-6697}:6697"    # IRC over TLS (self-signed)
     volumes:
       - ./solanum/etc:/etc/solanum:ro
       - ./solanum/etc/motd:/usr/local/etc/ircd.motd:ro
@@ -72,8 +72,8 @@ services:
     container_name: soju
     restart: unless-stopped
     ports:
-      - "${SOJU_PORT:-16667}:6667"          # bouncer plaintext
-      - "${SOJU_TLS_PORT:-16697}:6697"      # bouncer TLS (self-signed)
+      - "${BIND_ADDR:-127.0.0.1}:${SOJU_PORT:-16667}:6667"          # bouncer plaintext
+      - "${BIND_ADDR:-127.0.0.1}:${SOJU_TLS_PORT:-16697}:6697"      # bouncer TLS (self-signed)
     volumes:
       - ./soju/config:/soju-config:ro
       - ./soju:/soju-tls:ro

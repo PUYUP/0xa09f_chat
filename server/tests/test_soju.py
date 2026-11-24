@@ -49,7 +49,9 @@ PORT = int(args[1]) if len(args) > 1 else (16697 if USE_TLS else 16667)
 BOUNCER_USER = ENV.get("SOJU_USER", "pointilis")
 BOUNCER_PASS = ENV.get("SOJU_PASSWORD", "change-me")
 NETWORK = ENV.get("SOJU_NETWORK", "solanum")
-CHANNEL = "#testchan"
+# Unique channel per run: soju replays stored channel history to new
+# clients, and replaying a busy channel can stall the session.
+CHANNEL = f"#test{os.getpid() % 100000}"
 
 
 def sojuctl(*argv):
@@ -144,11 +146,23 @@ require(lambda l: " 903 " in l, "SASL auth success (903)")
 
 send("CAP END")
 require(lambda l: " 001 " in l, "bouncer welcome (001)")
+# Soju finishes attaching the client to the upstream network asynchronously
+# after 001; commands sent in that window are silently dropped. The 422
+# ("Use /motd") line is the last of the registration burst — wait for it.
+require(lambda l: " 422 " in l, "registration burst complete (422)", timeout=10)
 
 # --- network-bound session ---
 send(f"JOIN {CHANNEL}")
-require(lambda l: CHANNEL in l and ("JOIN" in l or "topic" in l.lower()),
-        "joined channel via upstream", timeout=15)
+try:
+    require(lambda l: CHANNEL in l and ("JOIN" in l or "topic" in l.lower()),
+            "joined channel via upstream", timeout=15)
+except TimeoutError:
+    # soju occasionally drops the first JOIN while attaching the network
+    # session; retry once before failing.
+    print("[RETRY] JOIN timed out, retrying")
+    send(f"JOIN {CHANNEL}")
+    require(lambda l: CHANNEL in l and ("JOIN" in l or "topic" in l.lower()),
+            "joined channel via upstream (retry)", timeout=15)
 
 send(f"PRIVMSG {CHANNEL} :hello via soju")
 time.sleep(2)
