@@ -67,10 +67,31 @@ services:
       ircnet:
         ipv4_address: 172.30.99.20
 
+  postgres:
+    image: postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
+    container_name: postgres
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    logging: *default-logging
+    networks:
+      ircnet:
+        ipv4_address: 172.30.99.40
+
   soju:
     image: codeberg.org/emersion/soju@sha256:c695fb996dce168fb39449415c7523b17189ed81b48c107d4728fc93fb30e799
     container_name: soju
     restart: unless-stopped
+    environment:
+      # lib/pq reads PGPASSWORD for the postgres:// connection in soju/config
+      PGPASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${SOJU_PORT:-16667}:6667"          # bouncer plaintext
       - "${BIND_ADDR:-127.0.0.1}:${SOJU_TLS_PORT:-16697}:6697"      # bouncer TLS (self-signed)
@@ -81,6 +102,8 @@ services:
       - soju-uploads:/uploads
     depends_on:
       solanum:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "/sojuctl", "-config", "/soju-config", "server", "status"]
@@ -94,6 +117,7 @@ services:
         ipv4_address: 172.30.99.30
 
 volumes:
+  postgres-data:
   soju-db:
   soju-uploads:
   atheme-data:

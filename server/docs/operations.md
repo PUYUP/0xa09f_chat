@@ -41,8 +41,13 @@ docker exec soju /sojuctl -config /soju-config user run pointilis network status
 | solanum ban.db              | `/var/local/ban.db` (volume `solanum-state`) | ya |
 | solanum logs                | volume `solanum-logs`               | ya       |
 | atheme services.db          | `./atheme/etc/services.db` (repo)   | ya       |
-| soju users/networks/history | volume `soju-db` → `/db/soju.db`    | ya       |
+| soju users/networks/history | volume `postgres-data` (DB `soju`)  | ya       |
+| soju admin socket           | volume `soju-db` → `/db`            | ya       |
 | soju uploads                 | volume `soju-uploads`               | ya       |
+
+Backup yang relevan: `docker exec postgres pg_dump -U soju soju > backup.sql`
+atau volume `postgres-data`. File `soju.db` lama (sqlite) masih ada di volume
+`soju-db` sebagai sisa migrasi — tidak dipakai lagi.
 
 Catatan: path ban.db adalah compile-time `/var/local/ban.db` — flag
 `-banfile` di solanum adalah dead code (sama seperti `-motdfile`).

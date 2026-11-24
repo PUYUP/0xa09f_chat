@@ -7,6 +7,7 @@ Stack IRC lengkap yang berjalan di atas Docker Compose:
 | solanum  | IRC daemon (server)          | `solanum-local` (build dari source)     | `6667`, `6697`      |
 | atheme   | IRC services (NickServ dll)  | `s0fx2/atheme-irc-services` (pinned)    | internal only       |
 | soju     | Bouncer                     | `codeberg.org/emersion/soju` (pinned)   | `16667`, `16697`    |
+| postgres | Database soju (users, networks, message history) | `postgres:17-alpine` (pinned) | internal only |
 
 ## Arsitektur
 
@@ -17,7 +18,9 @@ Stack IRC lengkap yang berjalan di atas Docker Compose:
   :6667/:6697│       ▲                                                                                    │
             │       │ upstream (NICK/USER)                                                                │
   client ──►│  soju (172.30.99.30)                                                                       │
-  :16667/:16697└────────────────────────────────────────────────────────────────────────────────────────────┘
+  :16667/:16697│       │                                                                                  │
+            │       └──db postgres──► postgres (172.30.99.40)                                            │
+            └────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **solanum** — IRC daemon utama. Menerima client langsung di `6667` (plain)
@@ -25,7 +28,9 @@ Stack IRC lengkap yang berjalan di atas Docker Compose:
 - **atheme** — services (NickServ, ChanServ, dll). Dial-out ke `solanum:6667`
   dengan password TS6. Muncul sebagai `services.int` (numeric `00A`).
 - **soju** — bouncer. Client connect dengan SASL, soju meneruskan ke solanum
-  sebagai nick upstream (`soluser`). History pesan di SQLite.
+  sebagai nick upstream (`soluser`). Users, networks, channels dan history
+  pesan disimpan di **PostgreSQL** (`message-store db`), sehingga search
+  history dan retensi bisa diskalakan.
 
 Identitas jaringan: server `irc.solanum.test` SID `10A`, network `SolNet`,
 services `services.int`, bouncer `SolNet Bouncer`.
@@ -55,7 +60,7 @@ bangkit dan saling menunggu (`depends_on: service_healthy`).
 
 ```
 server/
-├── docker-compose.yml          # 3 service + network + volumes + healthcheck
+├── docker-compose.yml          # 4 service + network + volumes + healthcheck
 ├── .env.example                # template env (copy ke .env, gitignored)
 ├── scripts/generate-certs.sh   # generate TLS cert self-signed + SAN
 ├── solanum/

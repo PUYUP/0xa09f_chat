@@ -9,8 +9,9 @@ cp .env.example .env          # isi password/port sesuai kebutuhan
 docker compose up -d --build
 ```
 
-- `.env` — gitignored; berisi link password, password user soju, port host,
-  subnet, `ATHEME_HOST`.
+- `.env` — gitignored; berisi link password, password user soju,
+  kredensial postgres (`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`),
+  port host, subnet, `ATHEME_HOST`.
 - `scripts/generate-certs.sh` — generate cert solanum (`ssl-*.pem`, `dh.pem`)
   dan soju (`tls-*.pem`) dengan SAN `irc.solanum.test,localhost,127.0.0.1`.
   Semua file cert **di-gitignore** — regenerate dengan script ini.
@@ -19,14 +20,15 @@ docker compose up -d --build
 
 ## docker-compose.yml
 
-Tiga service dalam bridge network `ircnet` (subnet dari `IRC_SUBNET`,
-default `172.30.99.0/24`). IP statis dipakai lagi untuk ketiga container:
+Empat service dalam bridge network `ircnet` (subnet dari `IRC_SUBNET`,
+default `172.30.99.0/24`). IP statis dipakai untuk semua container:
 
-| Service  | IP            | Ports ke host (default)                    |
-|----------|---------------|--------------------------------------------|
-| solanum  | 172.30.99.10  | `6667` plain, `6697` TLS                  |
-| atheme   | 172.30.99.20  | tidak ada (internal)                       |
-| soju     | 172.30.99.30  | `16667` plain, `16697` TLS                 |
+| Service   | IP            | Ports ke host (default)                    |
+|-----------|---------------|--------------------------------------------|
+| solanum   | 172.30.99.10  | `6667` plain, `6697` TLS                  |
+| atheme    | 172.30.99.20  | tidak ada (internal)                       |
+| soju      | 172.30.99.30  | `16667` plain, `16697` TLS                 |
+| postgres  | 172.30.99.40  | tidak ada (internal)                       |
 
 Kenapa IP statis: `connect` block solanum mencocokkan `host` terhadap IP
 peer — nama docker DNS (`atheme`) **tidak** cocok (error `Invalid host`).
@@ -44,6 +46,7 @@ Healthcheck + `depends_on: service_healthy`:
 - solanum: bash `/dev/tcp` ke `127.0.0.1:6667`
 - atheme: `pgrep atheme-services` + `nc -z solanum 6667`
 - soju: `sojuctl server status`
+- postgres: `pg_isready -U $POSTGRES_USER -d $POSTGRES_DB`
 
 Logging: semua service pakai json-file driver `max-size: 10m, max-file: 3`
 (anchor `x-logging`) supaya log docker tidak memenuhi disk.
@@ -55,7 +58,11 @@ Volumes:
   (path compile-time `DBPATH`; flag `-banfile` adalah dead code seperti
   `-motdfile`)
 - `atheme-data` → `/atheme/var`
-- `soju-db` → `/db`, `soju-uploads` → `/uploads`
+- `postgres-data` → `/var/lib/postgresql/data` — DB `soju` (users,
+  networks, channels, message history)
+- `soju-db` → `/db` — admin socket `soju-admin.sock` (+ sisa `soju.db`
+  sqlite dari sebelum migrasi)
+- `soju-uploads` → `/uploads`
 
 Bind mounts:
 
@@ -141,14 +148,23 @@ Tidak ada secret di dalamnya — password user/network dibuat via `sojuctl`
 
 Directive penting:
 
-- `auth internal` — user disimpan di SQLite `/db/soju.db`
+- `auth internal` — user disimpan di **PostgreSQL** (`db postgres`, schema
+  dibuat otomatis oleh soju saat startup)
 - `disable-inactive-user 30d` — user yang disconnect >30 hari di-disable:
   upstream diputus (tidak ada ghost session di solanum), data tetap utuh
 - `enable-user-on-auth true` — login SASL sukses me-re-enable user
   otomatis, jadi user yang absen lama bisa langsung balik tanpa intervensi admin
-- `message-store db` — history disimpan di SQLite; pesan tidak pernah
+- `message-store db` — history pesan ikut di PostgreSQL (tabel `Message` +
+  `MessageTarget`, dengan full-text search index); pesan tidak pernah
   dihapus otomatis (belum pakai `message-expiry`)
 - `listen unix+admin:///db/soju-admin.sock` — socket admin untuk `sojuctl`
+  (tetap di volume `soju-db`, bukan postgres)
+
+Password postgres **tidak ditulis di config** — `db postgres` connection
+string tidak berisi password; soju membaca env `PGPASSWORD` (di-set di
+`docker-compose.yml` dari `POSTGRES_PASSWORD` di `.env`). Image soju
+distroless (tanpa shell) jadi tidak bisa templating — env var adalah
+satu-satunya jalur secret.
 
 ## scripts/generate-certs.sh
 

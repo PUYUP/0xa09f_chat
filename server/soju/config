@@ -10,7 +10,7 @@ auth internal
 disable-inactive-user 30d
 enable-user-on-auth true
 
-db sqlite3 /db/soju.db
+db postgres "host=postgres dbname=soju user=soju sslmode=disable"
 message-store db
 
 motd /soju-tls/motd
