@@ -121,10 +121,10 @@
   .pm::before { content: "👤"; position: absolute; left: 6px; font-size: 11px; }
   .chan.unread, .pm.unread { font-weight: bold; }
   .badge { background: #d9261c; color: #fff; border-radius: 8px; padding: 0 6px; font-size: 10px; font-weight: bold; line-height: 15px; }
-  .pm .close { visibility: hidden; color: var(--dim); font-weight: bold; padding: 0 3px; }
-  .pm:hover .close { visibility: visible; }
-  .pm .close:hover { color: var(--error); }
-  .pm.active .close { color: #dfe8ff; }
+  .pm .close, .chan .close { visibility: hidden; color: var(--dim); font-weight: bold; padding: 0 3px; }
+  .pm:hover .close, .chan:hover .close { visibility: visible; }
+  .pm .close:hover, .chan .close:hover { color: var(--error); }
+  .pm.active .close, .chan.active .close { color: #dfe8ff; }
   .empty-hint { padding: 3px 10px; color: var(--dim); font-size: 11px; font-style: italic; }
   .user.self { cursor: default; color: var(--dim); }
 

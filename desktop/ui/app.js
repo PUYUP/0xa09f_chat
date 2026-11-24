@@ -414,7 +414,11 @@ function renderLists() {
   renderFriends();
   updateTitle();
   roomsEl.innerHTML = "";
-  for (const c of rooms()) roomsEl.appendChild(convItem(c, "chan"));
+  for (const c of rooms()) {
+    const item = convItem(c, "chan", () => leaveRoom(c));
+    item.querySelector(".close").title = "Leave this room";
+    roomsEl.appendChild(item);
+  }
   pmsEl.innerHTML = "";
   const list = pms().sort((a, b) => (b.msgs.at(-1)?.time || 0) - (a.msgs.at(-1)?.time || 0));
   for (const c of list) pmsEl.appendChild(convItem(c, "pm", () => closePm(c)));
@@ -476,11 +480,13 @@ function refreshSide() {
   if (c?.kind === "room") {
     title = esc(roomName(c.name)) + (c.topic ? ` <span class="topic">— ${emote(esc(c.topic))}</span>` : "");
     if (amOp(c)) title += ` <button id="btnTopic" class="title-btn" title="Change this room's topic">✏️ Topic</button>`;
+    title += ` <button id="btnLeave" class="title-btn" title="Leave this room">🚪 Leave</button>`;
   } else if (c?.kind === "pm") {
     title = `Private chat with ${esc(c.name)}`;
   }
   $("chatTitle").innerHTML = title;
   if ($("btnTopic")) $("btnTopic").onclick = () => editTopic(c);
+  if ($("btnLeave")) $("btnLeave").onclick = () => leaveRoom(c);
   $("input").placeholder = c?.kind === "pm" ? `Message ${c.name}…` : "Type your message here…";
   $("btnBuzz").disabled = c?.kind !== "pm";
   $("btnBuzz").title = c?.kind === "pm" ? `BUZZ! ${c.name}` : "Open a private chat to BUZZ someone";
@@ -544,6 +550,9 @@ function onPart(fromNick, channel) {
   if (keyOf(fromNick) === keyOf(S.me)) {
     S.convs.delete(key);
     if (S.current === key) { S.current = null; switchTo(rooms().at(-1)?.name || null); renderLog(); }
+    if (S.leaving?.delete(key)) {   // shown in whatever is on screen now
+      sys(`You left ${roomName(channel)}. You can rejoin it any time from 🔍 Rooms.`, "system");
+    }
     refreshSide();
     return;
   }
@@ -575,13 +584,15 @@ function onNick(oldNick, newNick) {
 }
 
 function onNames(params, trailing) {
-  const eq = params.indexOf("=") !== -1 ? params.indexOf("=") : params.findIndex((p) => p === "@" || p === "*");
-  const channel = params[eq + 1];
-  if (!channel || isPresenceRoom(channel)) return;
+  // "353 <me> <=|@|*> <#room> :names" — <me> may itself be "*", so find the
+  // room by its prefix instead of by the visibility marker.
+  const ci = params.findIndex(isChannel);
+  const channel = params[ci];
+  if (ci < 0 || isPresenceRoom(channel)) return;
   const c = getConv(channel, "room");
   c.members.clear();
   // A one-name list may arrive without the ":" (e.g. "353 * = #room @diana").
-  const names = trailing ?? params.slice(eq + 2).join(" ");
+  const names = trailing ?? params.slice(ci + 1).join(" ");
   for (const tok of (names || "").split(/\s+/).filter(Boolean)) {
     const p = tok.match(/^([@+~&%]*)(.*)$/);
     c.members.set(p[2], p[1] || "");
@@ -1423,6 +1434,14 @@ function joinOrSwitch(name) {
   if (!isChannel(name)) name = "#" + name;
   if (conv(keyOf(name))?.kind === "room") switchTo(name);
   else send(`JOIN ${name}`);
+}
+
+/* Leave a room. soju forgets it too, so it won't come back at next sign-in;
+ * it can be rejoined any time from 🔍 Rooms. */
+function leaveRoom(c) {
+  if (!c || c.kind !== "room") return;
+  (S.leaving ||= new Set()).add(keyOf(c.name));
+  send(`PART ${c.name} :Left the room`);
 }
 
 function openPm(nick) {

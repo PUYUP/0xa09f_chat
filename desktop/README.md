@@ -63,6 +63,9 @@ server/protokol di layar.
   Batas Atheme: 5 room per akun (`maxchans`)
 - **Jelajah room** (🔍 Rooms): `LIST >0` (LIST polos di solanum
   menyembunyikan room sepi), cari nama/topik, Join, atau buat room baru
+- **Keluar room**: × di daftar Chat Rooms atau 🚪 Leave di judul room → `PART`;
+  soju ikut melupakan room-nya. Room milikmu tetap terdaftar (GUARD) dan bisa
+  dimasuki lagi dari 🔍 Rooms
 - **Ganti password** (🔑 Password): berurutan `BouncerServ user update
   -password` → `NickServ SET PASSWORD` (kalau tertaut) → `BouncerServ sasl
   set-plain`; tiap langkah menunggu balasan, timeout 10 dtk
