@@ -154,9 +154,9 @@ Directive penting:
   upstream diputus (tidak ada ghost session di solanum), data tetap utuh
 - `enable-user-on-auth true` — login SASL sukses me-re-enable user
   otomatis, jadi user yang absen lama bisa langsung balik tanpa intervensi admin
-- `message-store db` — history pesan ikut di PostgreSQL (tabel `Message` +
-  `MessageTarget`, dengan full-text search index); pesan tidak pernah
-  dihapus otomatis (belum pakai `message-expiry`)
+- `message-store db` + `message-expiry 365d` — history pesan di PostgreSQL
+  (tabel `Message` + `MessageTarget`, full-text search index); pesan lebih
+  tua dari 365 hari dihapus harian supaya tabel tidak tumbuh tak terbatas
 - `listen unix+admin:///db/soju-admin.sock` — socket admin untuk `sojuctl`
   (tetap di volume `soju-db`, bukan postgres)
 

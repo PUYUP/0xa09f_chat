@@ -12,5 +12,6 @@ enable-user-on-auth true
 
 db postgres "host=postgres dbname=soju user=soju sslmode=disable"
 message-store db
+message-expiry 365d
 
 motd /soju-tls/motd

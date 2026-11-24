@@ -34,6 +34,37 @@ docker exec soju /sojuctl -config /soju-config user run pointilis network status
 (conn refused = solanum lagi down; TLS handshake = scheme salah, harus
 `irc+insecure://` untuk port 6667).
 
+## Capacity & scaling
+
+Batas yang sudah dinaikkan (semuanya ceiling, bukan reservasi — tidak
+memakai resource lebih kalau tidak dipakai):
+
+| Komponen | Setting | Nilai |
+|----------|---------|-------|
+| solanum | `default_max_clients`, class users `max_number` | 50000 |
+| solanum | `number_per_ip_global` / `number_per_cidr` | 500 / 5000 (client lokal semua lewat IP gateway docker — jangan terlalu rendah) |
+| solanum/soju/postgres | `ulimits nofile` | 65536 |
+| soju | `message-expiry` | 365d — history setahun, tabel `Message` tidak tumbuh tak terbatas |
+| postgres | `shared_buffers` / `work_mem` / `max_connections` | 256MB / 16MB / 200 (`synchronous_commit` tetap on — durability tidak dikorbankan) |
+
+Catatan: solanum single-threaded per instance — scale horizontal-nya
+adalah clone service + TS6 link (shard), bukan threading. Soju adalah
+scaling layer sesungguhnya: semua user lewat bouncer = solanum hanya
+melihat ~1 upstream conn per network.
+
+### Kalau user mulai banyak (puluhan ribu)
+
+1. **Sharding soju**: jalankan N instance soju (beda port/config/nick
+   upstream), user di-shard per instance. Postgres bisa tetap shared
+   (skema sudah per-user) atau per-shard.
+2. **`message-store fs`**: kalau write postgres jadi bottleneck, soju
+   bisa simpan history ke filesystem (format ZNC) — trade-off: hilang
+   full-text search. Coba ini sebelum menambah sistem queue.
+3. **Partitioning `Message`**: partition per bulan supaya delete data
+   lama instan (message-expiry tetap jalan, tapi vacuum lebih cepat).
+4. **Load balancer**: `BIND_ADDR` publik + nginx/haproxy di depan soju
+   kalau user remote — port langsung jangan di-expose.
+
 ## Persistence
 
 | Data                        | Lokasi                              | Persist? |
