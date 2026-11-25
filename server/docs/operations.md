@@ -186,6 +186,9 @@ event live:
   tidak dicatat.
 
 Endpoint bertoken tidak dihitung ke rate limit per IP (typing sering).
+`/session` dan `/email` (cek password) juga tidak: yang dibatasi hanya
+**password salah**, per IP+ID (`MAX_LOGIN_FAILS_PER_HOUR`, default 10), jadi
+sign in normal tidak pernah menghabiskan jatah bersama satu IP/NAT.
 Satu koneksi SSE = satu thread; cukup untuk skala kecil.
 
 ### Extban akun (`extb_account`)

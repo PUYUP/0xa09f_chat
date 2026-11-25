@@ -100,6 +100,8 @@ EMAIL_RE = re.compile(r"^[^@\s<>\"',;]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
 _lock = threading.Lock()              # serialize sojuctl mutations
 _attempts = defaultdict(deque)        # ip -> timestamps
 _creates = defaultdict(deque)
+_login_fails = defaultdict(deque)     # "ip|username" -> timestamps of wrong passwords
+MAX_LOGIN_FAILS_PER_HOUR = int(os.environ.get("MAX_LOGIN_FAILS_PER_HOUR", "10"))
 
 
 class Fail(Exception):
@@ -452,9 +454,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         ip = self.client_address[0]
         try:
-            if over_limit(_attempts, ip, MAX_ATTEMPTS_PER_HOUR):
-                raise Fail(429, "Too many tries. Please wait a while and try again.")
-            _attempts[ip].append(time.monotonic())
+            # Password checks (/session, /email) are limited per IP+ID on wrong
+            # passwords only (see _password_ok): signing in must never use up
+            # a budget shared by everyone behind the same address.
+            if self.path not in ("/session", "/email"):
+                if over_limit(_attempts, ip, MAX_ATTEMPTS_PER_HOUR):
+                    raise Fail(429, "Too many tries. Please wait a while and try again.")
+                _attempts[ip].append(time.monotonic())
 
             length = int(self.headers.get("Content-Length") or 0)
             if length <= 0 or length > 4096:
@@ -492,15 +498,22 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "username": username})
 
     def _email(self, ip, username, body):
-        if not USERNAME_RE.match(username) or not check_login(username, str(body.get("password", ""))):
-            raise Fail(403, "Your password isn't right.")
+        self._password_ok(ip, username, str(body.get("password", "")))
         if "email" in body:
             set_email(username, validate_email(str(body.get("email", "")).strip()))
         self._json(200, {"ok": True, "email": get_email(username) or ""})
 
+    def _password_ok(self, ip, username, password):
+        key = f"{ip}|{username}"
+        if over_limit(_login_fails, key, MAX_LOGIN_FAILS_PER_HOUR):
+            raise Fail(429, "Too many wrong passwords. Please wait a while and try again.")
+        if USERNAME_RE.match(username) and check_login(username, password):
+            return
+        _login_fails[key].append(time.monotonic())
+        raise Fail(403, "Your password isn't right.")
+
     def _session(self, ip, username, body):
-        if not USERNAME_RE.match(username) or not check_login(username, str(body.get("password", ""))):
-            raise Fail(403, "Your password isn't right.")
+        self._password_ok(ip, username, str(body.get("password", "")))
         token = social.new_session(username)
         self._json(200, {"ok": True, "token": token, "sid": social.sid_of(token)})
 
