@@ -115,6 +115,25 @@ server/protokol di layar.
 - **@mention**: ketik `@` di room → daftar anggota (↑/↓, Tab/Enter, atau
   klik). `@nama` tampil tebal ungu; pesan yang menyebut namamu disorot kuning,
   berbunyi + notifikasi, dan room-nya mendapat badge **@** oranye sampai dibaca
+- **Kelola room** (moderator/pemilik): klik kanan orang di room → Make/Remove
+  moderator (`MODE +o` + ChanServ `FLAGS AOP` di room terdaftar), Mute
+  (`+q`), Remove (`KICK`), Ban (`+b`). Mute/ban memakai `$a:<id>` **dan**
+  `<id>!*@*` — semua user lewat IP soju yang sama, jadi host tidak boleh
+  dipakai. ⚙️ Settings: Private (+i), Hidden (+s), Announcement (+m),
+  password (+k), batas orang (+l) — pemilik menyimpan lewat ChanServ `MLOCK`
+  (Atheme mengunci `-lk` secara default dan MLOCK membuat pengaturan tetap
+  saat room kosong), moderator lewat `MODE`; welcome message (ChanServ
+  `ENTRYMSG`, tampil sebagai "Welcome" saat masuk); daftar moderator /
+  muted / banned dengan tombol cabut; pemilik bisa memberi room ke orang lain
+  (`FLAGS +F` lalu `-F` diri sendiri) atau menghapusnya (`DROP` + kunci)
+- **Undang ke room & minta masuk**: ➕ Invite di room biasa (INVITE + `/me
+  invited you to a room: #x` dengan tombol Join). Room privat (473) →
+  tombol 🚪 Ask to join (`KNOCK`); moderator mendapat "X asked to join" +
+  tombol Let them in. Room berpassword (475) → kolom password + Join
+- **Auto-reply**: kirim private message ke orang yang Busy / Be Right Back /
+  Stepped Out / custom-away / Offline → baris "Auto-reply" sekali per status
+- Room baru hanya didaftarkan ke ChanServ oleh perangkat yang benar-benar
+  mengirim JOIN (soju juga meneruskan JOIN dari perangkatmu yang lain)
 - **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
   mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
   **Only my friends can send me private messages** = user mode `+g` solanum +

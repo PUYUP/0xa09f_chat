@@ -330,7 +330,7 @@ function msgFrom(l, from) {
   if (action) { txt = action[1].replace(/\x01$/, ""); cls += " action"; }
   const buzz = !!action && txt.trim().toUpperCase() === BUZZ_TEXT;
   if (buzz) cls += " buzz";
-  const inv = action && txt.match(INVITE_RE);
+  const inv = action && (txt.match(INVITE_RE) || txt.match(ROOM_INVITE_RE));
   return {
     who: from, txt, cls, buzz, invite: inv ? inv[1] : null,
     time: l.tags.time ? Date.parse(l.tags.time) : Date.now(),
@@ -400,10 +400,15 @@ function renderMsg(m) {
   let txt = m.buzz ? "BUZZ!!!" : emote(formatIrc(esc(m.txt)));
   if (m.invite) {
     const inRoom = conv(keyOf(m.invite))?.kind === "room";
+    const what = isConference(m.invite) ? "a conference 🗣️" : `the room <b>${esc(roomName(m.invite))}</b> 💬`;
     txt = m.others
-      ? `invited you to a conference 🗣️ <button class="invite-join" data-room="${esc(m.invite)}">${inRoom ? "Open" : "Join"}</button>`
-      : "sent a conference invite 🗣️";
+      ? `invited you to ${what} <button class="invite-join" data-room="${esc(m.invite)}">${inRoom ? "Open" : "Join"}</button>`
+      : `sent an invite to ${what}`;
   }
+  if (m.knock) txt += ` <button class="knock-btn" data-room="${esc(m.knock)}">🚪 Ask to join</button>`;
+  if (m.letIn) txt += ` <button class="letin-btn" data-nick="${esc(m.letIn)}">Let them in</button>`;
+  if (m.askKey) txt += ` <input class="key-input" type="password" placeholder="Room password" size="12">` +
+    ` <button class="key-join" data-room="${esc(m.askKey)}">Join</button>`;
   if (!m.buzz && !m.invite) txt = highlightMentions(txt);
   if (m.others && !m.cls.includes("service") && S.current && isChannel(S.current) && mentionsMe(stripIrc(m.txt))) {
     div.classList.add("mention-me");
@@ -514,6 +519,7 @@ function renderUsers() {
       name.textContent += " 👑";
       name.title = "Room owner / moderator";
     }
+    if (c.kind === "room" && isMuted(c, nick)) { name.textContent += " 🔇"; name.title = "Muted"; }
     d.appendChild(name);
     d.appendChild(profileButton(nick));
     if (st.state !== "unknown") {
@@ -552,6 +558,8 @@ function refreshSide() {
   } else if (c?.kind === "room") {
     title = esc(roomName(c.name)) + (c.topic ? ` <span class="topic">— ${emote(esc(c.topic))}</span>` : "");
     if (amOp(c)) title += ` <button id="btnTopic" class="title-btn" title="Change this room's topic">✏️ Topic</button>`;
+    if (!c.modes?.has("i") || amOp(c)) title += ` <button id="btnInvite" class="title-btn" title="Invite friends to this room">➕ Invite</button>`;
+    if (amOp(c)) title += ` <button id="btnRoomSettings" class="title-btn" title="Room settings and moderation">⚙️ Settings</button>`;
     title += ` <button id="btnLeave" class="title-btn" title="Leave this room">🚪 Leave</button>`;
   } else if (c?.kind === "pm") {
     title = `Private chat with ${esc(c.name)}` +
@@ -562,6 +570,7 @@ function refreshSide() {
   if ($("btnTopic")) $("btnTopic").onclick = () => editTopic(c);
   if ($("btnLeave")) $("btnLeave").onclick = () => leaveRoom(c);
   if ($("btnInvite")) $("btnInvite").onclick = () => openConfDialog(c);
+  if ($("btnRoomSettings")) $("btnRoomSettings").onclick = () => openRoomDialog(c);
   if ($("btnPmProfile")) $("btnPmProfile").onclick = () => openProfile(c.name);
   if ($("btnPmIgnore")) $("btnPmIgnore").onclick = () => ignoreUser(c.name, !isIgnored(c.name));
   if (c && c.kind !== "status") {
@@ -594,7 +603,7 @@ function setTopic(channel, text) {
 /* Saved rooms have been replayed: fetch history + private chats. */
 function onBurstDone() {
   S.burstDone = true;
-  if (rooms().length === 0) send(`JOIN ${DEFAULT_ROOM}`);
+  if (rooms().length === 0) joinRoom(DEFAULT_ROOM);
   if (!S.inPresence) send(`JOIN ${PRESENCE_ROOM}`);
   for (const c of rooms()) fetchHistory(c);
   fetchPrivateChats();
@@ -616,9 +625,12 @@ function onJoin(fromNick, channel) {
   if (!c.members.has(fromNick)) c.members.set(fromNick, "");
   if (keyOf(fromNick) === keyOf(S.me)) {
     send(`NAMES ${channel}`);
+    loadRoomState(c);
     if (S.burstDone) {
       sys(`You joined ${roomLabel(channel)}`, "system", channel); fetchHistory(c);
-      c.justJoined = true;      // onNames decides whether this is a brand-new room
+      // Only a JOIN this device asked for can mean "I just created this room";
+      // soju also relays joins made from my other devices.
+      c.justJoined = !!S.joining?.delete(keyOf(channel));
     }
     S.current = null;          // force switchTo to re-render
     switchTo(channel);
@@ -712,7 +724,7 @@ function onMessage(l) {
 /* Room-related failures worth telling a person about; everything else is noise. */
 const ROOM_ERRORS = {
   403: "That room doesn't exist.",
-  404: "You can't send messages to this room.",
+  404: "You can't talk in this room right now (you're muted, or only moderators can talk).",
   405: "You've joined too many rooms.",
   471: "That room is full.",
   473: "That room is invite-only.",
@@ -720,7 +732,7 @@ const ROOM_ERRORS = {
   475: "That room needs a password.",
   477: "You need a registered name to join that room.",
   401: "There's no a09f user with that ID.",
-  482: "Only the owner can do that.",
+  482: "Only the room's moderators can do that.",
 };
 
 function onNumeric(num, params, trailing) {
@@ -741,6 +753,15 @@ function onNumeric(num, params, trailing) {
       if (onWhoisReply(num, params, trailing)) return;
       break;
     case 716: case 718: onCallerId(num, params); return;
+    case 324: onChannelModes(params); return;
+    case 367: case 368: case 728: case 729: onListEntry(num, params); return;
+    case 710: onKnock(params); return;
+    case 711: sys("Your request was sent to the room's moderators. You'll get an invite if they let you in.", "system"); return;
+    case 712: sysError("You've asked too many times. Please wait a bit."); return;
+    case 713: sysError("That room isn't private — you can just join it."); return;
+    case 714: sysError("You're already in that room."); return;
+    case 480: sysError("You can't ask to join that room."); return;
+    case 742: sysError("Only the room's owner can change that setting."); return;
     case 717: return;
     case 730: onMonitor(trailing, true); return;
     case 731: onMonitor(trailing, false); return;
@@ -759,6 +780,8 @@ function onNumeric(num, params, trailing) {
   }
   if (num === 401 && params[1]) { sysError(`There's no a09f user with the ID "${params[1]}".`); return; }
   if (num === 473 && isConference(params[1])) { sysError("You need a new invite to join this conference."); return; }
+  if (num === 473) { offerKnock(params[1]); return; }
+  if (num === 475) { addMsg(null, { who: "Error", txt: `${roomName(params[1])} needs a password.`, cls: "error", askKey: params[1] }); return; }
   if (num === 482 && isConference(params[1])) { sysError("Only the person who started the conference can invite people."); return; }
   if (ROOM_ERRORS[num]) sysError(ROOM_ERRORS[num]);
 }
@@ -838,6 +861,7 @@ function handleLine(line) {
     case "TOPIC": setTopic(params[0], trailing ?? params[1] ?? ""); return;
     case "MODE": onMode(params, trailing); return;
     case "PART": onPart(nickOf(prefix), params[0]); return;
+    case "KICK": onKick(nickOf(prefix), params[0], params[1], l.text); return;
     case "QUIT": onQuit(nickOf(prefix)); return;
     case "NICK": {
       if (params.length >= 2) onNick(params[0], params[1]);
@@ -1600,7 +1624,13 @@ function checkAccountLink() {
 }
 
 function onSelfWhoisDone() {
-  if (S.selfAccount) { S.link = "linked"; return; }          // already identified (soju SASL)
+  // Already identified (soju SASL) — but only counts if it's *our* account.
+  if (S.selfAccount && keyOf(S.selfAccount) === keyOf(S.me)) { S.link = "linked"; return; }
+  if (S.selfAccount && S.pw && !/\s/.test(S.pw)) {         // logged in as someone else: fix it
+    S.link = "identifying";
+    send(`PRIVMSG NickServ :IDENTIFY ${S.me} ${S.pw}`);
+    return;
+  }
   if (!S.pw || /\s/.test(S.pw)) { S.link = "unavailable"; return; }   // Atheme can't take spaces
   S.link = "registering";
   send(`PRIVMSG NickServ :REGISTER ${S.pw} ${S.me.toLowerCase()}@users.a09f.invalid`);
@@ -1644,6 +1674,8 @@ function claimRoom(c) {
 }
 
 function onChanServ(text) {
+  if (onEntryMsg(text)) return;
+  if (onCsReply(text)) return;
   const t = text.toLowerCase();
   const room = S.claiming;
   if (!room) return;
@@ -1696,15 +1728,21 @@ function onMode(params, trailing) {
   let add = true, i = 0;
   for (const m of modes) {
     if (m === "+" || m === "-") { add = m === "+"; continue; }
-    const sym = { o: "@", v: "+", q: "~", a: "&", h: "%" }[m];
+    // solanum: PREFIX=(ov)@+ ; list modes eIbq ; k always takes an argument,
+    // f/j/l only when set. (q is the mute list here, not an "owner" prefix.)
+    const sym = { o: "@", v: "+" }[m];
     if (sym) {
       const nick = args[i++];
       if (!nick || !c.members.has(nick)) continue;
       const pre = c.members.get(nick).replace(sym, "");
       c.members.set(nick, add ? sym + pre : pre);
-    } else if ("beIqkfjl".includes(m) && (add || m !== "l")) i++;     // modes that take an argument
+      continue;
+    }
+    const takesArg = "beIqk".includes(m) || ("fjl".includes(m) && add);
+    trackRoomMode(c, add, m, takesArg ? args[i++] : undefined);
   }
-  if (keyOf(target) === S.current) refreshSide();
+  if (keyOf(target) === S.current) { refreshSide(); }
+  renderRoomDialog();
 }
 
 /* ---------- change password ---------- */
@@ -1875,7 +1913,8 @@ const confPeople = (c) => [...c.members.keys()].filter((n) => keyOf(n) !== keyOf
 
 function openConfDialog(room) {
   S.confFor = room;            // null = start a new one, else invite more to it
-  $("cfTitle").textContent = room ? "Invite to Conference" : "Start a Conference";
+  $("cfTitle").textContent = !room ? "Start a Conference"
+    : isConference(room.name) ? "Invite to Conference" : `Invite to ${roomName(room.name)}`;
   $("cfStart").textContent = room ? "Send Invites" : "Start Conference";
   $("cfOther").value = "";
   showMsg("cfMsg", "");
@@ -1913,11 +1952,11 @@ function doConference() {
   if (!picked.length) return showMsg("cfMsg", "Pick at least one person to invite.", "error");
   const room = S.confFor;
   closeConfDialog();
-  if (room) { inviteToConference(room, picked); return; }
+  if (room) { inviteToRoom(room, picked); return; }
   const code = Math.random().toString(36).slice(2, 6).padEnd(4, "0");
   const name = `${CONF_PREFIX}${S.me.toLowerCase()}-${code}`;
   S.pendingConf = { key: keyOf(name), invitees: picked };
-  send(`JOIN ${name}`);
+  joinRoom(name);
 }
 
 /* We just created the room (and are its op): lock it down, then invite. */
@@ -2195,6 +2234,7 @@ function personMenu(e, nick) {
     isIgnored(nick)
       ? { label: "✅ Unignore", run: () => ignoreUser(nick, false) }
       : { label: "🚫 Ignore", danger: true, run: () => ignoreUser(nick, true) },
+    ...(S.current && isChannel(S.current) ? moderatorItems(conv(S.current), nick) : []),
   ]);
 }
 
@@ -2571,6 +2611,428 @@ function onMentionKey(e) {
   return true;
 }
 
+/* ---------- room management: moderation, settings, owner tools ---------- */
+
+/* Everyone reaches solanum through soju from one IP, so bans and mutes must
+ * never use the host: they target the account ($a:<id>, extb_account) and the
+ * nick (<id>!*@*, for people not logged in to NickServ). In a09f the ID, the
+ * nick and the NickServ account are the same word. */
+const personMasks = (nick) => [`$a:${nick}`, `${nick}!*@*`];
+const maskNick = (mask) => (mask.match(/^\$a:(.+)$/) || mask.match(/^([^!]+)!\*@\*$/) || [])[1] || null;
+
+/* Channel modes we show as settings. */
+const ROOM_FLAGS = { i: "Private", s: "Hidden", m: "Announcement" };
+
+function roomState(c) {
+  c.modes ||= new Set();
+  c.bans ||= new Set();
+  c.quiets ||= new Set();
+  return c;
+}
+
+const isMuted = (c, nick) => [...(c?.quiets || [])].some((m) => keyOf(maskNick(m)) === keyOf(nick));
+const isBanned = (c, nick) => [...(c?.bans || [])].some((m) => keyOf(maskNick(m)) === keyOf(nick));
+
+/* 324: current modes, e.g. "+ntikl" "secret" "5". */
+function onChannelModes(params) {
+  const c = conv(keyOf(params[1]));
+  if (!c) return;
+  roomState(c);
+  c.modes.clear(); c.key = ""; c.limit = 0;
+  const args = params.slice(3);
+  for (const m of (params[2] || "").replace(/^\+/, "")) {
+    c.modes.add(m);
+    if (m === "k") c.key = args.shift() || "";
+    else if (m === "l") c.limit = +args.shift() || 0;
+    else if ("fj".includes(m)) args.shift();
+  }
+  renderRoomDialog();
+}
+
+/* After joining a room: learn its modes, bans and mutes. */
+function loadRoomState(c) {
+  roomState(c);
+  c.banBuf = new Set(); c.quietBuf = new Set();
+  send(`MODE ${c.name}`);
+  send(`MODE ${c.name} b`);
+  send(`MODE ${c.name} q`);
+}
+
+function onListEntry(num, params) {
+  const c = conv(keyOf(params[1]));
+  if (!c) return;
+  roomState(c);
+  if (num === 367) (c.banBuf ||= new Set()).add(params[2]);
+  else if (num === 368) { c.bans = c.banBuf || new Set(); c.banBuf = null; }
+  else if (num === 728) (c.quietBuf ||= new Set()).add(params[3]);
+  else if (num === 729) { c.quiets = c.quietBuf || new Set(); c.quietBuf = null; }
+  if (num === 368 || num === 729) { if (keyOf(c.name) === S.current) renderUsers(); renderRoomDialog(); }
+}
+
+/* Mode changes that matter for settings and the lists (called from onMode). */
+function trackRoomMode(c, add, m, arg) {
+  roomState(c);
+  if (m in ROOM_FLAGS || "nt".includes(m)) add ? c.modes.add(m) : c.modes.delete(m);
+  else if (m === "k") { add ? c.modes.add("k") : c.modes.delete("k"); c.key = add ? arg || "" : ""; }
+  else if (m === "l") { add ? c.modes.add("l") : c.modes.delete("l"); c.limit = add ? +arg || 0 : 0; }
+  else if (m === "b" && arg) add ? c.bans.add(arg) : c.bans.delete(arg);
+  else if (m === "q" && arg) add ? c.quiets.add(arg) : c.quiets.delete(arg);
+}
+
+/* ----- people: kick, ban, mute, moderators ----- */
+
+function kickUser(c, nick) {
+  send(`KICK ${c.name} ${nick} :Removed by ${S.me}`);
+}
+
+function banUser(c, nick) {
+  send(`MODE ${c.name} +bb ${personMasks(nick).join(" ")}`);
+  if (c.members.has(nick)) send(`KICK ${c.name} ${nick} :Banned by ${S.me}`);
+  sys(`${nick} is banned from ${roomName(c.name)}.`, "system", c.name);
+}
+
+function unbanUser(c, nick) {
+  const masks = [...c.bans].filter((m) => keyOf(maskNick(m)) === keyOf(nick));
+  if (masks.length) send(`MODE ${c.name} -${"b".repeat(masks.length)} ${masks.join(" ")}`);
+  sys(`${nick} can join ${roomName(c.name)} again.`, "system", c.name);
+}
+
+function muteUser(c, nick, on) {
+  const masks = on ? personMasks(nick) : [...c.quiets].filter((m) => keyOf(maskNick(m)) === keyOf(nick));
+  if (!masks.length) return;
+  send(`MODE ${c.name} ${on ? "+" : "-"}${"q".repeat(masks.length)} ${masks.join(" ")}`);
+  sys(on ? `${nick} is muted in ${roomName(c.name)}.` : `${nick} can talk again in ${roomName(c.name)}.`, "system", c.name);
+}
+
+/* Moderator = op. In a registered room it's also saved with ChanServ (AOP),
+ * so it sticks when they leave and come back. */
+async function setModerator(c, nick, on) {
+  send(`MODE ${c.name} ${on ? "+o" : "-o"} ${nick}`);
+  if (c.registered) {
+    await csAsk(`FLAGS ${c.name} ${nick} ${on ? "AOP" : "-*"}`, /were set on|not authorized|not registered/i);
+    if ($("roomDialog").style.display !== "none") loadRoomInfo(c);
+  }
+  sys(on ? `${nick} is now a moderator of ${roomName(c.name)}. 👑` : `${nick} is no longer a moderator.`, "system", c.name);
+}
+
+/* Extra menu items for moderators, added to the right-click menu in rooms. */
+function moderatorItems(c, nick) {
+  if (!amOp(c) || keyOf(nick) === keyOf(S.me)) return [];
+  const isMod = /[@~&]/.test(c.members.get(nick) || "");
+  return [
+    "-",
+    isMod ? { label: "👑 Remove moderator", run: () => setModerator(c, nick, false) }
+          : { label: "👑 Make moderator", run: () => setModerator(c, nick, true) },
+    isMuted(c, nick) ? { label: "🔊 Unmute", run: () => muteUser(c, nick, false) }
+                     : { label: "🔇 Mute", run: () => muteUser(c, nick, true) },
+    { label: "👢 Remove from room", danger: true, run: () => kickUser(c, nick) },
+    { label: "⛔ Ban from room", danger: true, run: () => banUser(c, nick) },
+  ];
+}
+
+/* KICK: say what happened; if it was us, the room is gone from our list. */
+function onKick(by, channel, nick, reason) {
+  const key = keyOf(channel);
+  const c = conv(key);
+  if (!c) return;
+  if (keyOf(nick) === keyOf(S.me)) {
+    S.convs.delete(key);
+    if (S.current === key) { S.current = null; switchTo(rooms().at(-1)?.name || null); renderLog(); }
+    sys(`${by} removed you from ${roomName(channel)}.`, "error");
+    refreshSide();
+    return;
+  }
+  c.members.delete(nick);
+  addMsg(channel, { who: nick, txt: `was removed by ${by}`, cls: "action" });
+  refreshSide();
+}
+
+/* ----- ChanServ questions (INFO, FLAGS, …) with collected replies ----- */
+
+/* Sends one ChanServ command (through the paced queue) and resolves with the
+ * NOTICE lines it answers with, up to a line matching `endRe` or a quiet gap. */
+function csAsk(command, endRe, timeout = 6000) {
+  const run = () => new Promise((resolve) => {
+    const req = { lines: [], endRe, resolve };
+    const finish = () => { clearTimeout(req.timer); clearTimeout(req.quiet); if (S.csReq === req) S.csReq = null; resolve(req.lines); };
+    req.finish = finish;
+    req.timer = setTimeout(finish, timeout);
+    S.csReq = req;
+    serviceQueue([`PRIVMSG ChanServ :${command}`]);
+  });
+  S.csChain = (S.csChain || Promise.resolve()).then(run, run);
+  return S.csChain;
+}
+
+/* Returns true when the line belonged to a pending csAsk. */
+function onCsReply(text) {
+  const req = S.csReq;
+  if (!req) return false;
+  const t = text.replace(/[\x02\x1d\x1f\x0f]/g, "");
+  req.lines.push(t);
+  clearTimeout(req.quiet);
+  if (req.endRe.test(t)) req.finish();
+  else req.quiet = setTimeout(req.finish, 1500);
+  return true;
+}
+
+/* ChanServ "[#room] message" when you join a room with a welcome message. */
+function onEntryMsg(text) {
+  const m = text.replace(/[\x02\x1d\x1f\x0f]/g, "").match(/^\[([#&]\S+)\] (.*)$/);
+  if (!m) return false;
+  addMsg(m[1], { who: "Welcome", txt: m[2], cls: "service welcome" });
+  return true;
+}
+
+/* ----- room settings dialog ----- */
+
+async function loadRoomInfo(c) {
+  c.infoLoaded = false;
+  const info = await csAsk(`INFO ${c.name}`, /end of info|is not registered|not registered/i);
+  const notReg = info.some((l) => /is not registered/i.test(l));
+  c.registered = !notReg && info.some((l) => /^Founder\s*:/i.test(l));
+  const f = info.find((l) => /^Founder\s*:/i.test(l));
+  c.founders = f ? f.replace(/^Founder\s*:\s*/i, "").split(/,\s*/).map((x) => x.trim()) : [];
+  const em = info.find((l) => /^Entrymsg\s*:/i.test(l));
+  c.entryMsg = em ? em.replace(/^Entrymsg\s*:\s*/i, "") : "";
+  c.mods = null;
+  if (c.registered) {
+    const lines = await csAsk(`FLAGS ${c.name}`, /end of .* flags listing|not authorized/i);
+    c.mods = lines.map((l) => l.match(/^\d+\s+(\S+)\s+\+(\S+)/)).filter(Boolean)
+      .filter((m) => /o/i.test(m[2])).map((m) => ({ nick: m[1], founder: m[2].includes("F") }));
+  }
+  c.infoLoaded = true;
+  renderRoomDialog();
+}
+
+const amFounder = (c) => c.registered && c.founders?.some((f) => keyOf(f) === keyOf(S.me));
+
+function openRoomDialog(c) {
+  S.roomDialogFor = keyOf(c.name);
+  roomState(c);
+  $("rdTitle").textContent = `${roomName(c.name)} — Room Settings`;
+  showMsg("rdMsg", "");
+  $("rdDelete").dataset.armed = "";
+  $("rdDelete").textContent = "Delete this room…";
+  $("roomDialog").style.display = "";
+  send(`MODE ${c.name}`); send(`MODE ${c.name} b`); send(`MODE ${c.name} q`);
+  fillRoomForm(c);
+  $("rdOwner").style.display = "none";
+  $("rdMods").innerHTML = `<div class="empty-hint">Loading…</div>`;
+  c.infoLoaded = false;
+  $("rdSave").disabled = true; $("rdSave").textContent = "Loading…";
+  loadRoomInfo(c);
+}
+
+function closeRoomDialog() { $("roomDialog").style.display = "none"; S.roomDialogFor = null; }
+
+function fillRoomForm(c) {
+  $("rdPrivate").checked = c.modes.has("i");
+  $("rdHidden").checked = c.modes.has("s");
+  $("rdAnnounce").checked = c.modes.has("m");
+  $("rdKey").value = c.key || "";
+  $("rdLimit").value = c.limit || "";
+}
+
+function renderRoomDialog() {
+  const c = S.roomDialogFor && conv(S.roomDialogFor);
+  if (!c || $("roomDialog").style.display === "none") return;
+  if (!S.roomFormDirty) fillRoomForm(c);
+  // Welcome message + moderators come from ChanServ (registered rooms only).
+  $("rdWelcomeBox").style.display = c.registered ? "" : "none";
+  if (document.activeElement !== $("rdWelcome")) $("rdWelcome").value = c.entryMsg || "";
+  const mods = $("rdMods");
+  mods.innerHTML = "";
+  const list = c.registered && c.mods ? c.mods
+    : [...c.members.entries()].filter(([, p]) => /[@~&]/.test(p)).map(([n]) => ({ nick: n, founder: false }))
+        .filter((m) => !isService(m.nick));
+  if (!list.length) mods.innerHTML = `<div class="empty-hint">No moderators.</div>`;
+  for (const m of list) {
+    const row = document.createElement("div");
+    row.className = "pv-row";
+    row.innerHTML = `<span>👑 ${esc(m.nick)}${m.founder ? " <i>(owner)</i>" : ""}</span>` +
+      (m.founder || keyOf(m.nick) === keyOf(S.me) ? "" : `<button>Remove</button>`);
+    row.querySelector("button")?.addEventListener("click", () => setModerator(c, m.nick, false));
+    mods.appendChild(row);
+  }
+  const people = (set) => [...new Set([...set].map(maskNick).filter(Boolean))];
+  const fill = (el, names, label, undo) => {
+    el.innerHTML = names.length ? "" : `<div class="empty-hint">Nobody.</div>`;
+    for (const n of names) {
+      const row = document.createElement("div");
+      row.className = "pv-row";
+      row.innerHTML = `<span>${esc(n)}</span><button>${label}</button>`;
+      row.querySelector("button").onclick = () => undo(n);
+      el.appendChild(row);
+    }
+  };
+  fill($("rdBans"), people(c.bans), "Unban", (n) => unbanUser(c, n));
+  fill($("rdMutes"), people(c.quiets), "Unmute", (n) => muteUser(c, n, false));
+  $("rdOwner").style.display = amFounder(c) ? "" : "none";
+  // Owner vs moderator decides how settings are saved: wait for ChanServ.
+  $("rdSave").disabled = !c.infoLoaded;
+  $("rdSave").textContent = c.infoLoaded ? "Save Settings" : "Loading…";
+  $("rdRegHint").style.display = c.registered ? "none" : "";
+}
+
+async function saveRoomSettings() {
+  const c = S.roomDialogFor && conv(S.roomDialogFor);
+  if (!c || !c.infoLoaded) return;
+  const want = { i: $("rdPrivate").checked, s: $("rdHidden").checked, m: $("rdAnnounce").checked };
+  const key = $("rdKey").value.trim().replace(/\s+/g, "");
+  const limit = parseInt($("rdLimit").value, 10) || 0;
+  // Registered rooms: ChanServ's MLOCK (default +nt-lk) decides, and the owner
+  // sets it. That also keeps the settings when the room is empty.
+  if (amFounder(c)) {
+    const on = "nt" + Object.keys(want).filter((m) => want[m]).join("") + (key ? "k" : "") + (limit > 0 ? "l" : "");
+    const off = Object.keys(want).filter((m) => !want[m]).join("") + (key ? "" : "k") + (limit > 0 ? "" : "l");
+    const args = [key, limit > 0 ? String(limit) : ""].filter(Boolean);
+    const r = await csAsk(`SET ${c.name} MLOCK +${on}-${off}${args.length ? " " + args.join(" ") : ""}`,
+      /mlock for|not authorized|invalid/i);
+    S.roomFormDirty = false;
+    const ok = r.some((l) => /mlock for/i.test(l));
+    showMsg("rdMsg", ok ? "Saved." : "Couldn't save the settings right now.", ok ? "ok" : "error");
+    setTimeout(() => send(`MODE ${c.name}`), 1500);
+    return;
+  }
+  if (c.registered && (key !== (c.key || "") || limit !== (c.limit || 0))) {
+    showMsg("rdMsg", "Only the room's owner can set a password or a people limit.", "error");
+    return;
+  }
+  let plus = "", minus = "", args = [];
+  for (const [m, on] of Object.entries(want)) {
+    if (on && !c.modes.has(m)) plus += m;
+    if (!on && c.modes.has(m)) minus += m;
+  }
+  if (key !== (c.key || "")) {
+    if (c.modes.has("k")) { minus += "k"; }
+    if (key) { plus += "k"; args.push(key); }
+  }
+  if (limit !== (c.limit || 0)) {
+    if (limit > 0) { plus += "l"; args.push(String(limit)); } else minus += "l";
+  }
+  // "-k" needs the old key as its argument on most servers.
+  const minusArgs = minus.includes("k") ? [c.key || "*"] : [];
+  if (minus) send(`MODE ${c.name} -${minus} ${minusArgs.join(" ")}`.trim());
+  if (plus) send(`MODE ${c.name} +${plus} ${args.join(" ")}`.trim());
+  S.roomFormDirty = false;
+  showMsg("rdMsg", plus || minus ? "Saved." : "Nothing changed.", "ok");
+}
+
+async function saveWelcome() {
+  const c = S.roomDialogFor && conv(S.roomDialogFor);
+  if (!c?.registered) return;
+  const text = cleanField($("rdWelcome").value);
+  const lines = await csAsk(`SET ${c.name} ENTRYMSG${text ? " " + text : ""}`, /entry message|not authorized|denied/i);
+  const ok = lines.some((l) => /entry message/i.test(l));
+  c.entryMsg = ok ? text : c.entryMsg;
+  showMsg("rdMsg", ok ? (text ? "Welcome message saved." : "Welcome message removed.")
+    : "Only the room owner can change the welcome message.", ok ? "ok" : "error");
+}
+
+/* Hand the room to someone else: they become founder, then we step down. */
+async function giveRoom() {
+  const c = S.roomDialogFor && conv(S.roomDialogFor);
+  const to = $("rdGiveTo").value.trim().toLowerCase();
+  if (!c || !amFounder(c)) return;
+  if (!/^[a-z][a-z0-9_-]{2,15}$/.test(to) || keyOf(to) === keyOf(S.me)) {
+    showMsg("rdMsg", "Type the a09f ID of the new owner.", "error"); return;
+  }
+  showMsg("rdMsg", `Giving ${roomName(c.name)} to ${to}…`);
+  const r = await csAsk(`FLAGS ${c.name} ${to} +F`, /were set on|not registered|not authorized|too many/i);
+  if (!r.some((l) => /were set on/i.test(l))) {
+    const why = r.find((l) => /not registered/i.test(l)) ? `${to} needs to sign in to a09f once before they can own a room.`
+      : r.find((l) => /too many/i.test(l)) ? `${to} already owns the maximum number of rooms.`
+      : "Couldn't give the room away right now.";
+    showMsg("rdMsg", why, "error");
+    return;
+  }
+  await csAsk(`FLAGS ${c.name} ${S.me} -F`, /were set on|not authorized/i);
+  sys(`${to} is now the owner of ${roomName(c.name)}.`, "system", c.name);
+  $("rdGiveTo").value = "";
+  loadRoomInfo(c);
+}
+
+/* Unregister the room (ChanServ DROP, which asks for a confirmation key). */
+async function deleteRoom() {
+  const c = S.roomDialogFor && conv(S.roomDialogFor);
+  const btn = $("rdDelete");
+  if (!c || !amFounder(c)) return;
+  if (!btn.dataset.armed) {
+    btn.dataset.armed = "1";
+    btn.textContent = "Click again to delete it for good";
+    return;
+  }
+  btn.dataset.armed = ""; btn.textContent = "Deleting…";
+  const r = await csAsk(`DROP ${c.name}`, /drop \S+ \S+|has been dropped|not authorized/i);
+  const key = r.join(" ").match(/DROP\s+\S+\s+([0-9a-f:]+)/i)?.[1];
+  const done = key ? await csAsk(`DROP ${c.name} ${key}`, /has been dropped|invalid|not authorized/i) : r;
+  btn.textContent = "Delete this room…";
+  if (done.some((l) => /has been dropped/i.test(l))) {
+    closeRoomDialog();
+    sys(`${roomName(c.name)} isn't yours any more: it will disappear once everyone leaves.`, "system", c.name);
+  } else {
+    showMsg("rdMsg", "Couldn't delete the room right now.", "error");
+  }
+}
+
+/* ----- invites to normal rooms, and "ask to join" (KNOCK) ----- */
+
+const ROOM_INVITE_TEXT = "invited you to a room:";
+const ROOM_INVITE_RE = /^invited you to a room: ([#&]\S+)\s*$/i;
+
+function inviteToRoom(c, nicks) {
+  if (isConference(c.name)) { inviteToConference(c, nicks); return; }
+  const list = [...new Set(nicks.map(keyOf))].filter((n) => n !== keyOf(S.me) && !c.members.has(n));
+  if (!list.length) return;
+  for (const nick of list) {
+    send(`INVITE ${nick} ${c.name}`);
+    send(`PRIVMSG ${nick} :\x01ACTION ${ROOM_INVITE_TEXT} ${c.name}\x01`);
+  }
+  sys(`Invite sent to ${list.join(", ")}.`, "system", c.name);
+}
+
+/* 473 on a normal room: offer to knock. */
+function offerKnock(channel) {
+  addMsg(null, { who: "Error", txt: `${roomName(channel)} is private.`, cls: "error", knock: channel });
+}
+
+function knock(channel) {
+  send(`KNOCK ${channel} :${S.me} would like to join`);
+}
+
+/* 710 (to moderators): someone knocked. */
+function onKnock(params) {
+  const channel = params[1];
+  const who = nickOf(params[2] || "");
+  if (!who || !conv(keyOf(channel))) return;
+  addMsg(channel, { who: "System", txt: `${who} asked to join this room.`, cls: "service", letIn: who });
+  Sound.play("buzz");
+  notify(`${who} asked to join ${roomName(channel)}`, "", keyOf(channel));
+}
+
+function letIn(channel, nick) {
+  const c = conv(keyOf(channel));
+  if (c) inviteToRoom(c, [nick]);
+}
+
+/* ---------- auto-reply: tell senders when the other person is away ---------- */
+
+function autoReply(target) {
+  const c = conv(keyOf(target));
+  if (!c || c.kind !== "pm") return;
+  const st = statusOf(target);
+  if (!["busy", "away", "offline"].includes(st.state)) { c.autoReplied = null; return; }
+  const sig = st.state + "|" + st.label;
+  if (c.autoReplied === sig) return;            // once per status
+  c.autoReplied = sig;
+  const text = st.state === "offline"
+    ? `${target} is offline right now. They'll get your message when they sign in.`
+    : `${target} is ${st.label === "Busy" || st.label === "Be Right Back" || st.label === "Stepped Out" ? `“${st.label}”` : `away: “${st.label}”`}. ` +
+      `They'll see your message when they're back.`;
+  addMsg(target, { who: "Auto-reply", txt: text, cls: "service autoreply" });
+}
+
 /* ---------- actions ---------- */
 
 async function doSignIn() {
@@ -2599,7 +3061,8 @@ function doDisconnect(message = "", isError = false) {
   stopSocial(); S.friendGroups.clear(); S.incoming = []; S.outgoing = [];
   S.prefs = { ignore: [], friendsOnly: false }; S.callerId = null; S.accepted = null; S.blockedTold = null;
   S.findResults = null; S.searching = false;
-  for (const id of ["privacyDialog", "findDialog", "searchDialog"]) $(id).style.display = "none";
+  for (const id of ["privacyDialog", "findDialog", "searchDialog", "roomDialog"]) $(id).style.display = "none";
+  S.csReq = null; S.csChain = null; S.roomDialogFor = null;
   for (const t of S.typing.values()) clearTimeout(t);
   S.typing.clear(); S.typingTo = null; $("typing").textContent = ""; hideMenu();
   S.inPresence = false; S.presenceReady = false; S.announced = false;
@@ -2619,12 +3082,18 @@ function doDisconnect(message = "", isError = false) {
   setPhase("offline", message, isError);
 }
 
+/* JOIN, remembering that this device asked for it (see onJoin). */
+function joinRoom(name, key = "") {
+  (S.joining ||= new Set()).add(keyOf(name));
+  send(`JOIN ${name}${key ? " " + key : ""}`);
+}
+
 function joinOrSwitch(name) {
   name = name.trim().replace(/\s+/g, "-");
   if (!name) return;
   if (!isChannel(name)) name = "#" + name;
   if (conv(keyOf(name))?.kind === "room") switchTo(name);
-  else send(`JOIN ${name}`);
+  else joinRoom(name);
 }
 
 /* Leave a room. soju forgets it too, so it won't come back at next sign-in;
@@ -2649,6 +3118,7 @@ function closePm(c) {
 
 function sendTo(target, body) {
   send(`PRIVMSG ${target} :${body}`);
+  if (!isChannel(target)) setTimeout(() => autoReply(target), 300);
   // Without echo-message the server won't send our own message back.
   if (!has("echo-message")) addMsg(target, { who: S.me, txt: body, cls: "me", others: false });
 }
@@ -2917,6 +3387,15 @@ $("confDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") clo
 logEl.addEventListener("click", (e) => {
   const b = e.target.closest(".invite-join");
   if (b) joinOrSwitch(b.dataset.room);
+  const k = e.target.closest(".knock-btn");
+  if (k) { knock(k.dataset.room); k.disabled = true; k.textContent = "Asked ✓"; }
+  const li = e.target.closest(".letin-btn");
+  if (li && S.current) { letIn(S.current, li.dataset.nick); li.disabled = true; li.textContent = "Invited ✓"; }
+  const kj = e.target.closest(".key-join");
+  if (kj) {
+    const key = kj.parentElement.querySelector(".key-input")?.value.trim();
+    if (key) joinRoom(kj.dataset.room, key);
+  }
 });
 $("pwClose").onclick = closePwDialog;
 $("pwForm").addEventListener("submit", (e) => { e.preventDefault(); doChangePassword(); });
@@ -2949,6 +3428,13 @@ $("friendAddGroup").onchange = () => {
 };
 $("input").addEventListener("input", onComposerInput);
 $("btnPrivacy").onclick = openPrivacy;
+$("rdClose").onclick = closeRoomDialog;
+$("roomDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closeRoomDialog(); });
+for (const id of ["rdPrivate", "rdHidden", "rdAnnounce", "rdKey", "rdLimit"]) $(id).addEventListener("input", () => { S.roomFormDirty = true; });
+$("rdSave").onclick = saveRoomSettings;
+$("rdWelcomeSave").onclick = saveWelcome;
+$("rdGive").onclick = giveRoom;
+$("rdDelete").onclick = deleteRoom;
 $("pvClose").onclick = closePrivacy;
 $("pvFriendsOnly").onchange = onFriendsOnlyToggle;
 $("privacyDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closePrivacy(); });

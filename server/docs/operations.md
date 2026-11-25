@@ -188,6 +188,18 @@ event live:
 Endpoint bertoken tidak dihitung ke rate limit per IP (typing sering).
 Satu koneksi SSE = satu thread; cukup untuk skala kecil.
 
+### Extban akun (`extb_account`)
+
+`ircd.conf.tmpl` memuat `extensions/extb_account` (ISUPPORT `EXTBAN=$,a`).
+Semua user a09f datang dari IP soju yang sama, jadi ban/mute di app memakai
+`$a:<akun>` (+ `<id>!*@*` untuk yang belum login NickServ) — **jangan pernah**
+ban berdasarkan host. Modul baru bisa dimuat tanpa restart: render ulang
+config di container lalu `kill -HUP $(cat /tmp/solanum.pid)`.
+
+Catatan Atheme: room terdaftar memakai MLOCK default `+nt-lk`, jadi password
+(+k) dan batas (+l) hanya bisa dipasang pemilik lewat `ChanServ SET #room
+MLOCK …` (app melakukannya dari ⚙️ Settings).
+
 ## Room bawaan `#lobby` & `#a09f-presence`
 
 App desktop otomatis join `#lobby` kalau akun belum ada di room mana pun.

@@ -195,6 +195,22 @@
   .find-link, #emptyFind { color: var(--purple); cursor: pointer; text-decoration: underline; font-size: 11px; }
   .user.ignored .label { text-decoration: line-through; color: #aaa; }
   .seen { text-align: right; font-size: 10px; color: #1a7f1a; padding: 0 8px 2px; }
+  /* room settings */
+  .modal .rd-pane { width: min(680px, 94%); }
+  .rd-body { display: flex; gap: 16px; padding: 10px 16px 14px; overflow-y: auto; }
+  .rd-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .rd-h { font-weight: bold; color: var(--purple-d); margin-top: 8px; }
+  .rd-row { display: flex; align-items: center; gap: 6px; }
+  .rd-row > span { width: 80px; color: var(--dim); }
+  .rd-row input { flex: 1; min-width: 0; }
+  .rd-body .cf-list { max-height: 96px; }
+  .rd-btn { margin-top: 6px; font-weight: bold; padding: 4px; }
+  .rd-danger { margin-top: 8px; color: var(--error); }
+  .msg.welcome .who { color: #1a7f1a; }
+  .msg.autoreply .who { color: #8a5a00; }
+  .msg.autoreply .txt { font-style: italic; color: #6b5a33; }
+  .msg .knock-btn, .msg .letin-btn, .msg .key-join { margin-left: 6px; padding: 0 8px; font-size: 11px; }
+  .msg .key-input { font-size: 11px; padding: 1px 4px; margin-left: 6px; }
   /* @mentions */
   .mention { color: var(--purple); font-weight: bold; }
   .mention.me { background: #ffe58a; color: #5a3d00; border-radius: 3px; padding: 0 2px; }
@@ -518,6 +534,44 @@
       </div>
       <div id="pfMsg" class="form-msg"></div>
     </form>
+  </div>
+  <div id="roomDialog" class="modal" style="display:none">
+    <div class="pane rd-pane">
+      <div class="pane-title"><span id="rdTitle">Room Settings</span> <span class="x" id="rdClose" title="Close">✕</span></div>
+      <div class="rd-body">
+        <div class="rd-col">
+          <div class="rd-h">Who can join and talk</div>
+          <label class="pv-check"><input type="checkbox" id="rdPrivate"> Private — only invited people can join</label>
+          <label class="pv-check"><input type="checkbox" id="rdHidden"> Hidden — not shown in 🔍 Rooms</label>
+          <label class="pv-check"><input type="checkbox" id="rdAnnounce"> Announcement — only moderators can talk</label>
+          <div class="rd-row"><span>Password</span><input type="text" id="rdKey" maxlength="23" placeholder="none"></div>
+          <div class="rd-row"><span>Max people</span><input type="number" id="rdLimit" min="0" max="9999" placeholder="no limit"></div>
+          <button id="rdSave" class="rd-btn">Save Settings</button>
+          <div id="rdWelcomeBox">
+            <div class="rd-h">Welcome message</div>
+            <div class="hint">Shown to everyone who joins.</div>
+            <div class="rd-row"><input type="text" id="rdWelcome" maxlength="200" placeholder="e.g. Welcome! Be nice :)">
+              <button id="rdWelcomeSave">Save</button></div>
+          </div>
+          <div id="rdRegHint" class="hint">This room isn't owned by anyone, so moderators and settings are lost when it empties.</div>
+          <div id="rdMsg" class="form-msg"></div>
+        </div>
+        <div class="rd-col">
+          <div class="rd-h">Moderators</div>
+          <div class="hint">Right-click someone in the room to make them a moderator, mute, remove or ban them.</div>
+          <div id="rdMods" class="cf-list"></div>
+          <div class="rd-h">Muted</div>
+          <div id="rdMutes" class="cf-list"></div>
+          <div class="rd-h">Banned</div>
+          <div id="rdBans" class="cf-list"></div>
+          <div id="rdOwner">
+            <div class="rd-h">Owner</div>
+            <div class="rd-row"><input type="text" id="rdGiveTo" maxlength="16" placeholder="New owner's ID"><button id="rdGive">Give room</button></div>
+            <button id="rdDelete" class="rd-danger">Delete this room…</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
   <div id="privacyDialog" class="modal" style="display:none">
     <div class="pane pf-pane">
