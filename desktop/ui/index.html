@@ -281,7 +281,9 @@
   #signin:not([data-screen="reset"]) #resetForm { display: none; }
   .forgot { text-align: right; margin-top: 6px; }
   .signin-opts { display: flex; flex-direction: column; gap: 3px; margin-top: 10px; font-size: 11px; }
-  .signin-opts label { display: flex; align-items: center; gap: 5px; margin: 0; font-weight: normal; color: var(--ink); cursor: pointer; }
+  .signin-box .signin-opts label { display: flex; align-items: center; gap: 6px; margin: 0; font-weight: normal;
+    color: var(--ink); cursor: pointer; text-align: left; white-space: nowrap; }
+  .signin-box .signin-opts input[type=checkbox] { width: auto; margin: 0; padding: 0; flex: none; }
   .forgot a { color: var(--purple); cursor: pointer; text-decoration: underline; font-size: 11px; }
   .reset-title { font-weight: bold; color: var(--purple-d); text-align: center; margin-bottom: 4px; }
   #resetStep2 { display: flex; flex-direction: column; }
