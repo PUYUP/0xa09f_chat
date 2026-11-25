@@ -7,6 +7,6 @@ FROM ${SOJU_IMAGE} AS soju
 
 FROM python:3.12-alpine
 COPY --from=soju /sojuctl /usr/local/bin/sojuctl
-COPY app.py /app/app.py
+COPY app.py social.py /app/
 EXPOSE 8080
 CMD ["python3", "-u", "/app/app.py"]

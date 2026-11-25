@@ -80,6 +80,31 @@ server/protokol di layar.
   penerimanya sedang sign out, dan tampil dengan tombol **Join**. Pemilik bisa
   mengundang lagi lewat ➕ Invite. Room conference kosong yang di-join ulang
   langsung ditinggalkan ("That conference has already ended")
+- **Teman (server-side) + grup + friend request**: daftar teman disimpan di
+  service akun (`server/register`, tabel `friends`/`friend_requests`), jadi
+  ikut ke komputer mana pun. Add Friend = kirim request (pilih grup + pesan
+  opsional); penerima melihat kartu **Accept / Decline** di Friends. Kalau
+  dua orang saling request → langsung berteman. Teman dikelompokkan per grup
+  (⋯ di teman: pindah grup / grup baru / hapus; ⋯ di grup: rename). Request
+  yang belum dijawab tampil abu-abu "Waiting for approval". Daftar lama di
+  localStorage otomatis dikirim sebagai request sekali
+- **Typing indicator** ("bob is typing…", private chat saja): lewat service
+  akun (`POST /typing` → Server-Sent Events `GET /events`), bukan IRC — solanum
+  membuang TAGMSG/client tag dan CTCP akan tersimpan di history soju
+- **Invisible** (👻 di pilihan status): app mengirim `AWAY` *sebelum*
+  registrasi selesai (`draft/pre-away`), jadi teman tidak pernah melihatmu
+  online, bahkan sesaat setelah sign in. Pilihan ini diingat per akun di
+  komputer ini
+- **Remember my ID & password / Sign me in automatically**: ID + pilihan di
+  localStorage, password di keychain OS (Rust `keyring`: Keychain macOS /
+  Credential Manager Windows). Password tersimpan dihapus otomatis kalau
+  ditolak server
+- **Tray**: tombol tutup menyembunyikan jendela, a09f tetap jalan (pesan,
+  BUZZ, notifikasi tetap masuk). Ikon tray: klik = buka; menu Open / Sign Out /
+  Quit. macOS: klik ikon Dock juga membuka lagi
+- **Start a09f when my computer starts** (`tauri-plugin-autostart`): dimulai
+  tersembunyi di tray dengan argumen `--autostart`; kombinasikan dengan
+  auto sign-in
 - **Lupa password** (Sign In → *Forgot password?*): isi ID → kode 6 digit
   dikirim ke email pemulihan (`POST /reset/request`) → isi kode + password baru
   (`POST /reset/confirm`). Server mengganti password di soju, NickServ, dan

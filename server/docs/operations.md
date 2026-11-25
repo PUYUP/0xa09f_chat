@@ -170,6 +170,24 @@ docker exec soju /sojuctl -config /soju-config user update <id> -password <baru>
 # NickServ tetap password lama sampai user ganti password dari app
 ```
 
+### Teman, friend request, typing (API sosial)
+
+Service yang sama (`server/register/social.py`) menyimpan daftar teman per
+akun (tabel `friends`, `friend_requests` di `register.db`) dan meneruskan
+event live:
+
+- `POST /session {"username","password"}` → token bearer (password dicek
+  dengan login SASL ke soju; token hanya di memori — restart service = app
+  login ulang otomatis).
+- `GET /friends`, `POST /friends/request|respond|remove|move|rename-group`.
+- `POST /typing {"to","active"}` dan `GET /events?token=…` (Server-Sent
+  Events: `friend-request`, `friend-accepted`, `friend-declined`, `typing`).
+  Token di query string disensor dari log; request typing/events yang sukses
+  tidak dicatat.
+
+Endpoint bertoken tidak dihitung ke rate limit per IP (typing sering).
+Satu koneksi SSE = satu thread; cukup untuk skala kecil.
+
 ## Room bawaan `#lobby` & `#a09f-presence`
 
 App desktop otomatis join `#lobby` kalau akun belum ada di room mana pun.

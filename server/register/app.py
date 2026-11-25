@@ -25,6 +25,18 @@ API (errors: 4xx/5xx {"ok": false, "error": "<human readable>"})
   POST /email           {"username","password"[,"email"]} -> {"ok", "email"}
        Read (no "email") or set the recovery email; the password is checked
        with a real SASL login to soju.
+
+  Social (see social.py), bearer token from POST /session:
+  POST /session         {"username","password"}           -> {"ok", "token"}
+  GET  /friends                                           -> {"friends","incoming","outgoing"}
+  POST /friends/request {"to","group","msg"}              -> {"ok", "result": requested|friends}
+  POST /friends/respond {"from","accept","group"}
+  POST /friends/remove  {"nick"}
+  POST /friends/move    {"nick","group"}
+  POST /friends/rename-group {"from","to"}
+  POST /typing          {"to","active"}
+  GET  /events?token=   Server-Sent Events: friend-request, friend-accepted,
+                        friend-declined, typing
 """
 
 import base64
@@ -41,6 +53,9 @@ import subprocess
 import threading
 import time
 from email.message import EmailMessage
+from urllib.parse import parse_qs, urlsplit
+
+import social
 from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -141,7 +156,22 @@ def db():
                  "updated INTEGER NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS resets (username TEXT PRIMARY KEY, code_hash TEXT NOT NULL, "
                  "expires INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0, sent INTEGER NOT NULL)")
+    social.init_schema(conn)
     return conn
+
+
+_exists_cache = {}          # username -> (exists, checked_at)
+
+
+def user_exists(username):
+    if not USERNAME_RE.match(username or ""):
+        return False
+    hit = _exists_cache.get(username)
+    if hit and time.time() - hit[1] < 300:
+        return hit[0]
+    rc, _ = sojuctl("user", "status", username)
+    _exists_cache[username] = (rc == 0, time.time())
+    return rc == 0
 
 
 def get_email(username):
@@ -337,22 +367,50 @@ class Handler(BaseHTTPRequestHandler):
         # Called from the desktop app's webview (tauri:// / http://tauri.localhost).
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
     def do_OPTIONS(self):
         self.send_response(204)
         self._cors()
         self.end_headers()
 
+    def _token_user(self, token=None):
+        if token is None:
+            auth = self.headers.get("Authorization", "")
+            token = auth[7:] if auth.startswith("Bearer ") else ""
+        user = social.session_user(token)
+        if not user:
+            raise Fail(401, "Please sign in again.")
+        return user
+
     def do_GET(self):
-        if self.path == "/health":
-            self._json(200, {"ok": True})
-        else:
-            self._json(404, {"ok": False, "error": "not found"})
+        url = urlsplit(self.path)
+        try:
+            if url.path == "/health":
+                self._json(200, {"ok": True})
+            elif url.path == "/events":
+                me = self._token_user(parse_qs(url.query).get("token", [""])[0])
+                social.serve_events(self, me)
+            elif url.path == "/friends":
+                me = self._token_user()
+                with db() as conn:
+                    self._json(200, {"ok": True, **social.friends_state(conn, me)})
+            else:
+                self._json(404, {"ok": False, "error": "not found"})
+        except Fail as f:
+            self._json(f.status, {"ok": False, "error": f.message})
+
+    # Signed-in calls (bearer token): not counted against the per-IP limit.
+    SOCIAL = {"/friends/request", "/friends/respond", "/friends/remove", "/friends/move",
+              "/friends/rename-group", "/typing", "/session/end"}
 
     def do_POST(self):
+        if self.path in self.SOCIAL:
+            self._social_post()
+            return
         routes = {"/register": self._register, "/reset/request": self._reset_request,
-                  "/reset/confirm": self._reset_confirm, "/email": self._email}
+                  "/reset/confirm": self._reset_confirm, "/email": self._email,
+                  "/session": self._session}
         route = routes.get(self.path)
         if not route:
             self._json(404, {"ok": False, "error": "not found"})
@@ -405,9 +463,74 @@ class Handler(BaseHTTPRequestHandler):
             set_email(username, validate_email(str(body.get("email", "")).strip()))
         self._json(200, {"ok": True, "email": get_email(username) or ""})
 
+    def _session(self, ip, username, body):
+        if not USERNAME_RE.match(username) or not check_login(username, str(body.get("password", ""))):
+            raise Fail(403, "Your password isn't right.")
+        self._json(200, {"ok": True, "token": social.new_session(username)})
+
+    def _read_body(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > 4096:
+            raise Fail(400, "Bad request.")
+        try:
+            body = json.loads(self.rfile.read(length))
+        except ValueError:
+            raise Fail(400, "Bad request.")
+        if not isinstance(body, dict):
+            raise Fail(400, "Bad request.")
+        return body
+
+    def _social_post(self):
+        try:
+            me = self._token_user()
+            body = self._read_body()
+            nick = lambda k: str(body.get(k, "")).strip().lower()
+            if self.path == "/typing":
+                to = nick("to")
+                if USERNAME_RE.match(to) and to != me:
+                    social.push(to, "typing", {"from": me, "active": bool(body.get("active"))})
+                self._json(200, {"ok": True})
+                return
+            if self.path == "/session/end":
+                auth = self.headers.get("Authorization", "")
+                social.end_session(auth[7:])
+                self._json(200, {"ok": True})
+                return
+            with db() as conn:
+                try:
+                    if self.path == "/friends/request":
+                        to = nick("to")
+                        if not USERNAME_RE.match(to):
+                            raise Fail(400, "That doesn't look like an a09f ID.")
+                        result = social.request_friend(conn, me, to, body.get("group"), body.get("msg"), user_exists)
+                    elif self.path == "/friends/respond":
+                        social.respond_friend(conn, me, nick("from"), bool(body.get("accept")), body.get("group"))
+                        result = "ok"
+                    elif self.path == "/friends/remove":
+                        social.remove_friend(conn, me, nick("nick"))
+                        result = "ok"
+                    elif self.path == "/friends/move":
+                        social.move_friend(conn, me, nick("nick"), body.get("group"))
+                        result = "ok"
+                    else:   # /friends/rename-group
+                        social.rename_group(conn, me, str(body.get("from", "")), body.get("to"))
+                        result = "ok"
+                except social.SocialFail as f:
+                    raise Fail(f.status, f.message)
+                self._json(200, {"ok": True, "result": result, **social.friends_state(conn, me)})
+        except Fail as f:
+            self._json(f.status, {"ok": False, "error": f.message})
+        except Exception as e:
+            print(f"[register] social error: {e!r}", flush=True)
+            self._json(500, {"ok": False, "error": "Something went wrong. Please try again later."})
+
     def log_message(self, fmt, *args):
-        # Default logging prints the request line only (no bodies/passwords).
-        print(f"[register] {self.client_address[0]} {fmt % args}", flush=True)
+        # Request line only (no bodies/passwords); never print the SSE token,
+        # and skip the chatty typing pings unless they fail.
+        line = re.sub(r"token=[^ &\"]+", "token=<redacted>", fmt % args)
+        if ("/typing" in line or "/events" in line) and '" 200 ' in line:
+            return
+        print(f"[register] {self.client_address[0]} {line}", flush=True)
 
 
 if __name__ == "__main__":

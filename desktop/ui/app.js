@@ -35,7 +35,7 @@ const MAX_BUFFER = 500;
 
 /* IRCv3 capabilities we use when the server offers them. */
 const WANTED_CAPS = ["sasl", "server-time", "message-tags", "batch", "echo-message", "away-notify",
-                     "draft/chathistory", "draft/read-marker"];
+                     "draft/chathistory", "draft/read-marker", "draft/pre-away"];
 
 const logEl = $("log"), roomsEl = $("channels"), pmsEl = $("pms"), usersEl = $("users");
 const dotEl = $("dot"), whoEl = $("who");
@@ -51,7 +51,12 @@ const S = {
   batches: new Map(),     // batch ref -> {type, params, lines[]}
   burstDone: false,
   account: null,          // the ID used to sign in (friends list is stored per account)
-  friends: [],            // nicks, persisted in localStorage
+  friends: [],            // accepted friends' nicks (server-side list, see startSocial)
+  friendGroups: new Map(),// nick key -> group name
+  incoming: [],           // friend requests to me: {from, msg, created}
+  outgoing: [],           // my pending requests: {to, group}
+  token: null,            // account-service session (friends, typing)
+  typing: new Map(),      // nick key -> hide timer, while they're typing to me
   presence: new Map(),    // nick key -> {away: bool|null, online: bool|null, exists: bool|null}
   statuses: new Map(),    // nick key -> {code, text, time} from PRESENCE_ROOM
   myStatus: { code: "available", text: "" },
@@ -193,6 +198,7 @@ function addMsg(target, m, { history = false } = {}) {
     renderLists();
   }
   if (!history && m.others && S.burstDone) onIncoming(c, m);
+  if (!history && m.others && c.kind === "pm" && S.typing.has(keyOf(c.name))) onTyping(c.name, false);
 }
 
 /* App-generated messages: the sender label says what kind of message it is. */
@@ -399,11 +405,13 @@ function renderLog() {
 function switchTo(key) {
   key = key && keyOf(key);
   if (key === S.current) return;
+  if (S.typingTo && keyOf(S.typingTo) !== key) stopTyping();
   S.current = key;
   const c = key && conv(key);
   if (c) { fetchHistory(c); markRead(c); }
   renderLog();
   refreshSide();
+  renderTyping();
   $("input").focus();
 }
 
@@ -531,6 +539,7 @@ function refreshSide() {
 
 function onWelcome(nick) {
   S.me = nick;
+  rememberLogin();
   S.authFailed = false;
   setPhase("online");
   sys("You're signed in!");
@@ -554,6 +563,7 @@ function onBurstDone() {
   startPresence();
   checkAccountLink();
   checkRecoveryEmail();
+  startSocial();
 }
 
 function onJoin(fromNick, channel) {
@@ -695,9 +705,14 @@ function onNumeric(num, params, trailing) {
     case 730: onMonitor(trailing, true); return;
     case 731: onMonitor(trailing, false); return;
     // SASL finished (success or failure): end CAP negotiation so registration completes.
-    case 903: send("CAP END"); return;
+    case 903:
+      // Invisible: be away before soju sees us, so friends never see us online.
+      if (S.myStatus.code === "invisible" && has("draft/pre-away")) send("AWAY :Invisible");
+      send("CAP END");
+      return;
     case 902: case 904: case 905: case 906: case 907:
       S.authFailed = true;
+      forgetSavedPassword();
       send("CAP END");
       doDisconnect("Wrong ID or password. Please try again.", true);
       return;
@@ -806,7 +821,11 @@ const STATUS_PRESETS = {
   brb:       { label: "Be Right Back", state: "away" },
   stepped:   { label: "Stepped Out",   state: "away" },
   custom:    { label: "",              state: "online" },
+  // Never posted: invisible = staying AWAY on IRC (sent before registration
+  // with draft/pre-away), which everyone else already reads as Offline.
+  invisible: { label: "Invisible",     state: "offline" },
 };
+const invisibleKey = () => `a09f.invisible.${S.account}`;
 
 /* Effective status for a nick: {state: online|busy|away|offline|unknown, label}.
  * Offline = soju auto-away (no device connected), MONITOR offline, or no such
@@ -867,6 +886,7 @@ function onStatusLine(from, l) {
   if (prev && prev.time > time) return;
   const st = { code: m[1], text: (m[2] || "").slice(0, 80), time };
   if (key === keyOf(S.me)) {          // our own status, e.g. set on another device
+    if (S.myStatus.code === "invisible") { S.statuses.set(key, st); return; }   // stays hidden
     S.myStatus = { code: st.code, text: st.text };
     S.statuses.set(key, st);
     syncStatusUi();
@@ -884,12 +904,24 @@ function onStatusLine(from, l) {
 function announceMyStatus() {
   if (S.announced || !S.inPresence) return;
   S.announced = true;
+  if (S.myStatus.code === "invisible") return;
   const { code, text } = S.myStatus;
   if (code !== "available") send(`PRIVMSG ${PRESENCE_ROOM} :STATUS ${code}${text ? " " + text : ""}`);
 }
 
 function setMyStatus(code, text) {
   if (code === "custom" && !text) { $("statusText").focus(); return; }
+  const wasInvisible = S.myStatus.code === "invisible";
+  if (code === "invisible") {
+    S.myStatus = { code, text: "" };
+    localStorage.setItem(invisibleKey(), "1");
+    send("AWAY :Invisible");
+    syncStatusUi();
+    sys("You're invisible: everyone sees you as Offline, but you can still chat.", "status");
+    renderUsers();
+    return;
+  }
+  if (wasInvisible) { localStorage.removeItem(invisibleKey()); send("AWAY"); }
   S.myStatus = { code, text };
   S.statuses.set(keyOf(S.me), { code, text, time: Date.now() });
   syncStatusUi();
@@ -902,9 +934,7 @@ function setMyStatus(code, text) {
 /* Initial state: WHOIS (fresh, unlike soju's cached WHO) for friends and the
  * people on screen; MONITOR covers friends who aren't on a09f/soju. */
 function startPresence() {
-  S.friends = loadFriends();
-  if (S.friends.length) send(`MONITOR + ${S.friends.join(",")}`);
-  requestPresence(S.friends);
+  // Friends arrive from the account service (startSocial → applyFriends).
   clearTimeout(S.presenceTimer);
   S.presenceTimer = setTimeout(() => { S.presenceReady = true; }, 4000);
   renderLists();
@@ -943,53 +973,178 @@ function onMonitor(list, online) {
   for (const item of (list || "").split(",").filter(Boolean)) setPresence(nickOf(item), { online });
 }
 
-/* ----- friends list (stored per account on this computer) ----- */
+/* ----- friends: server-side list with groups and friend requests ----- */
 
-const friendsKey = () => `a09f.friends.${S.account}`;
-function loadFriends() {
-  try { return JSON.parse(localStorage.getItem(friendsKey())) || []; } catch { return []; }
-}
-function saveFriends() { localStorage.setItem(friendsKey(), JSON.stringify(S.friends)); }
+/* The account service (server/register) keeps the friends list, so it
+ * follows the person to any computer, and adding someone needs their OK.
+ * A session token (password checked by the service) authorizes the calls;
+ * live events (requests, answers, typing) arrive over Server-Sent Events. */
+const DEFAULT_GROUP = "Friends";
 const isFriend = (nick) => S.friends.some((f) => keyOf(f) === keyOf(nick));
+const groupOf = (nick) => S.friendGroups.get(keyOf(nick)) || DEFAULT_GROUP;
+const isPendingFriend = (nick) => S.outgoing.some((o) => keyOf(o.to) === keyOf(nick));
 
-function addFriend(nick) {
-  nick = (nick || "").trim().replace(/^@/, "");
-  if (!/^[A-Za-z\[\]\\`_^{|}][A-Za-z0-9\[\]\\`_^{|}-]{0,29}$/.test(nick)) {
-    sys("That doesn't look like a valid ID.", "error"); return false;
+async function socialApi(path, body = null, retry = true) {
+  if (!S.token) await openSession();
+  const res = await fetch(ACCOUNT_URL + path, {
+    method: body ? "POST" : "GET",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${S.token}` },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401 && retry) {          // service restarted: sign in to it again
+    S.token = null;
+    return socialApi(path, body, false);
   }
-  if (keyOf(nick) === keyOf(S.me)) { sys("You can't add yourself as a friend.", "tip"); return false; }
-  if (isFriend(nick)) { sys(`${nick} is already in your Friends.`, "tip"); return true; }
-  // Only real IDs: every a09f account is always on IRC through soju, so a
-  // WHOIS that answers 401 (no such nick) means the ID doesn't exist.
-  const key = keyOf(nick);
-  const q = S.whois.get(key) || { away: false, nick };
-  q.add = true;
-  if (!S.whois.has(key)) { S.whois.set(key, q); send(`WHOIS ${nick}`); }
-  showAddMsg(`Looking up ${nick}…`);
-  clearTimeout(q.addTimer);
-  q.addTimer = setTimeout(() => {
-    if (S.whois.get(key) !== q) return;
-    S.whois.delete(key);
-    addFailed(nick, "Couldn't check that ID right now. Please try again.");
-  }, 8000);
-  return false;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "Something went wrong. Please try again.");
+  return data;
 }
 
-/* WHOIS confirmed the ID exists: now it's a friend. */
-function addConfirmed(nick, away) {
-  if (isFriend(nick)) return;
-  S.friends.push(nick);
-  saveFriends();
-  send(`MONITOR + ${nick}`);
-  setPresence(nick, { away, exists: true });
-  sys(`${nick} was added to your Friends.`, "system");
-  toggleAddFriend(false);
+async function openSession() {
+  const { ok, data } = await accountApi("/session", { username: S.account, password: S.pw });
+  if (!ok) throw new Error(data.error || "Couldn't reach your friends list.");
+  S.token = data.token;
+  return S.token;
+}
+
+/* After sign-in: session, friends list, live events. */
+async function startSocial() {
+  try {
+    await openSession();
+    applyFriends(await socialApi("/friends"));
+    await migrateLocalFriends();
+    openEvents();
+  } catch (e) {
+    if (S.phase !== "online") return;
+    sys("Your friends list couldn't be loaded right now. It will retry in a minute.", "error");
+    clearTimeout(S.socialRetry);
+    S.socialRetry = setTimeout(() => { if (S.phase === "online") startSocial(); }, 60000);
+  }
+}
+
+/* Friends from the old this-computer-only list become friend requests. */
+async function migrateLocalFriends() {
+  const key = `a09f.friends.${S.account}`;
+  let old = [];
+  try { old = JSON.parse(localStorage.getItem(key)) || []; } catch {}
+  localStorage.removeItem(key);
+  for (const nick of old) {
+    if (isFriend(nick) || isPendingFriend(nick) || keyOf(nick) === keyOf(S.me)) continue;
+    try { applyFriends(await socialApi("/friends/request", { to: nick, group: DEFAULT_GROUP, msg: "" })); } catch {}
+  }
+}
+
+function openEvents() {
+  S.events?.close();
+  const es = new EventSource(`${ACCOUNT_URL}/events?token=${encodeURIComponent(S.token)}`);
+  S.events = es;
+  const on = (type, fn) => es.addEventListener(type, (e) => { try { fn(JSON.parse(e.data)); } catch {} });
+  on("friend-request", (d) => {
+    refreshFriends();
+    sys(`${d.from} wants to add you as a friend. Answer in your Friends list.`, "system");
+    Sound.play("buzz");
+    notify(`${d.from} wants to be your friend`, d.msg || "Open a09f to accept or decline.", null);
+  });
+  on("friend-accepted", (d) => {
+    refreshFriends();
+    sys(`${d.nick} accepted your friend request. 🎉`, "system");
+    Sound.play("online");
+    notify(`${d.nick} accepted your friend request`, "", null);
+  });
+  on("friend-declined", (d) => {
+    refreshFriends();
+    sys(`${d.nick} declined your friend request.`, "system");
+  });
+  on("typing", (d) => onTyping(d.from, d.active));
+  // EventSource reconnects by itself; a dead token (service restarted) shows
+  // up as a closed stream: get a new session and listen again.
+  es.onerror = () => {
+    if (es.readyState !== EventSource.CLOSED || S.events !== es || S.phase !== "online") return;
+    clearTimeout(S.eventsRetry);
+    S.eventsRetry = setTimeout(async () => {
+      try { await openSession(); openEvents(); refreshFriends(); } catch { es.onerror(); }
+    }, 5000);
+  };
+}
+
+function stopSocial() {
+  S.events?.close(); S.events = null;
+  clearTimeout(S.socialRetry); clearTimeout(S.eventsRetry);
+  if (S.token) {
+    fetch(`${ACCOUNT_URL}/session/end`, { method: "POST", headers: { "Content-Type": "application/json",
+      Authorization: `Bearer ${S.token}` }, body: "{}" }).catch(() => {});
+  }
+  S.token = null;
+}
+
+async function refreshFriends() {
+  try { applyFriends(await socialApi("/friends")); } catch {}
+}
+
+function applyFriends(state) {
+  const before = new Set(S.friends.map(keyOf));
+  S.friends = state.friends.map((f) => f.nick);
+  S.friendGroups = new Map(state.friends.map((f) => [keyOf(f.nick), f.group]));
+  S.incoming = state.incoming || [];
+  S.outgoing = state.outgoing || [];
+  const added = S.friends.filter((n) => !before.has(keyOf(n)));
+  if (added.length) { send(`MONITOR + ${added.join(",")}`); requestPresence(added); }
   renderLists(); renderUsers();
 }
 
-function addFailed(nick, message) {
-  if ($("friendAdd").style.display !== "none") showAddMsg(message, "error");
-  else sys(message, "error");
+async function friendCall(path, body, okMessage) {
+  try {
+    const data = await socialApi(path, body);
+    applyFriends(data);
+    if (okMessage) sys(typeof okMessage === "function" ? okMessage(data) : okMessage, "system");
+    return data;
+  } catch (e) {
+    sys(e.message, "error");
+    return null;
+  }
+}
+
+/* Ask someone to be your friend (or accept them, if they already asked). */
+async function addFriend(nick, group = DEFAULT_GROUP, msg = "") {
+  nick = (nick || "").trim().replace(/^@/, "").toLowerCase();
+  if (!/^[a-z][a-z0-9_-]{2,15}$/.test(nick)) { addErr("That doesn't look like an a09f ID."); return false; }
+  if (keyOf(nick) === keyOf(S.me)) { addErr("You can't add yourself as a friend."); return false; }
+  if (isFriend(nick)) { addErr(`${nick} is already your friend.`); return false; }
+  if (addFormOpen()) showAddMsg(`Sending a request to ${nick}…`);
+  try {
+    const data = await socialApi("/friends/request", { to: nick, group, msg });
+    applyFriends(data);
+    sys(data.result === "friends" ? `${nick} is now your friend. 🎉`
+      : `Friend request sent to ${nick}. They'll appear in your Friends once they accept.`, "system");
+    toggleAddFriend(false);
+    return true;
+  } catch (e) {
+    addErr(e.message);
+    return false;
+  }
+}
+
+const addFormOpen = () => $("friendAdd").style.display !== "none";
+function addErr(message) { if (addFormOpen()) showAddMsg(message, "error"); else sys(message, "error"); }
+
+function answerRequest(from, accept) {
+  return friendCall("/friends/respond", { from, accept, group: DEFAULT_GROUP },
+    accept ? `${from} is now your friend. 🎉` : `You declined ${from}'s friend request.`);
+}
+
+function removeFriend(nick) {
+  const pending = isPendingFriend(nick);
+  send(`MONITOR - ${nick}`);
+  return friendCall("/friends/remove", { nick },
+    pending ? `Friend request to ${nick} cancelled.` : `${nick} was removed from your Friends.`);
+}
+
+const moveFriend = (nick, group) => friendCall("/friends/move", { nick, group }, `${nick} moved to ${group}.`);
+const renameGroup = (from, to) => friendCall("/friends/rename-group", { from, to }, `Group renamed to ${to}.`);
+
+function friendGroupNames() {
+  const names = new Set([DEFAULT_GROUP, ...S.friendGroups.values(), ...S.outgoing.map((o) => o.group)]);
+  return [...names].sort((a, b) => (a === DEFAULT_GROUP ? -1 : b === DEFAULT_GROUP ? 1 : a.localeCompare(b)));
 }
 
 function showAddMsg(text, kind = "") {
@@ -998,47 +1153,218 @@ function showAddMsg(text, kind = "") {
   el.className = "form-msg" + (kind ? " " + kind : "");
 }
 
-function removeFriend(nick) {
-  S.friends = S.friends.filter((f) => keyOf(f) !== keyOf(nick));
-  saveFriends();
-  send(`MONITOR - ${nick}`);
-  sys(`${nick} was removed from your Friends.`, "system");
-  renderLists(); renderUsers();
-}
-
-function toggleAddFriend(on) {
+function toggleAddFriend(on, nick = "") {
   $("friendAdd").style.display = on ? "" : "none";
-  $("friendAddName").value = "";
+  $("friendAddName").value = nick;
+  $("friendAddNote").value = "";
+  fillGroupSelect($("friendAddGroup"), DEFAULT_GROUP);
+  $("friendAddNewGroup").style.display = "none";
   showAddMsg("");
   renderFriends();
-  if (on) $("friendAddName").focus();
+  if (on) (nick ? $("friendAddNote") : $("friendAddName")).focus();
 }
+
+function fillGroupSelect(sel, current) {
+  sel.innerHTML = "";
+  for (const g of friendGroupNames()) sel.add(new Option(g, g, false, g === current));
+  sel.add(new Option("➕ New group…", "__new__"));
+}
+
+function submitAddFriend() {
+  let group = $("friendAddGroup").value;
+  if (group === "__new__") group = $("friendAddNewGroup").value.trim() || DEFAULT_GROUP;
+  addFriend($("friendAddName").value, group, $("friendAddNote").value.trim());
+}
+
+/* ----- the Friends list ----- */
 
 const STATE_ORDER = { online: 0, busy: 1, away: 2, unknown: 3, offline: 4 };
 
 function renderFriends() {
   const el = $("friends");
   el.innerHTML = "";
-  const list = [...S.friends].sort((a, b) =>
-    (STATE_ORDER[statusOf(a).state] - STATE_ORDER[statusOf(b).state]) || a.localeCompare(b));
-  for (const nick of list) {
-    const st = statusOf(nick);
-    const pm = conv(keyOf(nick));
-    const d = document.createElement("div");
-    d.className = `friend st-${st.state}` + (pm?.unread ? " unread" : "");
-    d.title = `${nick} — ${st.label}. Click to chat.`;
-    d.innerHTML = `<span class="label">${esc(nick)}</span><span class="status-text">${esc(st.label)}</span>` +
-      (pm?.unread ? `<span class="badge">${pm.unread > 99 ? "99+" : pm.unread}</span>` : "") +
-      `<span class="close" title="Remove from Friends">×</span>`;
-    d.querySelector(".close").onclick = (e) => { e.stopPropagation(); removeFriend(nick); };
-    d.insertBefore(profileButton(nick), d.querySelector(".close"));
-    d.onclick = () => openPm(nick);
-    el.appendChild(d);
+  renderRequests();
+  const byGroup = new Map();
+  for (const nick of S.friends) {
+    const g = groupOf(nick);
+    if (!byGroup.has(g)) byGroup.set(g, []);
+    byGroup.get(g).push({ nick, pending: false });
+  }
+  for (const o of S.outgoing) {
+    if (!byGroup.has(o.group)) byGroup.set(o.group, []);
+    byGroup.get(o.group).push({ nick: o.to, pending: true });
+  }
+  S.collapsedGroups ||= new Set();
+  const groups = [...byGroup.keys()].sort((a, b) =>
+    (a === DEFAULT_GROUP ? -1 : b === DEFAULT_GROUP ? 1 : a.localeCompare(b)));
+  for (const g of groups) {
+    const items = byGroup.get(g).sort((a, b) =>
+      (a.pending - b.pending) ||
+      (STATE_ORDER[statusOf(a.nick).state] - STATE_ORDER[statusOf(b.nick).state]) || a.nick.localeCompare(b.nick));
+    const real = items.filter((i) => !i.pending);
+    const on = real.filter((i) => !["offline", "unknown"].includes(statusOf(i.nick).state)).length;
+    const head = document.createElement("div");
+    head.className = "fgroup" + (S.collapsedGroups.has(g) ? " collapsed" : "");
+    head.innerHTML = `<span>${esc(g)}</span> <span class="fcount">(${on}/${real.length})</span>` +
+      `<span class="more" title="Group options">⋯</span>`;
+    head.onclick = () => { S.collapsedGroups.has(g) ? S.collapsedGroups.delete(g) : S.collapsedGroups.add(g); renderFriends(); };
+    head.querySelector(".more").onclick = (e) => { e.stopPropagation(); groupMenu(e, g); };
+    el.appendChild(head);
+    if (S.collapsedGroups.has(g)) continue;
+    for (const { nick, pending } of items) el.appendChild(friendRow(nick, pending));
   }
   const adding = $("friendAdd").style.display !== "none";   // the add form replaces the hint
-  $("friendsEmpty").style.display = list.length || adding ? "none" : "";
-  const online = list.filter((n) => statusOf(n).state !== "offline" && statusOf(n).state !== "unknown").length;
-  $("friendsCount").textContent = list.length ? ` (${online}/${list.length})` : "";
+  const any = S.friends.length || S.outgoing.length || S.incoming.length;
+  $("friendsEmpty").style.display = any || adding ? "none" : "";
+  const online = S.friends.filter((n) => !["offline", "unknown"].includes(statusOf(n).state)).length;
+  $("friendsCount").textContent = S.friends.length ? ` (${online}/${S.friends.length})` : "";
+}
+
+function friendRow(nick, pending) {
+  const st = pending ? { state: "pending", label: "Waiting for approval" } : statusOf(nick);
+  const pm = conv(keyOf(nick));
+  const d = document.createElement("div");
+  d.className = `friend st-${st.state}` + (pm?.unread ? " unread" : "") + (pending ? " pending" : "");
+  d.title = pending ? `${nick} hasn't accepted your friend request yet.` : `${nick} — ${st.label}. Click to chat.`;
+  const typing = !pending && S.typing.has(keyOf(nick));
+  d.innerHTML = `<span class="label">${esc(nick)}</span>` +
+    `<span class="status-text">${esc(typing ? "typing…" : st.label)}</span>` +
+    (pm?.unread ? `<span class="badge">${pm.unread > 99 ? "99+" : pm.unread}</span>` : "") +
+    `<span class="more" title="More">⋯</span>`;
+  d.querySelector(".more").onclick = (e) => { e.stopPropagation(); friendMenu(e, nick, pending); };
+  d.oncontextmenu = (e) => { e.preventDefault(); friendMenu(e, nick, pending); };
+  d.onclick = () => openPm(nick);
+  return d;
+}
+
+function renderRequests() {
+  const el = $("friendRequests");
+  el.innerHTML = "";
+  for (const r of S.incoming) {
+    const d = document.createElement("div");
+    d.className = "freq";
+    d.innerHTML = `<div>📨 <b>${esc(r.from)}</b> wants to be your friend</div>` +
+      (r.msg ? `<div class="freq-msg">“${emote(esc(r.msg))}”</div>` : "") +
+      `<div class="freq-actions"><button class="ok">Accept</button><button class="no">Decline</button>` +
+      `<a class="freq-prof">Profile</a></div>`;
+    d.querySelector(".ok").onclick = () => answerRequest(r.from, true);
+    d.querySelector(".no").onclick = () => answerRequest(r.from, false);
+    d.querySelector(".freq-prof").onclick = () => openProfile(r.from);
+    el.appendChild(d);
+  }
+}
+
+/* ----- small popup menus (friends, groups) ----- */
+
+function showMenu(e, items) {
+  const m = $("ctxMenu");
+  m.innerHTML = "";
+  for (const it of items) {
+    if (it === "-") { m.appendChild(Object.assign(document.createElement("div"), { className: "sep" })); continue; }
+    const b = document.createElement("div");
+    b.className = "item" + (it.danger ? " danger" : "");
+    b.textContent = it.label;
+    b.onclick = (ev) => { ev.stopPropagation(); if (!it.keepOpen) hideMenu(); it.run(); };
+    m.appendChild(b);
+  }
+  m.style.display = "block";
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.min(e.clientX, innerWidth - r.width - 6) + "px";
+  m.style.top = Math.min(e.clientY, innerHeight - r.height - 6) + "px";
+}
+
+function hideMenu() { $("ctxMenu").style.display = "none"; }
+
+/* A one-line text box inside the menu (new group / rename group). */
+function menuPrompt(title, value, onOk) {
+  const m = $("ctxMenu");
+  m.innerHTML = `<div class="menu-title">${esc(title)}</div>` +
+    `<div class="menu-input"><input type="text" maxlength="24"><button>OK</button></div>`;
+  const inp = m.querySelector("input");
+  inp.value = value;
+  const ok = () => { const v = inp.value.trim(); hideMenu(); if (v) onOk(v); };
+  m.querySelector("button").onclick = (e) => { e.stopPropagation(); ok(); };
+  inp.onclick = (e) => e.stopPropagation();
+  inp.onkeydown = (e) => { if (e.key === "Enter") ok(); if (e.key === "Escape") hideMenu(); };
+  inp.focus(); inp.select();
+}
+
+function friendMenu(e, nick, pending) {
+  if (pending) {
+    showMenu(e, [
+      { label: "👤 View Profile", run: () => openProfile(nick) },
+      "-",
+      { label: "✖ Cancel friend request", danger: true, run: () => removeFriend(nick) },
+    ]);
+    return;
+  }
+  const current = groupOf(nick);
+  const moves = friendGroupNames().filter((g) => g !== current)
+    .map((g) => ({ label: `📁 Move to ${g}`, run: () => moveFriend(nick, g) }));
+  showMenu(e, [
+    { label: "💬 Send Message", run: () => openPm(nick) },
+    { label: "👤 View Profile", run: () => openProfile(nick) },
+    "-",
+    ...moves,
+    { label: "📁 Move to a new group…", keepOpen: true,
+      run: () => menuPrompt("New group name", "", (g) => moveFriend(nick, g)) },
+    "-",
+    { label: "✖ Remove from Friends", danger: true, run: () => removeFriend(nick) },
+  ]);
+}
+
+function groupMenu(e, group) {
+  showMenu(e, [
+    { label: "✏️ Rename group…", keepOpen: true,
+      run: () => menuPrompt(`Rename "${group}"`, group, (to) => renameGroup(group, to)) },
+  ]);
+}
+
+document.addEventListener("click", hideMenu);
+window.addEventListener("blur", hideMenu);
+
+/* ----- "is typing…" (private chats only) ----- */
+
+const TYPING_SEND_EVERY = 3000;     // while typing, refresh at most this often
+const TYPING_SHOW_FOR = 6000;       // hide the indicator after this long without news
+
+function onComposerInput() {
+  const c = S.current && conv(S.current);
+  if (c?.kind !== "pm" || !S.token) return;
+  const typing = $("input").value.trim().length > 0;
+  const now = Date.now();
+  if (typing && (S.typingTo !== c.name || now - S.typingSent > TYPING_SEND_EVERY)) {
+    if (S.typingTo && S.typingTo !== c.name) sendTyping(S.typingTo, false);
+    S.typingTo = c.name; S.typingSent = now;
+    sendTyping(c.name, true);
+  } else if (!typing && S.typingTo) {
+    stopTyping();
+  }
+}
+
+function stopTyping() {
+  if (!S.typingTo) return;
+  sendTyping(S.typingTo, false);
+  S.typingTo = null; S.typingSent = 0;
+}
+
+function sendTyping(to, active) {
+  socialApi("/typing", { to, active }).catch(() => {});
+}
+
+function onTyping(from, active) {
+  const key = keyOf(from);
+  clearTimeout(S.typing.get(key));
+  if (active) S.typing.set(key, setTimeout(() => onTyping(from, false), TYPING_SHOW_FOR));
+  else S.typing.delete(key);
+  renderTyping();
+  renderFriends();
+}
+
+function renderTyping() {
+  const c = S.current && conv(S.current);
+  const who = c?.kind === "pm" && S.typing.has(keyOf(c.name)) ? c.name : null;
+  $("typing").textContent = who ? `${who} is typing…` : "";
 }
 
 /* ---------- alerts: sounds, desktop notifications, BUZZ! ---------- */
@@ -1398,6 +1724,7 @@ function pwDone() {
   $("pwSave").disabled = false; $("pwSave").textContent = "Change Password";
   $("pwDialog").style.display = "none";
   sys("Your password was changed. Use the new one next time you sign in.", "status");
+  if ($("optRemember").checked) invoke("cred_save", { account: S.account, password: S.pw }).catch(() => {});
 }
 
 function pwFail(message) {
@@ -1703,6 +2030,7 @@ async function doSignIn() {
   S.authFailed = false;
   S.account = u.toLowerCase();
   S.pw = $("bpass").value;          // memory only: used to link the NickServ account
+  if (localStorage.getItem(invisibleKey())) { S.myStatus = { code: "invisible", text: "" }; syncStatusUi(); }
   setPhase("signing-in", "Signing in…");
   try {
     await invoke("connect", { addr: SERVER });
@@ -1719,6 +2047,9 @@ function doDisconnect(message = "", isError = false) {
   S.me = null; S.current = null; S.burstDone = false;
   S.caps.clear(); S.convs.clear(); S.batches.clear(); S.away = false;
   S.presence.clear(); S.statuses.clear(); S.whois.clear(); S.friends = [];
+  stopSocial(); S.friendGroups.clear(); S.incoming = []; S.outgoing = [];
+  for (const t of S.typing.values()) clearTimeout(t);
+  S.typing.clear(); S.typingTo = null; $("typing").textContent = ""; hideMenu();
   S.inPresence = false; S.presenceReady = false; S.announced = false;
   S.pw = null; S.link = null; S.selfAccount = null; S.claiming = null; S.svcQueue = [];
   clearTimeout(S.pwChange?.timer); S.pwChange = null; S.roomList = null; S.listBuf = null;
@@ -1784,6 +2115,7 @@ function sendChat() {
   }
   const c = S.current && conv(S.current);
   if (!c || c.kind === "status") { sys("Join a room first, then say hi!", "tip"); return; }
+  stopTyping();
   sendTo(c.name, text);
 }
 
@@ -1925,6 +2257,67 @@ async function checkRecoveryEmail() {
   } catch { /* account service down: not worth bothering anyone */ }
 }
 
+/* ---------- remember me, auto sign-in, start at login ---------- */
+
+/* The ID and the checkboxes live in localStorage; the password only ever in
+ * the OS keychain (Rust cred_* commands). */
+const LS = { lastId: "a09f.lastId", remember: "a09f.remember", auto: "a09f.autoSignIn" };
+
+async function initSignInOptions() {
+  const remember = localStorage.getItem(LS.remember) === "1";
+  const auto = remember && localStorage.getItem(LS.auto) === "1";
+  $("optRemember").checked = remember;
+  $("optAuto").checked = auto;
+  invoke("plugin:autostart|is_enabled").then((on) => { $("optStartup").checked = !!on; }).catch(() => {
+    $("optStartup").closest("label").style.display = "none";
+  });
+  const id = localStorage.getItem(LS.lastId) || "";
+  if (!remember || !id) return;
+  $("buser").value = id;
+  const pw = await invoke("cred_load", { account: id }).catch(() => null);
+  if (pw) $("bpass").value = pw;
+  if (auto && pw) doSignIn();
+  else $(pw ? "btnSignIn" : "bpass").focus();
+}
+
+/* Signed in: remember (or forget) this ID and password. */
+function rememberLogin() {
+  localStorage.setItem(LS.lastId, S.account);
+  if ($("optRemember").checked) invoke("cred_save", { account: S.account, password: S.pw }).catch(() => {});
+  else invoke("cred_clear", { account: S.account }).catch(() => {});
+}
+
+/* The saved password stopped working (changed elsewhere / reset). */
+function forgetSavedPassword() {
+  if (!S.account) return;
+  invoke("cred_clear", { account: S.account }).catch(() => {});
+  $("bpass").value = "";
+}
+
+function onRememberToggle() {
+  const on = $("optRemember").checked;
+  localStorage.setItem(LS.remember, on ? "1" : "0");
+  if (!on) {
+    $("optAuto").checked = false;
+    localStorage.setItem(LS.auto, "0");
+    const id = localStorage.getItem(LS.lastId);
+    if (id) invoke("cred_clear", { account: id }).catch(() => {});
+  }
+}
+
+function onAutoToggle() {
+  const on = $("optAuto").checked;
+  if (on && !$("optRemember").checked) { $("optRemember").checked = true; onRememberToggle(); }
+  localStorage.setItem(LS.auto, on ? "1" : "0");
+}
+
+function onStartupToggle() {
+  const on = $("optStartup").checked;
+  invoke(on ? "plugin:autostart|enable" : "plugin:autostart|disable").catch(() => {
+    $("optStartup").checked = !on;
+  });
+}
+
 /* ---------- wiring ---------- */
 
 $("signinForm").addEventListener("submit", (e) => { e.preventDefault(); doSignIn(); });
@@ -1984,12 +2377,20 @@ $("rbCreate").onclick = () => {
 $("rbNew").addEventListener("keydown", (e) => { if (e.key === "Enter") $("rbCreate").click(); });
 $("roomBrowser").addEventListener("keydown", (e) => { if (e.key === "Escape") closeRoomBrowser(); });
 $("friendAddCancel").onclick = () => toggleAddFriend(false);
-$("friendAddOk").onclick = () => { if (addFriend($("friendAddName").value)) toggleAddFriend(false); };
+$("friendAddOk").onclick = submitAddFriend;
 $("friendAddName").addEventListener("input", () => showAddMsg(""));
-$("friendAddName").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") $("friendAddOk").click();
-  if (e.key === "Escape") toggleAddFriend(false);
-});
+for (const id of ["friendAddName", "friendAddNote", "friendAddNewGroup"]) {
+  $(id).addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submitAddFriend();
+    if (e.key === "Escape") toggleAddFriend(false);
+  });
+}
+$("friendAddGroup").onchange = () => {
+  const isNew = $("friendAddGroup").value === "__new__";
+  $("friendAddNewGroup").style.display = isNew ? "" : "none";
+  if (isNew) $("friendAddNewGroup").focus();
+};
+$("input").addEventListener("input", onComposerInput);
 
 listen("irc-line", (e) => handleLine(e.payload))
   .catch(() => setPhase("offline", "Something went wrong starting a09f. Please restart the app.", true));
@@ -2018,5 +2419,11 @@ $("btnBuzz").onclick = sendBuzz;
 $("btnSound").onclick = () => setMuted(!Sound.muted);
 setMuted(Sound.muted);
 
+$("optRemember").onchange = onRememberToggle;
+$("optAuto").onchange = onAutoToggle;
+$("optStartup").onchange = onStartupToggle;
+listen("tray-signout", () => { if (S.phase !== "offline") doDisconnect("You've signed out."); }).catch(() => {});
+
 setPhase("offline");
 $("buser").focus();
+initSignInOptions();

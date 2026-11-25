@@ -123,6 +123,36 @@
   .cf-list .empty-hint { padding: 6px 8px; }
   #cfStart { margin-top: 14px; padding: 6px; font-weight: bold; }
   .chan.conf::before { content: "🗣️"; }
+  /* friends: groups, requests, menus, typing */
+  .fgroup { display: flex; align-items: center; gap: 4px; padding: 2px 8px 2px 10px; font-size: 11px; font-weight: bold;
+    color: var(--purple-d); cursor: pointer; background: #f6f2fb; border-top: 1px solid #efe8f7; }
+  .fgroup::before { content: "▾"; font-size: 9px; }
+  .fgroup.collapsed::before { content: "▸"; }
+  .fgroup .fcount { font-weight: normal; color: var(--dim); }
+  .fgroup .more, .friend .more { margin-left: auto; visibility: hidden; padding: 0 4px; color: var(--dim); font-weight: bold; }
+  .fgroup:hover .more, .friend:hover .more { visibility: visible; }
+  .friend .more:hover, .fgroup .more:hover { color: var(--purple-d); }
+  .friend.pending .label { font-weight: normal; color: #999; font-style: italic; }
+  .friend.st-pending::before { background: #fff !important; border: 1px dashed #aaa; }
+  .freq { margin: 4px 6px; padding: 6px 8px; background: #fff8dc; border: 1px solid #f0d77a; border-radius: 4px; font-size: 11px; }
+  .freq-msg { color: #555; font-style: italic; margin-top: 2px; word-break: break-word; }
+  .freq-actions { display: flex; gap: 4px; align-items: center; margin-top: 5px; }
+  .freq-actions button { padding: 1px 8px; font-size: 11px; }
+  .freq-actions .ok { font-weight: bold; }
+  .freq-prof { margin-left: auto; color: var(--purple); cursor: pointer; text-decoration: underline; }
+  #friendAdd { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: #faf8fd; border-bottom: 1px solid var(--lilac-2); }
+  #friendAdd input, #friendAdd select { width: 100%; box-sizing: border-box; }
+  #ctxMenu { display: none; position: fixed; z-index: 50; min-width: 180px; background: #fff; border: 1px solid #b6ae95;
+    box-shadow: 0 3px 12px rgba(0,0,0,.2); padding: 3px 0; font-size: 12px; }
+  #ctxMenu .item { padding: 4px 14px; cursor: pointer; white-space: nowrap; }
+  #ctxMenu .item:hover { background: var(--purple); color: #fff; }
+  #ctxMenu .item.danger { color: var(--error); }
+  #ctxMenu .item.danger:hover { color: #fff; background: var(--error); }
+  #ctxMenu .sep { border-top: 1px solid #e6e0d0; margin: 3px 0; }
+  #ctxMenu .menu-title { padding: 4px 10px; font-weight: bold; color: var(--purple-d); }
+  #ctxMenu .menu-input { display: flex; gap: 4px; padding: 2px 8px 6px; }
+  #ctxMenu .menu-input input { flex: 1; min-width: 0; }
+  #typing { min-height: 15px; padding: 1px 10px; font-size: 11px; font-style: italic; color: var(--dim); background: #fff; }
   .msg .invite-join { margin-left: 8px; padding: 0 8px; font-size: 11px; }
   .user .profile-btn, .friend .profile-btn { visibility: hidden; padding: 0 2px; font-size: 11px; cursor: pointer; }
   .user .profile-btn { order: 9; margin-left: auto; } .user .add-friend { order: 10; margin-left: 0; }
@@ -250,6 +280,8 @@
   #signin:not([data-screen="signin"]) #signinForm, #signin:not([data-screen="create"]) #createForm,
   #signin:not([data-screen="reset"]) #resetForm { display: none; }
   .forgot { text-align: right; margin-top: 6px; }
+  .signin-opts { display: flex; flex-direction: column; gap: 3px; margin-top: 10px; font-size: 11px; }
+  .signin-opts label { display: flex; align-items: center; gap: 5px; margin: 0; font-weight: normal; color: var(--ink); cursor: pointer; }
   .forgot a { color: var(--purple); cursor: pointer; text-decoration: underline; font-size: 11px; }
   .reset-title { font-weight: bold; color: var(--purple-d); text-align: center; margin-bottom: 4px; }
   #resetStep2 { display: flex; flex-direction: column; }
@@ -276,6 +308,11 @@
     <input type="text" id="buser" autocomplete="username">
     <label for="bpass">Password</label>
     <input type="password" id="bpass" autocomplete="current-password">
+    <div class="signin-opts">
+      <label><input type="checkbox" id="optRemember"> Remember my ID &amp; password</label>
+      <label><input type="checkbox" id="optAuto"> Sign me in automatically</label>
+      <label><input type="checkbox" id="optStartup"> Start a09f when my computer starts</label>
+    </div>
     <button type="submit" id="btnSignIn">Sign In</button>
     <div class="forgot"><a id="toReset">Forgot password?</a></div>
     <div id="signinMsg" class="form-msg"></div>
@@ -323,6 +360,8 @@
   </form>
 </div>
 
+<div id="ctxMenu"></div>
+
 <div id="toolbar">
   <div class="status-box" title="Your status — what your friends see">
     <select id="statusSel">
@@ -331,6 +370,7 @@
       <option value="brb">🕐 Be Right Back</option>
       <option value="stepped">🚶 Stepped Out</option>
       <option value="custom">✏️ Custom message…</option>
+      <option value="invisible">👻 Invisible</option>
     </select>
     <span id="statusCustom" style="display:none">
       <input type="text" id="statusText" maxlength="80" placeholder="What are you up to?">
@@ -440,11 +480,15 @@
     <div class="side-scroll">
       <div class="group" data-toggle>Friends<span id="friendsCount"></span></div>
       <div class="list">
+        <div id="friendRequests"></div>
         <div id="friendAdd" style="display:none">
+          <input type="text" id="friendAddName" placeholder="Friend's ID" maxlength="16">
+          <select id="friendAddGroup" title="Put them in this group"></select>
+          <input type="text" id="friendAddNewGroup" placeholder="New group name" maxlength="24" style="display:none">
+          <input type="text" id="friendAddNote" placeholder="Say hi (optional)" maxlength="140">
           <div class="row">
-            <input type="text" id="friendAddName" placeholder="Friend's ID" style="flex:1; min-width:0">
-            <button id="friendAddOk">Add</button>
-            <button id="friendAddCancel" title="Cancel">✕</button>
+            <button id="friendAddOk" style="flex:1">Send Request</button>
+            <button id="friendAddCancel" title="Cancel">Cancel</button>
           </div>
           <div id="friendAddMsg" class="form-msg add-msg"></div>
         </div>
@@ -468,6 +512,7 @@
   <div id="center" class="pane">
     <div class="pane-title" id="chatTitle">Conversation</div>
     <div id="log"></div>
+    <div id="typing"></div>
     <div id="fmtbar">
       <button data-emo=":)" title="smile">🙂</button>
       <button data-emo=":D" title="big grin">😁</button>
