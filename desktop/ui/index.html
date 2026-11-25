@@ -194,6 +194,18 @@
   .pv-row button { padding: 0 8px; font-size: 11px; }
   .find-link, #emptyFind { color: var(--purple); cursor: pointer; text-decoration: underline; font-size: 11px; }
   .user.ignored .label { text-decoration: line-through; color: #aaa; }
+  /* @mentions */
+  .mention { color: var(--purple); font-weight: bold; }
+  .mention.me { background: #ffe58a; color: #5a3d00; border-radius: 3px; padding: 0 2px; }
+  .msg.mention-me { background: #fff6d0; border-left: 3px solid #f0b400; padding-left: 4px; }
+  .badge.at { background: #f0a000; margin-right: 2px; }
+  #mentionBox { display: none; position: absolute; left: 12px; bottom: 74px; z-index: 20; min-width: 160px; background: #fff;
+    border: 1px solid #b6ae95; box-shadow: 0 3px 12px rgba(0,0,0,.2); padding: 2px 0; }
+  .mention-opt { display: flex; align-items: center; gap: 6px; padding: 3px 10px; cursor: pointer; }
+  .mention-opt.sel, .mention-opt:hover { background: var(--purple); color: #fff; }
+  .mention-opt .st { width: 8px; height: 8px; border-radius: 50%; background: #bbb; }
+  .mention-opt.st-online .st { background: var(--online); } .mention-opt.st-busy .st { background: #d9261c; }
+  .mention-opt.st-away .st { background: #f0a020; }
   #typing { min-height: 15px; padding: 1px 10px; font-size: 11px; font-style: italic; color: var(--dim); background: #fff; }
   .msg .invite-join { margin-left: 8px; padding: 0 8px; font-size: 11px; }
   .user .profile-btn, .friend .profile-btn { visibility: hidden; padding: 0 2px; font-size: 11px; cursor: pointer; }
@@ -268,7 +280,7 @@
   .row { display: flex; gap: 4px; align-items: center; padding: 6px; }
 
   /* chat window (center) */
-  #center { flex: 1; min-width: 0; }
+  #center { flex: 1; min-width: 0; position: relative; }
   #log { flex: 1; overflow-y: auto; padding: 8px 10px; user-select: text; font: 13px/1.45 Verdana, Geneva, sans-serif; }
   .msg { margin: 1px 0; word-break: break-word; }
   .msg .who { font-weight: bold; color: var(--other); }
@@ -608,6 +620,7 @@
       <button id="fmtColor" class="fmt-color" title="Text color"></button>
       <button id="btnBuzz" class="buzz-btn" disabled>BUZZ!</button>
     </div>
+    <div id="mentionBox"></div>
     <div id="composer">
       <input type="text" id="input" placeholder="Type your message here…">
       <button id="btnSend">Send</button>

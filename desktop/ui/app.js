@@ -220,12 +220,14 @@ function sys(text, kind = "system", target = null) {
 /* ---------- unread / read markers ---------- */
 
 function recountUnread(c) {
-  c.unread = c.msgs.filter((m) => m.others && (c.readAt != null ? m.time > c.readAt : m.live)).length;
+  const unread = c.msgs.filter((m) => m.others && (c.readAt != null ? m.time > c.readAt : m.live));
+  c.unread = unread.length;
+  c.mentions = c.kind === "room" ? unread.filter((m) => mentionsMe(stripIrc(m.txt))).length : 0;
 }
 
 function markRead(c) {
   const latest = c.msgs.reduce((t, m) => (m.others || m.cls === "me" ? Math.max(t, m.time) : t), 0);
-  c.unread = 0;
+  c.unread = 0; c.mentions = 0;
   if (latest && (c.readAt == null || latest > c.readAt)) {
     c.readAt = latest;
     if (has("draft/read-marker") && c.kind !== "status") {
@@ -396,6 +398,10 @@ function renderMsg(m) {
       ? `invited you to a conference 🗣️ <button class="invite-join" data-room="${esc(m.invite)}">${inRoom ? "Open" : "Join"}</button>`
       : "sent a conference invite 🗣️";
   }
+  if (!m.buzz && !m.invite) txt = highlightMentions(txt);
+  if (m.others && !m.cls.includes("service") && S.current && isChannel(S.current) && mentionsMe(stripIrc(m.txt))) {
+    div.classList.add("mention-me");
+  }
   div.innerHTML = `<span class="time">${esc(fmtTime(m.time))}</span>` +
     `<span class="who">${esc(m.who)}:</span> <span class="txt">${txt}</span>`;
   logEl.appendChild(div);
@@ -434,6 +440,13 @@ function convItem(c, cls, onClose) {
     d.title = "Conference with " + (confPeople(c).join(", ") || "nobody yet");
   }
   d.appendChild(label);
+  if (c.mentions) {
+    const at = document.createElement("span");
+    at.className = "badge at";
+    at.textContent = "@";
+    at.title = "Someone mentioned you here";
+    d.appendChild(at);
+  }
   if (c.unread) {
     const b = document.createElement("span");
     b.className = "badge";
@@ -2416,6 +2429,79 @@ function escapeTag(v) {
   return v.replace(/\\/g, "\\\\").replace(/;/g, "\\:").replace(/ /g, "\\s").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
 }
 
+/* ---------- @mentions ---------- */
+
+/* "@nick" in a message: shown as a chip (bold purple), or highlighted when
+ * it's you. Runs on already-escaped HTML, outside of tags. */
+function highlightMentions(html) {
+  return html.replace(/(^|[\s(>])@([A-Za-z][A-Za-z0-9_\-\[\]\\`^{|}]{0,29})/g, (all, pre, nick) =>
+    `${pre}<span class="mention${keyOf(nick) === keyOf(S.me) ? " me" : ""}">@${nick}</span>`);
+}
+
+/* Typing "@al" in a room pops up matching members; Tab/Enter/click completes. */
+function mentionQuery() {
+  const inp = $("input");
+  const before = inp.value.slice(0, inp.selectionStart);
+  const m = before.match(/(^|\s)@([^\s@]*)$/);
+  return m ? { q: m[2], start: before.length - m[2].length - 1 } : null;
+}
+
+function updateMentionBox() {
+  const c = S.current && conv(S.current);
+  const mq = c?.kind === "room" && mentionQuery();
+  if (!mq) return hideMentionBox();
+  const q = mq.q.toLowerCase();
+  const people = [...c.members.keys()]
+    .filter((n) => !isService(n) && keyOf(n) !== keyOf(S.me) && n.toLowerCase().startsWith(q))
+    .sort((a, b) => a.localeCompare(b)).slice(0, 8);
+  if (!people.length) return hideMentionBox();
+  S.mention = { ...mq, people, sel: Math.min(S.mention?.sel || 0, people.length - 1) };
+  renderMentionBox();
+}
+
+function renderMentionBox() {
+  const box = $("mentionBox");
+  box.innerHTML = "";
+  S.mention.people.forEach((nick, i) => {
+    const st = statusOf(nick);
+    const d = document.createElement("div");
+    d.className = `mention-opt st-${st.state}` + (i === S.mention.sel ? " sel" : "");
+    d.innerHTML = `<span class="st"></span>@${esc(nick)}`;
+    d.onmousedown = (e) => { e.preventDefault(); completeMention(nick); };
+    box.appendChild(d);
+  });
+  box.style.display = "block";
+}
+
+function hideMentionBox() { $("mentionBox").style.display = "none"; S.mention = null; }
+
+function completeMention(nick) {
+  const inp = $("input"), m = S.mention;
+  if (!m) return;
+  const after = inp.value.slice(inp.selectionStart).replace(/^\S*/, "");
+  inp.value = inp.value.slice(0, m.start) + "@" + nick + " " + after.replace(/^\s/, "");
+  const pos = m.start + nick.length + 2;
+  inp.setSelectionRange(pos, pos);
+  hideMentionBox();
+  inp.focus();
+}
+
+/* Returns true when the key was used by the popup. */
+function onMentionKey(e) {
+  if (!S.mention || $("mentionBox").style.display === "none") return false;
+  const n = S.mention.people.length;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    S.mention.sel = (S.mention.sel + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+    renderMentionBox();
+  } else if (e.key === "Tab" || e.key === "Enter") {
+    completeMention(S.mention.people[S.mention.sel]);
+  } else if (e.key === "Escape") {
+    hideMentionBox();
+  } else return false;
+  e.preventDefault();
+  return true;
+}
+
 /* ---------- actions ---------- */
 
 async function doSignIn() {
@@ -2730,7 +2816,12 @@ $("pwEmail").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.pre
 $("toSignIn").onclick = () => showCreate(false);
 $("btnConnect").onclick = () => doDisconnect("You've signed out.");
 $("btnSend").onclick = sendChat;
-$("input").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+$("input").addEventListener("keydown", (e) => {
+  if (onMentionKey(e)) return;
+  if (e.key === "Enter") sendChat();
+});
+$("input").addEventListener("input", updateMentionBox);
+$("input").addEventListener("blur", () => setTimeout(hideMentionBox, 150));
 $("btnJoin").onclick = () => { joinOrSwitch($("newChan").value); $("newChan").value = ""; };
 $("newChan").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btnJoin").click(); });
 $("statusSel").onchange = () => {

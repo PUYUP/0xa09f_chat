@@ -105,6 +105,9 @@ server/protokol di layar.
 - **Start a09f when my computer starts** (`tauri-plugin-autostart`): dimulai
   tersembunyi di tray dengan argumen `--autostart`; kombinasikan dengan
   auto sign-in
+- **@mention**: ketik `@` di room → daftar anggota (↑/↓, Tab/Enter, atau
+  klik). `@nama` tampil tebal ungu; pesan yang menyebut namamu disorot kuning,
+  berbunyi + notifikasi, dan room-nya mendapat badge **@** oranye sampai dibaca
 - **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
   mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
   **Only my friends can send me private messages** = user mode `+g` solanum +
