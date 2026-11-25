@@ -1088,6 +1088,12 @@ function openEvents() {
     refreshFriends();
     sys(`${d.nick} declined your friend request.`, "system");
   });
+  on("friend-removed", (d) => {
+    send(`MONITOR - ${d.nick}`);
+    refreshFriends();
+    sys(`${d.nick} is no longer on your Friends list.`, "system");
+  });
+  on("friend-request-cancelled", () => refreshFriends());
   on("typing", (d) => onTyping(d.from, d.active));
   // EventSource reconnects by itself; a dead token (service restarted) shows
   // up as a closed stream: get a new session and listen again.

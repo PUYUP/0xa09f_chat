@@ -191,9 +191,18 @@ def respond_friend(conn, me, frm, accept, group):
 
 
 def remove_friend(conn, me, nick):
-    """Remove from my list only (like any messenger), or cancel my request."""
-    conn.execute("DELETE FROM friends WHERE owner = ? AND friend = ?", (me, nick))
+    """End a friendship on both sides (or cancel my pending request)."""
+    was_friends = conn.execute("SELECT 1 FROM friends WHERE (owner = ? AND friend = ?) OR (owner = ? AND friend = ?)",
+                               (me, nick, nick, me)).fetchone()
+    had_request = conn.execute("SELECT 1 FROM friend_requests WHERE from_user = ? AND to_user = ?",
+                               (me, nick)).fetchone()
+    conn.execute("DELETE FROM friends WHERE (owner = ? AND friend = ?) OR (owner = ? AND friend = ?)",
+                 (me, nick, nick, me))
     conn.execute("DELETE FROM friend_requests WHERE from_user = ? AND to_user = ?", (me, nick))
+    if was_friends:
+        push(nick, "friend-removed", {"nick": me})
+    elif had_request:
+        push(nick, "friend-request-cancelled", {"nick": me})
 
 
 def move_friend(conn, me, nick, group):
