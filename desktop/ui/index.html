@@ -94,6 +94,10 @@
   .pw-body input { padding: 5px 6px; font-size: 13px; }
   .pw-body .hint { margin-top: 2px; }
   #pwSave { margin-top: 14px; padding: 6px; font-weight: bold; }
+  .pw-sep { border-top: 1px solid var(--lilac-2); margin: 6px 0 2px; }
+  .pw-email-row { display: flex; gap: 6px; }
+  .pw-email-row input { flex: 1; min-width: 0; padding: 5px 6px; font-size: 13px; }
+  #pwEmailMsg { margin-top: 4px; }
   .modal .pf-pane { width: 340px; }
   .pf-head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #faf8fd; border-bottom: 1px solid var(--lilac-2); }
   .pf-dot { width: 14px; height: 14px; border-radius: 50%; background: #bbb; flex: none; }
@@ -243,7 +247,14 @@
   .hint { text-align: left; color: var(--dim); font-size: 11px; margin-top: 2px; }
   .switch { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--lilac-2); color: var(--dim); }
   .switch a { color: var(--purple); font-weight: bold; cursor: pointer; text-decoration: underline; }
-  #signin.create #signinForm, #signin:not(.create) #createForm { display: none; }
+  #signin:not([data-screen="signin"]) #signinForm, #signin:not([data-screen="create"]) #createForm,
+  #signin:not([data-screen="reset"]) #resetForm { display: none; }
+  .forgot { text-align: right; margin-top: 6px; }
+  .forgot a { color: var(--purple); cursor: pointer; text-decoration: underline; font-size: 11px; }
+  .reset-title { font-weight: bold; color: var(--purple-d); text-align: center; margin-bottom: 4px; }
+  #resetStep2 { display: flex; flex-direction: column; }
+  #btnSendCode { margin-top: 10px; }
+  input[type=email] { background: #fff; color: var(--ink); border: 1px solid #7f9db9; padding: 3px 5px; user-select: text; }
 
   /* signed-out shows only the sign-in screen */
   body.offline #toolbar, body.offline main { display: none; }
@@ -257,7 +268,7 @@
   <span id="who"></span>
 </header>
 
-<div id="signin">
+<div id="signin" data-screen="signin">
   <form class="signin-box" id="signinForm" autocomplete="on">
     <div class="signin-logo">a09f</div>
     <div class="signin-face">😊</div>
@@ -266,19 +277,44 @@
     <label for="bpass">Password</label>
     <input type="password" id="bpass" autocomplete="current-password">
     <button type="submit" id="btnSignIn">Sign In</button>
+    <div class="forgot"><a id="toReset">Forgot password?</a></div>
     <div id="signinMsg" class="form-msg"></div>
     <div class="switch">Don't have an ID? <a id="toCreate">Create account</a></div>
   </form>
 
-  <form class="signin-box" id="createForm" autocomplete="off">
+  <form class="signin-box" id="resetForm" autocomplete="off" novalidate>
+    <div class="signin-logo">a09f</div>
+    <div class="signin-face">🔑</div>
+    <div class="reset-title">Reset your password</div>
+    <label for="ruser">Your ID</label>
+    <input type="text" id="ruser" autocomplete="username" maxlength="16">
+    <button type="button" id="btnSendCode">Email Me a Code</button>
+    <div id="resetStep2" style="display:none">
+      <label for="rcode">6-digit code from the email</label>
+      <input type="text" id="rcode" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
+      <label for="rpass">New password</label>
+      <input type="password" id="rpass" autocomplete="new-password">
+      <div class="hint">At least 8 characters, no spaces</div>
+      <label for="rpass2">Confirm new password</label>
+      <input type="password" id="rpass2" autocomplete="new-password">
+      <button type="submit" id="btnReset">Reset Password</button>
+    </div>
+    <div id="resetMsg" class="form-msg"></div>
+    <div class="switch">Remembered it? <a id="resetToSignIn">Sign in</a></div>
+  </form>
+
+  <form class="signin-box" id="createForm" autocomplete="off" novalidate>
     <div class="signin-logo">a09f</div>
     <div class="signin-face">🎉</div>
     <label for="cuser">Choose an ID</label>
     <input type="text" id="cuser" autocomplete="username" maxlength="16">
     <div class="hint">3–16 letters or numbers, starting with a letter</div>
+    <label for="cemail">Email</label>
+    <input type="email" id="cemail" autocomplete="email" maxlength="254">
+    <div class="hint">Only used to reset your password if you forget it</div>
     <label for="cpass">Password</label>
     <input type="password" id="cpass" autocomplete="new-password">
-    <div class="hint">At least 8 characters</div>
+    <div class="hint">At least 8 characters, no spaces</div>
     <label for="cpass2">Confirm password</label>
     <input type="password" id="cpass2" autocomplete="new-password">
     <button type="submit" id="btnCreate">Create Account</button>
@@ -331,7 +367,7 @@
     </div>
   </div>
   <div id="pwDialog" class="modal" style="display:none">
-    <form class="pane pw-pane" id="pwForm" autocomplete="off">
+    <form class="pane pw-pane" id="pwForm" autocomplete="off" novalidate>
       <div class="pane-title">Change Password <span class="x" id="pwClose" title="Close">✕</span></div>
       <div class="pw-body">
         <label for="pwCur">Current password</label>
@@ -343,6 +379,14 @@
         <input type="password" id="pwNew2" autocomplete="new-password">
         <button type="submit" id="pwSave">Change Password</button>
         <div id="pwMsg" class="form-msg"></div>
+        <div class="pw-sep"></div>
+        <label for="pwEmail">Recovery email</label>
+        <div class="pw-email-row">
+          <input type="email" id="pwEmail" maxlength="254" placeholder="you@example.com">
+          <button type="button" id="pwEmailSave">Save</button>
+        </div>
+        <div class="hint">Lets you reset your password if you forget it. Only you can see it.</div>
+        <div id="pwEmailMsg" class="form-msg"></div>
       </div>
     </form>
   </div>

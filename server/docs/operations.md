@@ -77,6 +77,7 @@ dari IP soju — itu sebabnya IP soju di-exempt dari batas per-IP & throttle.
 | soju users/networks/history | volume `postgres-data` (DB `soju`)  | ya       |
 | soju admin socket           | volume `soju-db` → `/db`            | ya       |
 | soju uploads                 | volume `soju-uploads`               | ya       |
+| email pemulihan & kode reset | volume `register-data` → `/data/register.db` | ya |
 
 Backup yang relevan: `docker exec postgres pg_dump -U soju soju > backup.sql`
 atau volume `postgres-data`. File `soju.db` lama (sqlite) masih ada di volume
@@ -107,8 +108,8 @@ Jadi tiap akun punya nick IRC sendiri (bukan `soluser` bersama). Kalau langkah
 
 ```bash
 curl -s http://127.0.0.1:16680/health
-curl -s -XPOST http://127.0.0.1:16680/register \
-  -H 'Content-Type: application/json' -d '{"username":"budi","password":"rahasia123"}'
+curl -s -XPOST http://127.0.0.1:16680/register -H 'Content-Type: application/json' \
+  -d '{"username":"budi","password":"rahasia123","email":"budi@example.com"}'
 docker logs register          # log request (tanpa body/password)
 ```
 
@@ -134,7 +135,40 @@ email `<id>@users.a09f.invalid`) saat sign in pertama, lalu mengatur
 `sasl set-plain` di soju. Cek: `sojuctl user run <id> sasl status -network solanum`.
 
 Hapus akun: `docker exec soju /sojuctl -config /soju-config user delete <id>`
-lalu ulangi dengan token konfirmasi yang dicetak.
+lalu ulangi dengan token konfirmasi yang dicetak. Email pemulihannya tetap di
+`register.db` (tidak berbahaya; ditimpa kalau ID yang sama didaftarkan lagi).
+
+### Email pemulihan & reset password
+
+Create account wajib mengisi email; disimpan di SQLite service ini (bukan di
+soju/NickServ). Akun lama bisa menambah/mengganti email dari app (🔑 Password
+→ Recovery email); endpoint `/email` memverifikasi password dengan login SASL
+sungguhan ke soju. App mengingatkan (Tip) akun yang belum punya email.
+
+Alur **Forgot password?** di layar Sign In:
+
+1. `POST /reset/request {"username"}` → kode 6 digit dikirim ke email akun
+   (berlaku 15 menit, maks 5 tebakan salah, jeda 60 dtk antar kode; yang
+   disimpan hanya hash-nya).
+2. `POST /reset/confirm {"username","code","password"}` →
+   `sojuctl user update <id> -password`, lalu **kalau** upstream soju akun itu
+   sedang identified ke NickServ: `network quote solanum "PRIVMSG NickServ :SET PASSWORD …"`
+   dan `sasl set-plain -network solanum <id> <pw>`. Jadi sign in, NickServ, dan
+   login SASL soju ikut berganti.
+
+Pengiriman email lewat SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY`
+= `starttls|ssl|none`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM` di `.env`).
+Default-nya ke container **Mailpit** (`mailpit:1025`): email tidak benar-benar
+terkirim, tapi bisa dibaca di http://127.0.0.1:16825 — cocok untuk dev. Untuk
+produksi isi `SMTP_*` dengan server SMTP asli lalu
+`docker compose up -d --no-deps register`.
+
+Reset manual oleh admin (akun tanpa email):
+
+```bash
+docker exec soju /sojuctl -config /soju-config user update <id> -password <baru>
+# NickServ tetap password lama sampai user ganti password dari app
+```
 
 ## Room bawaan `#lobby` & `#a09f-presence`
 

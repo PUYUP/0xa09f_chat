@@ -80,6 +80,13 @@ server/protokol di layar.
   penerimanya sedang sign out, dan tampil dengan tombol **Join**. Pemilik bisa
   mengundang lagi lewat ➕ Invite. Room conference kosong yang di-join ulang
   langsung ditinggalkan ("That conference has already ended")
+- **Lupa password** (Sign In → *Forgot password?*): isi ID → kode 6 digit
+  dikirim ke email pemulihan (`POST /reset/request`) → isi kode + password baru
+  (`POST /reset/confirm`). Server mengganti password di soju, NickServ, dan
+  SASL soju sekaligus. Create account sekarang wajib mengisi email
+- **Email pemulihan** (🔑 Password → Recovery email): lihat/ganti lewat
+  `POST /email` (dicek dengan password sesi). Akun tanpa email mendapat Tip
+  sekali setiap sign in
 - **Ganti password** (🔑 Password): berurutan `BouncerServ user update
   -password` → `NickServ SET PASSWORD` (kalau tertaut) → `BouncerServ sasl
   set-plain`; tiap langkah menunggu balasan, timeout 10 dtk

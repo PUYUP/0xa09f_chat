@@ -20,7 +20,8 @@ const $ = (id) => document.getElementById(id);
 /* Fixed connection settings — like a classic messenger, nothing to pick. */
 const SERVER = "127.0.0.1:16667";
 const NETWORK = "solanum";        // soju upstream network name
-const REGISTER_URL = "http://127.0.0.1:16680/register";   // server/register service
+const ACCOUNT_URL = "http://127.0.0.1:16680";     // server/register: create account, recovery email, reset
+const REGISTER_URL = `${ACCOUNT_URL}/register`;
 const DEFAULT_ROOM = "#lobby";    // everyone lands here if they're in no room yet
 const BURST_TOKEN = "a09f-burst-done";
 /* Hidden room every a09f app joins (server/scripts/setup-rooms.py). It carries
@@ -343,12 +344,26 @@ function showMsg(id, text, kind = "") {
   el.className = "form-msg" + (kind ? " " + kind : "");
 }
 
-/* Sign In <-> Create Account screens */
-function showCreate(on) {
-  $("signin").classList.toggle("create", on);
-  showMsg("signinMsg", ""); showMsg("createMsg", "");
-  $(on ? "cuser" : "buser").focus();
+/* Sign In / Create Account / Reset Password screens */
+function showScreen(name) {
+  $("signin").dataset.screen = name;
+  for (const id of ["signinMsg", "createMsg", "resetMsg"]) showMsg(id, "");
+  $({ signin: "buser", create: "cuser", reset: "ruser" }[name]).focus();
 }
+const showCreate = (on) => showScreen(on ? "create" : "signin");
+
+/* POST JSON to the account service. Returns {ok, data} or throws when offline. */
+async function accountApi(path, body) {
+  const res = await fetch(ACCOUNT_URL + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok && !!data.ok, data };
+}
+const OFFLINE_MSG = "Can't reach a09f right now. Please try again later.";
+const EMAIL_RE = /^[^@\s<>"',;]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 
 function syncStatusUi() {
   $("statusSel").value = S.myStatus.code;
@@ -538,6 +553,7 @@ function onBurstDone() {
   fetchPrivateChats();
   startPresence();
   checkAccountLink();
+  checkRecoveryEmail();
 }
 
 function onJoin(fromNick, channel) {
@@ -1318,6 +1334,7 @@ function openPwDialog() {
   for (const id of ["pwCur", "pwNew", "pwNew2"]) $(id).value = "";
   pwMsg("");
   $("pwCur").focus();
+  loadRecoveryEmail();
 }
 function closePwDialog() { if (!S.pwChange) $("pwDialog").style.display = "none"; }
 function pwMsg(text, kind = "") { showMsg("pwMsg", text, kind); }
@@ -1773,7 +1790,9 @@ function sendChat() {
 async function doCreateAccount() {
   const username = $("cuser").value.trim().toLowerCase();
   const password = $("cpass").value;
+  const email = $("cemail").value.trim();
   if (!username || !password) { showMsg("createMsg", "Please choose an ID and a password.", "error"); return; }
+  if (!EMAIL_RE.test(email)) { showMsg("createMsg", "Please enter a valid email address.", "error"); return; }
   if (!/^[a-z][a-z0-9_-]{2,15}$/.test(username)) {
     showMsg("createMsg", "ID must be 3–16 letters or numbers and start with a letter.", "error"); return;
   }
@@ -1788,7 +1807,7 @@ async function doCreateAccount() {
     const res = await fetch(REGISTER_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, email }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) {
@@ -1798,7 +1817,7 @@ async function doCreateAccount() {
     // Account ready: carry the credentials over and sign straight in.
     $("buser").value = data.username || username;
     $("bpass").value = password;
-    $("cuser").value = $("cpass").value = $("cpass2").value = "";
+    $("cuser").value = $("cpass").value = $("cpass2").value = $("cemail").value = "";
     showCreate(false);
     showMsg("signinMsg", "Account created! Signing you in…", "ok");
     doSignIn();
@@ -1809,11 +1828,115 @@ async function doCreateAccount() {
   }
 }
 
+/* ---------- forgot password (emailed code) ---------- */
+
+async function sendResetCode() {
+  const username = $("ruser").value.trim().toLowerCase();
+  if (!/^[a-z][a-z0-9_-]{2,15}$/.test(username)) { showMsg("resetMsg", "Please enter your a09f ID.", "error"); return; }
+  const btn = $("btnSendCode");
+  btn.disabled = true; btn.textContent = "Sending…";
+  showMsg("resetMsg", "");
+  try {
+    const { ok, data } = await accountApi("/reset/request", { username });
+    if (!ok) { showMsg("resetMsg", data.error || "Couldn't send the email right now. Please try again later.", "error"); return; }
+    $("resetStep2").style.display = "";
+    btn.textContent = "Send a New Code";
+    showMsg("resetMsg", `We emailed a 6-digit code to ${data.email}. It works for 15 minutes.`, "ok");
+    $("rcode").focus();
+  } catch {
+    showMsg("resetMsg", OFFLINE_MSG, "error");
+  } finally {
+    btn.disabled = false;
+    if (btn.textContent === "Sending…") btn.textContent = "Email Me a Code";
+  }
+}
+
+async function doResetPassword() {
+  const username = $("ruser").value.trim().toLowerCase();
+  const code = $("rcode").value.trim(), password = $("rpass").value;
+  if (!/^\d{6}$/.test(code)) { showMsg("resetMsg", "Please enter the 6-digit code from the email.", "error"); return; }
+  if (password.length < 8) { showMsg("resetMsg", "Password must be at least 8 characters.", "error"); return; }
+  if (/\s/.test(password)) { showMsg("resetMsg", "Password can't contain spaces.", "error"); return; }
+  if (password !== $("rpass2").value) { showMsg("resetMsg", "Passwords don't match.", "error"); return; }
+  const btn = $("btnReset");
+  btn.disabled = true; btn.textContent = "Resetting…";
+  try {
+    const { ok, data } = await accountApi("/reset/confirm", { username, code, password });
+    if (!ok) { showMsg("resetMsg", data.error || "Couldn't reset your password. Please try again.", "error"); return; }
+    resetResetForm();
+    showScreen("signin");
+    $("buser").value = username; $("bpass").value = "";
+    $("bpass").focus();
+    showMsg("signinMsg", "Your password was changed. Sign in with your new password.", "ok");
+  } catch {
+    showMsg("resetMsg", OFFLINE_MSG, "error");
+  } finally {
+    btn.disabled = false; btn.textContent = "Reset Password";
+  }
+}
+
+function resetResetForm() {
+  for (const id of ["rcode", "rpass", "rpass2"]) $(id).value = "";
+  $("resetStep2").style.display = "none";
+  $("btnSendCode").textContent = "Email Me a Code";
+}
+
+/* ---------- recovery email (signed in) ---------- */
+
+async function loadRecoveryEmail() {
+  $("pwEmail").value = ""; $("pwEmail").disabled = true; $("pwEmailSave").disabled = true;
+  showMsg("pwEmailMsg", "Loading…");
+  try {
+    const { ok, data } = await accountApi("/email", { username: S.account, password: S.pw });
+    if (!ok) { showMsg("pwEmailMsg", data.error || "Couldn't load your recovery email.", "error"); return; }
+    $("pwEmail").value = data.email || "";
+    showMsg("pwEmailMsg", data.email ? "" : "No recovery email yet: add one so you can reset a forgotten password.",
+            data.email ? "" : "error");
+  } catch {
+    showMsg("pwEmailMsg", OFFLINE_MSG, "error");
+  } finally {
+    $("pwEmail").disabled = false; $("pwEmailSave").disabled = false;
+  }
+}
+
+async function saveRecoveryEmail() {
+  const email = $("pwEmail").value.trim();
+  if (!EMAIL_RE.test(email)) { showMsg("pwEmailMsg", "Please enter a valid email address.", "error"); return; }
+  $("pwEmailSave").disabled = true;
+  try {
+    const { ok, data } = await accountApi("/email", { username: S.account, password: S.pw, email });
+    if (!ok) { showMsg("pwEmailMsg", data.error || "Couldn't save your recovery email.", "error"); return; }
+    S.hasEmail = true;
+    showMsg("pwEmailMsg", "Recovery email saved.", "ok");
+  } catch {
+    showMsg("pwEmailMsg", OFFLINE_MSG, "error");
+  } finally {
+    $("pwEmailSave").disabled = false;
+  }
+}
+
+/* Once per sign-in: nudge accounts that can't reset their password yet. */
+async function checkRecoveryEmail() {
+  try {
+    const { ok, data } = await accountApi("/email", { username: S.account, password: S.pw });
+    if (ok && !data.email && S.phase === "online") {
+      sys("Add a recovery email in 🔑 Password so you can reset your password if you ever forget it.", "tip");
+    }
+  } catch { /* account service down: not worth bothering anyone */ }
+}
+
 /* ---------- wiring ---------- */
 
 $("signinForm").addEventListener("submit", (e) => { e.preventDefault(); doSignIn(); });
 $("createForm").addEventListener("submit", (e) => { e.preventDefault(); doCreateAccount(); });
 $("toCreate").onclick = () => showCreate(true);
+$("toReset").onclick = () => { $("ruser").value = $("buser").value.trim(); resetResetForm(); showScreen("reset"); };
+$("resetToSignIn").onclick = () => showScreen("signin");
+$("btnSendCode").onclick = sendResetCode;
+$("resetForm").addEventListener("submit", (e) => { e.preventDefault(); doResetPassword(); });
+$("ruser").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); sendResetCode(); } });
+$("pwEmailSave").onclick = saveRecoveryEmail;
+$("pwEmail").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveRecoveryEmail(); } });
 $("toSignIn").onclick = () => showCreate(false);
 $("btnConnect").onclick = () => doDisconnect("You've signed out.");
 $("btnSend").onclick = sendChat;

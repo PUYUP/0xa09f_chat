@@ -148,11 +148,21 @@ services:
     environment:
       UPSTREAM_ADDR: irc+insecure://solanum:6667
       NETWORK_NAME: ${SOJU_NETWORK:-solanum}
+      DATA_DIR: /data                         # recovery emails + reset codes (SQLite)
+      # Password-reset email. Defaults deliver to the local Mailpit catcher;
+      # point these at a real SMTP server in production.
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURITY: ${SMTP_SECURITY:-none}   # starttls | ssl | none
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-a09f <no-reply@a09f.invalid>}
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${REGISTER_PORT:-16680}:8080"    # account registration (HTTP)
     volumes:
       - ./soju/config:/soju-config:ro
       - soju-db:/db
+      - register-data:/data
     depends_on:
       soju:
         condition: service_healthy
@@ -167,10 +177,24 @@ services:
       ircnet:
         ipv4_address: 172.30.99.50
 
+  # Development mail catcher: register sends password-reset emails here.
+  # Read them at http://127.0.0.1:16825. Not needed with a real SMTP_HOST.
+  mailpit:
+    image: axllent/mailpit@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68  # v1.27
+    container_name: mailpit
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${MAILPIT_PORT:-16825}:8025"     # web inbox
+    logging: *default-logging
+    networks:
+      ircnet:
+        ipv4_address: 172.30.99.60
+
 volumes:
   postgres-data:
   soju-db:
   soju-uploads:
+  register-data:
   atheme-data:
   solanum-logs:
   solanum-state:
