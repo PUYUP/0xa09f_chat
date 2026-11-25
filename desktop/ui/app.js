@@ -401,7 +401,15 @@ function renderMsg(m) {
   div.className = `msg ${m.cls}`;
   const cur = S.current && conv(S.current);
   const deleted = cur && isRedacted(cur, m);
-  let txt = m.buzz ? "BUZZ!!!" : emote(formatIrc(esc(m.txt)));
+  const withMeta = cur && cur.kind !== "status" && isRealMsg(m);
+  const edited = withMeta ? metaFor(keyOf(cur.name)).edits.get(msgKeyStr(msgKeyParts(cur, m))) : undefined;
+  let body = edited ?? m.txt;
+  let quote = "";
+  const rp = !m.buzz && body.match(REPLY_RE);
+  if (rp) { quote = `<span class="quote">↪ <b>${esc(rp[1])}</b>: ${emote(esc(rp[2]))}</span>`; body = rp[3]; }
+  const poll = !m.buzz && m.txt.match(POLL_RE);
+  let txt = m.buzz ? "BUZZ!!!" : emote(formatIrc(esc(body)));
+  if (poll) txt = "started a poll:";
   if (m.invite) {
     const inRoom = conv(keyOf(m.invite))?.kind === "room";
     const what = isConference(m.invite) ? "a conference 🗣️" : `the room <b>${esc(roomName(m.invite))}</b> 💬`;
@@ -414,25 +422,15 @@ function renderMsg(m) {
   if (m.askKey) txt += ` <input class="key-input" type="password" placeholder="Room password" size="12">` +
     ` <button class="key-join" data-room="${esc(m.askKey)}">Join</button>`;
   if (!m.buzz && !m.invite) txt = highlightMentions(txt);
-  if (m.others && !m.cls.includes("service") && S.current && isChannel(S.current) && mentionsMe(stripIrc(m.txt))) {
+  if (m.others && !m.cls.includes("service") && S.current && isChannel(S.current) && mentionsMe(stripIrc(body))) {
     div.classList.add("mention-me");
   }
-  if (deleted) { txt = "🚫 This message was deleted"; div.classList.add("deleted"); }
+  if (edited && !deleted) txt += ` <span class="edited">(edited)</span>`;
+  if (deleted) { txt = "🚫 This message was deleted"; quote = ""; div.classList.add("deleted"); }
   div.innerHTML = `<span class="time">${esc(fmtTime(m.time))}</span>` +
-    `<span class="who">${esc(m.who)}:</span> <span class="txt">${txt}</span>`;
-  // Your own messages can be deleted for everyone (click twice).
-  if (!deleted && !m.others && m.cls.includes("me") && !m.buzz && !m.invite && S.token && cur?.kind !== "status") {
-    const del = document.createElement("span");
-    del.className = "del";
-    del.textContent = "🗑";
-    del.title = "Delete this message for everyone";
-    del.onclick = () => {
-      if (del.dataset.armed) { del.textContent = "…"; deleteMessage(m); return; }
-      del.dataset.armed = "1"; del.textContent = "Delete?";
-      setTimeout(() => { if (del.isConnected) { del.dataset.armed = ""; del.textContent = "🗑"; } }, 4000);
-    };
-    div.appendChild(del);
-  }
+    `<span class="who">${esc(m.who)}:</span> <span class="txt">${quote}${txt}</span>`;
+  if (poll && !deleted) div.appendChild(pollCard(+poll[1]));
+  if (withMeta && !deleted && S.token) { reactionChips(div, cur, m); messageTools(div, cur, m); }
   logEl.querySelector(".seen")?.remove();
   logEl.appendChild(div);
   logEl.scrollTop = logEl.scrollHeight;
@@ -452,12 +450,15 @@ function switchTo(key) {
   key = key && keyOf(key);
   if (key === S.current) return;
   if (S.typingTo && keyOf(S.typingTo) !== key) stopTyping();
+  if ($("composerBar").style.display !== "none") { if (S.editing) $("input").value = ""; clearComposerBar(); }
   S.current = key;
   const c = key && conv(key);
+  if (c && c.kind !== "status" && !metaFor(key).loaded) loadMeta(c);
   if (c) { fetchHistory(c); markRead(c); }
   renderLog();
   refreshSide();
   renderTyping();
+  renderPins();
   $("input").focus();
 }
 
@@ -945,6 +946,7 @@ function presenceChanged(nick, before) {
       Sound.play("online");
       notify(`${nick} is now online`, "", null);
     }
+    if (after === "offline") (S.lastSeen ||= new Map()).set(keyOf(nick), Math.floor(Date.now() / 1000));
     if (before !== "offline" && before !== "unknown" && after === "offline") {
       sys(`${nick} signed off.`, "system");
       Sound.play("offline");
@@ -1102,6 +1104,11 @@ async function startSocial() {
     await loadPrefs();
     await migrateLocalFriends();
     loadRedactions(); loadAnnouncements(); loadStats();
+    loadLastSeen(); loadDueReminders();
+    clearInterval(S.lastSeenTimer);
+    S.lastSeenTimer = setInterval(loadLastSeen, 120000);
+    const cur = S.current && conv(S.current);
+    if (cur) loadMeta(cur);
     openEvents();
   } catch (e) {
     if (S.phase !== "online") return;
@@ -1158,6 +1165,11 @@ function openEvents() {
   on("redact", onRedact);
   on("announcement", (a) => showAnnouncement(a, true));
   on("online", (d) => setOnlineCount(d.count));
+  on("reaction", onReactionEvent);
+  on("edit", onEditEvent);
+  on("pins", (d) => { const c = conv(keyOf(d.room)); if (c && S.meta?.has(keyOf(d.room))) loadMeta(c); });
+  on("poll", (d) => { if (S.polls?.has(d.id)) loadPoll(d.id); });
+  on("reminder", showReminder);
   on("signed-out", (d) => {
     if (d.except === S.sid || S.phase !== "online") return;
     forgetSavedPassword();
@@ -1291,6 +1303,13 @@ const STATE_ORDER = { online: 0, busy: 1, away: 2, unknown: 3, offline: 4 };
 
 function renderFriends() {
   const el = $("friends");
+  // Redraw only when something visible changed: rebuilding the rows under the
+  // mouse drops WebKit's :hover and swallows clicks on the ⋯ buttons.
+  const sig = JSON.stringify([S.friends, [...S.friendGroups], S.outgoing, S.incoming.map((r) => r.from),
+    S.friends.map((n) => [statusOf(n), S.typing.has(keyOf(n)), conv(keyOf(n))?.unread || 0, S.lastSeen?.get(keyOf(n)) || 0]),
+    [...(S.collapsedGroups || [])], $("friendAdd").style.display, S.prefs.ignore]);
+  if (sig === S.friendsSig) return;
+  S.friendsSig = sig;
   el.innerHTML = "";
   renderRequests();
   const byGroup = new Map();
@@ -1330,7 +1349,9 @@ function renderFriends() {
 }
 
 function friendRow(nick, pending) {
-  const st = pending ? { state: "pending", label: "Waiting for approval" } : statusOf(nick);
+  let st = pending ? { state: "pending", label: "Waiting for approval" } : statusOf(nick);
+  const seen = st.state === "offline" && S.lastSeen?.get(keyOf(nick));
+  if (seen) st = { ...st, label: `Offline · seen ${agoText(seen)}` };
   const pm = conv(keyOf(nick));
   const d = document.createElement("div");
   d.className = `friend st-${st.state}` + (pm?.unread ? " unread" : "") + (pending ? " pending" : "");
@@ -3165,6 +3186,301 @@ async function loadStats() {
   try { setOnlineCount((await socialApi("/stats")).online); } catch {}
 }
 
+/* ---------- message extras: reactions, replies, edits, pins, polls ---------- */
+
+/* A message's identity (shared with deletes): sender, where it was sent,
+ * server time, hash of its original text. */
+function msgKeyParts(c, m) {
+  return { sender: keyOf(m.who), target: msgTarget(c, m), time: m.time, hash: msgHash(m.rawTxt ?? m.txt) };
+}
+const msgKeyStr = (k) => redactKey(k.sender, k.target, k.time, k.hash);
+
+/* The conversation a meta event belongs to, from this user's point of view. */
+function metaConv(target, sender) {
+  if (isChannel(target)) return keyOf(target);
+  return keyOf(sender) === keyOf(S.me) ? keyOf(target) : keyOf(sender);
+}
+
+const isRealMsg = (m) => m.time && !m.buzz && !m.invite && !m.knock && !m.letIn && !m.askKey &&
+  !m.cls.includes("service") && !m.cls.includes("error") && !m.cls.includes("tip") && !m.cls.includes("status");
+
+function metaFor(convKey) {
+  S.meta ||= new Map();
+  if (!S.meta.has(convKey)) S.meta.set(convKey, { reactions: new Map(), edits: new Map(), pins: [], loaded: false });
+  return S.meta.get(convKey);
+}
+
+async function loadMeta(c) {
+  if (!c || c.kind === "status" || !S.token) return;
+  const key = keyOf(c.name);
+  try {
+    const d = await socialApi(`/msgmeta?conv=${encodeURIComponent(c.name)}`);
+    const meta = metaFor(key);
+    meta.reactions.clear(); meta.edits.clear();
+    for (const r of d.reactions) addReaction(meta, r, true);
+    for (const e of d.edits) meta.edits.set(msgKeyStr(e), e.text);
+    meta.pins = d.pins || [];
+    meta.loaded = true;
+    if (S.current === key) { renderLog(); renderPins(); }
+  } catch { /* not critical */ }
+}
+
+function addReaction(meta, r, on) {
+  const k = msgKeyStr(r);
+  if (!meta.reactions.has(k)) meta.reactions.set(k, new Map());
+  const byEmoji = meta.reactions.get(k);
+  if (!byEmoji.has(r.emoji)) byEmoji.set(r.emoji, new Set());
+  const users = byEmoji.get(r.emoji);
+  on ? users.add(keyOf(r.user)) : users.delete(keyOf(r.user));
+  if (!users.size) byEmoji.delete(r.emoji);
+}
+
+function onReactionEvent(r) {
+  const ck = metaConv(r.target, r.sender);
+  addReaction(metaFor(ck), r, r.on);
+  if (S.current === ck) renderLog();
+}
+
+function onEditEvent(e) {
+  const ck = metaConv(e.target, e.sender);
+  metaFor(ck).edits.set(msgKeyStr(e), e.text);
+  if (S.current === ck) renderLog();
+}
+
+function toggleReaction(c, m, emoji) {
+  const k = msgKeyParts(c, m);
+  const users = metaFor(keyOf(c.name)).reactions.get(msgKeyStr(k))?.get(emoji);
+  const on = !users?.has(keyOf(S.me));
+  socialApi("/react", { ...k, emoji, on }).catch((e) => sys(e.message, "error"));
+}
+
+const REACTION_EMOJI = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🎉", "🔥"];
+
+function reactMenu(e, c, m) {
+  const box = $("ctxMenu");
+  box.innerHTML = `<div class="smileys react-pick"></div>`;
+  for (const emo of REACTION_EMOJI) {
+    const b = document.createElement("span");
+    b.textContent = emo;
+    b.onclick = (ev) => { ev.stopPropagation(); hideMenu(); toggleReaction(c, m, emo); };
+    box.firstChild.appendChild(b);
+  }
+  box.style.display = "block";
+  placeMenu(box, e);
+}
+
+/* ----- the little toolbar on each message ----- */
+
+function messageTools(div, c, m) {
+  const mine = !m.others;
+  const bar = document.createElement("span");
+  bar.className = "mtools";
+  const add = (label, title, fn) => {
+    const b = document.createElement("span");
+    b.textContent = label; b.title = title;
+    b.onclick = (e) => { e.stopPropagation(); fn(e, b); };
+    bar.appendChild(b);
+  };
+  add("😀", "React", (e) => reactMenu(e, c, m));
+  add("↩", "Reply", () => startReply(m));
+  if (mine) add("✏️", "Edit", () => startEdit(c, m));
+  if (c.kind === "room" && amOp(c)) add("📌", "Pin to the top of the room", () => pinMessage(c, m, true));
+  if (mine) add("🗑", "Delete for everyone", (e, b) => {
+    if (b.dataset.armed) { b.textContent = "…"; deleteMessage(m); return; }
+    b.dataset.armed = "1"; b.textContent = "Delete?"; b.classList.add("armed");
+    setTimeout(() => { if (b.isConnected) { b.dataset.armed = ""; b.textContent = "🗑"; b.classList.remove("armed"); } }, 4000);
+  });
+  div.appendChild(bar);
+}
+
+function reactionChips(div, c, m) {
+  const byEmoji = metaFor(keyOf(c.name)).reactions.get(msgKeyStr(msgKeyParts(c, m)));
+  if (!byEmoji?.size) return;
+  const row = document.createElement("div");
+  row.className = "reactions";
+  for (const [emoji, users] of byEmoji) {
+    const chip = document.createElement("span");
+    chip.className = "rchip" + (users.has(keyOf(S.me)) ? " mine" : "");
+    chip.textContent = `${emoji} ${users.size}`;
+    chip.title = [...users].join(", ");
+    chip.onclick = () => toggleReaction(c, m, emoji);
+    row.appendChild(chip);
+  }
+  div.appendChild(row);
+}
+
+/* ----- replies: "↪ bob: “quoted text” my answer" (plain text on IRC) ----- */
+
+const REPLY_RE = /^↪ (\S+): “([^”]*)” ?([\s\S]*)$/;
+
+function startReply(m) {
+  S.editing = null;
+  const own = stripIrc(m.txt).replace(REPLY_RE, "$3");          // a reply's own words, not its quote
+  S.replyTo = { who: m.who, txt: own.slice(0, 60) + (own.length > 60 ? "…" : "") };
+  showComposerBar(`↩ Replying to <b>${esc(m.who)}</b>: “${esc(S.replyTo.txt)}”`);
+  $("input").focus();
+}
+
+function startEdit(c, m) {
+  S.replyTo = null;
+  S.editing = { c, m };
+  const current = metaFor(keyOf(c.name)).edits.get(msgKeyStr(msgKeyParts(c, m))) ?? m.txt;
+  showComposerBar("✏️ Editing your message — Enter to save, Esc to cancel");
+  $("input").value = stripIrc(current);
+  $("input").focus();
+}
+
+function showComposerBar(html) {
+  $("composerBarText").innerHTML = html;
+  $("composerBar").style.display = "";
+}
+
+function clearComposerBar() {
+  S.replyTo = null; S.editing = null;
+  $("composerBar").style.display = "none";
+}
+
+/* Wrap an outgoing message as a reply when one is pending. */
+function withReply(text) {
+  if (!S.replyTo) return text;
+  const r = S.replyTo;
+  clearComposerBar();
+  return `↪ ${r.who}: “${r.txt.replace(/”/g, "\"")}” ${text}`;
+}
+
+async function saveEdit(text) {
+  const { c, m } = S.editing;
+  clearComposerBar();
+  if (!text || text === stripIrc(m.txt)) return;
+  try { await socialApi("/edit", { ...msgKeyParts(c, m), text }); }
+  catch (e) { sys(e.message, "error"); }
+}
+
+/* ----- pinned messages (rooms) ----- */
+
+async function pinMessage(c, m, on) {
+  try {
+    await socialApi("/pin", { room: keyOf(c.name), ...msgKeyParts(c, m), text: stripIrc(m.txt).slice(0, 300), on });
+  } catch (e) { sys(e.message, "error"); }
+}
+
+async function unpin(c, p) {
+  try {
+    await socialApi("/pin", { room: keyOf(c.name), sender: p.sender, target: keyOf(c.name), time: p.time, hash: p.hash, on: false });
+  } catch (e) { sys(e.message, "error"); }
+}
+
+function renderPins() {
+  const el = $("pinBar");
+  const c = S.current && conv(S.current);
+  const pins = c?.kind === "room" ? metaFor(keyOf(c.name)).pins : [];
+  if (!pins.length) { el.style.display = "none"; return; }
+  el.innerHTML = "";
+  for (const p of pins) {
+    const row = document.createElement("div");
+    row.className = "pin";
+    row.innerHTML = `📌 <b>${esc(p.sender)}:</b> <span>${emote(esc(p.text))}</span>`;
+    if (amOp(c)) {
+      const x = document.createElement("span");
+      x.className = "pin-x"; x.textContent = "✕"; x.title = "Unpin";
+      x.onclick = () => unpin(c, p);
+      row.appendChild(x);
+    }
+    el.appendChild(row);
+  }
+  el.style.display = "";
+}
+
+/* ----- polls: "/poll Question | A | B" in a room ----- */
+
+const POLL_RE = /\[poll:(\d+)\]/;
+
+async function createPoll(c, spec) {
+  const parts = spec.split("|").map((x) => x.trim()).filter(Boolean);
+  if (parts.length < 3) { sys("Write it like: /poll Where to eat? | Bakso | Sate | Pizza", "tip"); return; }
+  try {
+    const { id } = await socialApi("/poll/create", { room: keyOf(c.name), question: parts[0], options: parts.slice(1) });
+    sendTo(c.name, `📊 Poll: ${parts[0]} — ${parts.slice(1).join(" / ")} (vote in a09f) [poll:${id}]`);
+  } catch (e) { sys(e.message, "error"); }
+}
+
+async function loadPoll(id) {
+  S.polls ||= new Map();
+  try {
+    S.polls.set(id, await socialApi(`/poll?id=${id}`));
+    document.querySelectorAll(`.poll[data-poll="${id}"]`).forEach((el) => fillPoll(el, id));
+  } catch { S.polls.set(id, { error: true }); }
+}
+
+function pollCard(id) {
+  const el = document.createElement("div");
+  el.className = "poll";
+  el.dataset.poll = id;
+  if (S.polls?.has(id)) fillPoll(el, id); else { el.textContent = "📊 Loading poll…"; loadPoll(id); }
+  return el;
+}
+
+function fillPoll(el, id) {
+  const p = S.polls.get(id);
+  if (!p || p.error) { el.textContent = "📊 This poll isn't available."; return; }
+  const total = p.counts.reduce((a, b) => a + b, 0);
+  el.innerHTML = `<div class="poll-q">📊 ${esc(p.question)}</div>`;
+  p.options.forEach((opt, i) => {
+    const pct = total ? Math.round((p.counts[i] / total) * 100) : 0;
+    const row = document.createElement("div");
+    row.className = "poll-opt" + (p.mine === i ? " mine" : "");
+    row.title = p.voters[i].join(", ") || "No votes yet";
+    row.innerHTML = `<span class="poll-bar" style="width:${pct}%"></span>` +
+      `<span class="poll-label">${p.mine === i ? "✓ " : ""}${esc(opt)}</span><span class="poll-n">${p.counts[i]}</span>`;
+    row.onclick = () => socialApi("/poll/vote", { id, option: p.mine === i ? null : i }).catch((e) => sys(e.message, "error"));
+    el.appendChild(row);
+  });
+  el.insertAdjacentHTML("beforeend", `<div class="poll-foot">${total} vote${total === 1 ? "" : "s"} · click to vote, again to undo</div>`);
+}
+
+/* ---------- last seen ---------- */
+
+async function loadLastSeen() {
+  if (!S.friends.length || !S.token) return;
+  try {
+    const { lastSeen } = await socialApi(`/lastseen?users=${S.friends.map(encodeURIComponent).join(",")}`);
+    S.lastSeen = new Map(Object.entries(lastSeen).filter(([, t]) => t && t !== "now"));
+    renderFriends();
+  } catch {}
+}
+
+function agoText(sec) {
+  const d = Math.max(0, Math.floor(Date.now() / 1000) - sec);
+  if (d < 60) return "just now";
+  if (d < 3600) return `${Math.floor(d / 60)}m ago`;
+  if (d < 86400) return `${Math.floor(d / 3600)}h ago`;
+  if (d < 30 * 86400) return `${Math.floor(d / 86400)}d ago`;
+  return new Date(sec * 1000).toLocaleDateString();
+}
+
+/* ---------- reminders: "/remind 10m drink water" ---------- */
+
+async function addReminder(spec) {
+  const m = spec.match(/^(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\s+(.+)$/i);
+  if (!m) { sys("Write it like: /remind 10m drink water  (m = minutes, h = hours, d = days)", "tip"); return; }
+  const n = parseFloat(m[1]), unit = m[2][0].toLowerCase();
+  const minutes = unit === "m" ? n : unit === "h" ? n * 60 : n * 1440;
+  try {
+    const r = await socialApi("/remind", { text: m[3], minutes });
+    sys(`⏰ OK! I'll remind you ${new Date(r.due * 1000).toLocaleString()}: “${r.text}”`, "system");
+  } catch (e) { sys(e.message, "error"); }
+}
+
+function showReminder(r) {
+  sys(`⏰ Reminder: ${r.text}`, "tip");
+  Sound.play("buzz");
+  notify("⏰ Reminder", r.text, null);
+}
+
+async function loadDueReminders() {
+  try { for (const r of (await socialApi("/reminders/due")).reminders) showReminder(r); } catch {}
+}
+
 /* ---------- actions ---------- */
 
 async function doSignIn() {
@@ -3190,10 +3506,12 @@ function doDisconnect(message = "", isError = false) {
   S.me = null; S.current = null; S.burstDone = false;
   S.caps.clear(); S.convs.clear(); S.batches.clear(); S.away = false;
   S.presence.clear(); S.statuses.clear(); S.whois.clear(); S.friends = [];
-  stopSocial(); S.friendGroups.clear(); S.incoming = []; S.outgoing = [];
+  stopSocial(); S.friendGroups.clear(); S.incoming = []; S.outgoing = []; S.friendsSig = null;
   S.prefs = { ignore: [], friendsOnly: false }; S.callerId = null; S.accepted = null; S.blockedTold = null;
   S.findResults = null; S.searching = false;
   for (const id of ["privacyDialog", "findDialog", "searchDialog", "roomDialog", "annDialog", "annBar"]) $(id).style.display = "none";
+  S.meta = new Map(); S.polls = new Map(); S.lastSeen = new Map(); clearInterval(S.lastSeenTimer);
+  S.replyTo = null; S.editing = null; $("composerBar").style.display = "none"; $("pinBar").style.display = "none";
   S.redactions.clear(); S.admin = false; S.announcement = null; $("btnAnnounce").style.display = "none"; setOnlineCount(0);
   S.csReq = null; S.csChain = null; S.roomDialogFor = null;
   for (const t of S.typing.values()) clearTimeout(t);
@@ -3261,7 +3579,15 @@ function sendChat() {
   if (!text) return;
   $("input").value = "";
   // Power-user shortcuts still work, but nothing on screen relies on them.
+  if (S.editing) { saveEdit(text); return; }
   if (text.startsWith("/join ")) { joinOrSwitch(text.slice(6)); return; }
+  if (/^\/remind\b/.test(text)) { addReminder(text.replace(/^\/remind\s*/, "")); return; }
+  if (/^\/poll\b/.test(text)) {
+    const pc = S.current && conv(S.current);
+    if (pc?.kind !== "room") { sys("Polls work in chat rooms.", "tip"); return; }
+    createPoll(pc, text.replace(/^\/poll\s*/, ""));
+    return;
+  }
   if (/^\/me\s+\S/.test(text)) {               // action: "* alice waves"
     const c = S.current && conv(S.current);
     if (!c || c.kind === "status") { sys("Join a room first, then say hi!", "tip"); return; }
@@ -3278,7 +3604,7 @@ function sendChat() {
   const c = S.current && conv(S.current);
   if (!c || c.kind === "status") { sys("Join a room first, then say hi!", "tip"); return; }
   stopTyping();
-  sendTo(c.name, styled(text));
+  sendTo(c.name, withReply(styled(text)));
 }
 
 async function doCreateAccount() {
@@ -3498,7 +3824,12 @@ $("btnSend").onclick = sendChat;
 $("input").addEventListener("keydown", (e) => {
   if (onMentionKey(e)) return;
   if (e.key === "Enter") sendChat();
+  if (e.key === "Escape" && $("composerBar").style.display !== "none") {
+    if (S.editing) $("input").value = "";
+    clearComposerBar();
+  }
 });
+$("composerBarX").onclick = () => { if (S.editing) $("input").value = ""; clearComposerBar(); };
 $("input").addEventListener("input", updateMentionBox);
 $("input").addEventListener("blur", () => setTimeout(hideMentionBox, 150));
 $("btnJoin").onclick = () => { joinOrSwitch($("newChan").value); $("newChan").value = ""; };

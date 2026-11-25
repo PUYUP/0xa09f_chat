@@ -40,6 +40,24 @@ def init_schema(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS redactions (sender TEXT NOT NULL, target TEXT NOT NULL, "
                  "time INTEGER NOT NULL, hash TEXT NOT NULL, created INTEGER NOT NULL, "
                  "PRIMARY KEY (sender, target, time, hash))")
+    # Messages are identified like redactions: sender, target (room or the
+    # person it was sent to), server time (ms) and a hash of the text.
+    conn.execute("CREATE TABLE IF NOT EXISTS reactions (sender TEXT NOT NULL, target TEXT NOT NULL, time INTEGER NOT NULL, "
+                 "hash TEXT NOT NULL, user TEXT NOT NULL, emoji TEXT NOT NULL, created INTEGER NOT NULL, "
+                 "PRIMARY KEY (sender, target, time, hash, user, emoji))")
+    conn.execute("CREATE TABLE IF NOT EXISTS edits (sender TEXT NOT NULL, target TEXT NOT NULL, time INTEGER NOT NULL, "
+                 "hash TEXT NOT NULL, text TEXT NOT NULL, edited INTEGER NOT NULL, "
+                 "PRIMARY KEY (sender, target, time, hash))")
+    conn.execute("CREATE TABLE IF NOT EXISTS pins (room TEXT NOT NULL, sender TEXT NOT NULL, time INTEGER NOT NULL, "
+                 "hash TEXT NOT NULL, text TEXT NOT NULL, pinned_by TEXT NOT NULL, created INTEGER NOT NULL, "
+                 "PRIMARY KEY (room, sender, time, hash))")
+    conn.execute("CREATE TABLE IF NOT EXISTS polls (id INTEGER PRIMARY KEY AUTOINCREMENT, room TEXT NOT NULL, "
+                 "author TEXT NOT NULL, question TEXT NOT NULL, options TEXT NOT NULL, created INTEGER NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS poll_votes (poll INTEGER NOT NULL, user TEXT NOT NULL, option INTEGER NOT NULL, "
+                 "PRIMARY KEY (poll, user))")
+    conn.execute("CREATE TABLE IF NOT EXISTS last_seen (user TEXT PRIMARY KEY, time INTEGER NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, "
+                 "text TEXT NOT NULL, due INTEGER NOT NULL, delivered INTEGER NOT NULL DEFAULT 0)")
     conn.execute("CREATE TABLE IF NOT EXISTS announcements (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                  "author TEXT NOT NULL, text TEXT NOT NULL, created INTEGER NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS prefs (owner TEXT PRIMARY KEY, data TEXT NOT NULL)")
@@ -354,3 +372,180 @@ def announcements_since(conn, after_id, max_age=7 * 24 * 3600):
     rows = conn.execute("SELECT id, author, text, created FROM announcements WHERE id > ? AND created >= ? "
                         "ORDER BY id DESC LIMIT 5", (int(after_id), int(time.time()) - max_age))
     return [{"id": i, "author": a, "text": t, "created": c} for i, a, t, c in rows][::-1]
+
+
+# ---------- message extras: reactions, edits, pins ----------
+
+REACTIONS = {"👍", "❤️", "😂", "😮", "😢", "🙏", "🎉", "🔥"}
+
+
+def msg_audience(target, sender):
+    """Who should hear about a change to a message: everyone for a room
+    (the service doesn't know who's in it), else both people of the chat."""
+    return None if target.startswith(("#", "&")) else {target, sender}
+
+
+def tell(audience, me, event, data):
+    if audience is None:
+        push_all(event, data)
+    else:
+        for u in audience | {me}:
+            push(u, event, data)
+
+
+def conv_filter(me, conv):
+    """SQL filter for a conversation: a room, or the private chat me<->conv."""
+    if conv.startswith(("#", "&")):
+        return "target = ?", (conv,)
+    return "((sender = ? AND target = ?) OR (sender = ? AND target = ?))", (me, conv, conv, me)
+
+
+def react(conn, me, key, emoji, on):
+    if emoji not in REACTIONS:
+        raise SocialFail(400, "That reaction isn't available.")
+    if on:
+        conn.execute("INSERT OR IGNORE INTO reactions VALUES (?, ?, ?, ?, ?, ?, ?)", (*key, me, emoji, int(time.time())))
+    else:
+        conn.execute("DELETE FROM reactions WHERE sender=? AND target=? AND time=? AND hash=? AND user=? AND emoji=?",
+                     (*key, me, emoji))
+    tell(msg_audience(key[1], key[0]), me, "reaction",
+         {"sender": key[0], "target": key[1], "time": key[2], "hash": key[3], "user": me, "emoji": emoji, "on": on})
+
+
+def reactions_for(conn, me, conv):
+    where, args = conv_filter(me, conv)
+    rows = conn.execute(f"SELECT sender, target, time, hash, user, emoji FROM reactions WHERE {where}", args)
+    return [dict(zip(("sender", "target", "time", "hash", "user", "emoji"), r)) for r in rows]
+
+
+def edit(conn, me, key, text):
+    text = str(text or "").replace("\r", " ").replace("\n", " ").strip()[:400]
+    if not text:
+        raise SocialFail(400, "The message can't be empty.")
+    if key[0] != me:
+        raise SocialFail(403, "You can only edit your own messages.")
+    conn.execute("INSERT OR REPLACE INTO edits VALUES (?, ?, ?, ?, ?, ?)", (*key, text, int(time.time())))
+    tell(msg_audience(key[1], key[0]), me, "edit",
+         {"sender": key[0], "target": key[1], "time": key[2], "hash": key[3], "text": text})
+
+
+def edits_for(conn, me, conv):
+    where, args = conv_filter(me, conv)
+    rows = conn.execute(f"SELECT sender, target, time, hash, text FROM edits WHERE {where}", args)
+    return [dict(zip(("sender", "target", "time", "hash", "text"), r)) for r in rows]
+
+
+MAX_PINS = 5
+
+
+def pin(conn, me, room, key, text, on):
+    if on:
+        n = conn.execute("SELECT COUNT(*) FROM pins WHERE room = ?", (room,)).fetchone()[0]
+        if n >= MAX_PINS:
+            raise SocialFail(409, f"A room can have at most {MAX_PINS} pinned messages.")
+        conn.execute("INSERT OR REPLACE INTO pins VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (room, key[0], key[2], key[3], str(text or "")[:400], me, int(time.time())))
+    else:
+        conn.execute("DELETE FROM pins WHERE room=? AND sender=? AND time=? AND hash=?", (room, key[0], key[2], key[3]))
+    push_all("pins", {"room": room})
+
+
+def pins_for(conn, room):
+    rows = conn.execute("SELECT sender, time, hash, text, pinned_by FROM pins WHERE room = ? ORDER BY created", (room,))
+    return [dict(zip(("sender", "time", "hash", "text", "pinnedBy"), r)) for r in rows]
+
+
+# ---------- polls ----------
+
+def create_poll(conn, me, room, question, options):
+    question = " ".join(str(question or "").split())[:200]
+    opts = [" ".join(str(o).split())[:80] for o in (options or []) if str(o).strip()][:8]
+    if not question or len(opts) < 2:
+        raise SocialFail(400, "A poll needs a question and at least 2 choices.")
+    cur = conn.execute("INSERT INTO polls (room, author, question, options, created) VALUES (?, ?, ?, ?, ?)",
+                       (room, me, question, json.dumps(opts), int(time.time())))
+    return cur.lastrowid
+
+
+def poll_state(conn, me, poll_id):
+    row = conn.execute("SELECT id, room, author, question, options, created FROM polls WHERE id = ?", (poll_id,)).fetchone()
+    if not row:
+        raise SocialFail(404, "That poll isn't there any more.")
+    opts = json.loads(row[4])
+    counts = [0] * len(opts)
+    mine = None
+    voters = [[] for _ in opts]
+    for user, opt in conn.execute("SELECT user, option FROM poll_votes WHERE poll = ?", (poll_id,)):
+        if 0 <= opt < len(opts):
+            counts[opt] += 1
+            voters[opt].append(user)
+        if user == me:
+            mine = opt
+    return {"id": row[0], "room": row[1], "author": row[2], "question": row[3], "options": opts,
+            "counts": counts, "voters": voters, "mine": mine, "created": row[5]}
+
+
+def vote(conn, me, poll_id, option):
+    st = poll_state(conn, me, poll_id)
+    if option is None:
+        conn.execute("DELETE FROM poll_votes WHERE poll = ? AND user = ?", (poll_id, me))
+    elif not (0 <= int(option) < len(st["options"])):
+        raise SocialFail(400, "That choice isn't in the poll.")
+    else:
+        conn.execute("INSERT OR REPLACE INTO poll_votes VALUES (?, ?, ?)", (poll_id, me, int(option)))
+    push_all("poll", {"id": poll_id})
+
+
+# ---------- last seen ----------
+
+def touch_last_seen(conn, user):
+    conn.execute("INSERT OR REPLACE INTO last_seen VALUES (?, ?)", (user, int(time.time())))
+
+
+def last_seen(conn, users):
+    users = [u for u in users][:200]
+    if not users:
+        return {}
+    q = ",".join("?" * len(users))
+    online = set(_listeners)
+    out = {u: t for u, t in conn.execute(f"SELECT user, time FROM last_seen WHERE user IN ({q})", users)}
+    return {u: ("now" if u in online else out.get(u)) for u in users}
+
+
+# ---------- reminders ----------
+
+MAX_REMINDER = 30 * 24 * 3600
+
+
+def add_reminder(conn, me, text, minutes):
+    text = " ".join(str(text or "").split())[:200]
+    try:
+        secs = int(float(minutes) * 60)
+    except (TypeError, ValueError):
+        raise SocialFail(400, "When should I remind you?")
+    if not text or not (60 <= secs <= MAX_REMINDER):
+        raise SocialFail(400, "Reminders can be set from 1 minute to 30 days ahead.")
+    due = int(time.time()) + secs
+    cur = conn.execute("INSERT INTO reminders (user, text, due) VALUES (?, ?, ?)", (me, text, due))
+    return {"id": cur.lastrowid, "text": text, "due": due}
+
+
+def due_reminders(conn, user=None):
+    """Reminders that are due and not yet delivered (for one user, or all)."""
+    now = int(time.time())
+    if user:
+        rows = conn.execute("SELECT id, user, text, due FROM reminders WHERE user = ? AND due <= ? AND delivered = 0",
+                            (user, now))
+    else:
+        rows = conn.execute("SELECT id, user, text, due FROM reminders WHERE due <= ? AND delivered = 0", (now,))
+    return [dict(zip(("id", "user", "text", "due"), r)) for r in rows]
+
+
+def mark_delivered(conn, ids):
+    for i in ids:
+        conn.execute("UPDATE reminders SET delivered = 1 WHERE id = ?", (i,))
+
+
+def pending_reminders(conn, me):
+    rows = conn.execute("SELECT id, text, due FROM reminders WHERE user = ? AND delivered = 0 ORDER BY due", (me,))
+    return [dict(zip(("id", "text", "due"), r)) for r in rows]

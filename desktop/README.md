@@ -147,6 +147,23 @@ server/protokol di layar.
 - **Jumlah online** di header: orang yang sedang membuka app a09f (koneksi
   live ke service akun) — LUSERS tidak berguna karena soju membuat semua akun
   selalu terhubung
+- **Aksi di tiap pesan** (arahkan kursor ke pesan): 😀 reaksi (👍 ❤️ 😂 😮 😢 🙏
+  🎉 🔥, chip dengan jumlah — klik untuk ikut/batal), ↩ Reply (pesan dikirim
+  sebagai `↪ nama: “kutipan” balasan`, tetap terbaca di client IRC lain; di
+  a09f tampil sebagai kutipan), ✏️ Edit (pesanmu sendiri, tampil "(edited)" di
+  semua app a09f), 📌 Pin (moderator; bar di atas room, maks 5), 🗑 Hapus.
+  Reaksi/edit/pin disimpan service akun (`/react`, `/edit`, `/pin`,
+  `/msgmeta`) dengan identitas pesan yang sama seperti hapus pesan; edit tidak
+  terlihat di client IRC lain. Catatan: server tidak memverifikasi status
+  moderator untuk pin (tombolnya hanya muncul untuk moderator)
+- **Polling** di room: `/poll Makan di mana? | Bakso | Sate | Pizza` → kartu
+  polling dengan bar hasil, klik untuk memilih/batal, live (`/poll/*`)
+- **Last seen**: teman offline tampil "Offline · seen 2h ago" (dicatat saat
+  app terakhir ditutup; diperbarui tiap 2 menit)
+- **Pengingat**: `/remind 10m minum air` (m/h/d, maks 30 hari) → "⏰ Reminder"
+  + suara + notifikasi; yang jatuh tempo saat app tertutup muncul waktu sign in
+- Tombol ⋯ di Friends selalu terlihat, dan daftar Friends hanya digambar ulang
+  kalau ada yang berubah (WebKit kehilangan :hover saat baris diganti)
 - **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
   mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
   **Only my friends can send me private messages** = user mode `+g` solanum +

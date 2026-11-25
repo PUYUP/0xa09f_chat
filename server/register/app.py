@@ -43,6 +43,13 @@ API (errors: 4xx/5xx {"ok": false, "error": "<human readable>"})
   POST /announce        {"text"}               admins only (ADMIN_USERS)
   GET  /announcements?after=<id>
   GET  /stats                                  {"online": people with a09f open}
+  GET  /msgmeta?conv=   reactions + edits (+ pins for a room) of one conversation
+  POST /react {"sender","target","time","hash","emoji","on"}
+  POST /edit  {"target","time","hash","text"}         (my own messages)
+  POST /pin   {"room","sender","time","hash","text","on"}
+  POST /poll/create {"room","question","options"}  -> {"id"};  GET /poll?id=;  POST /poll/vote {"id","option"}
+  GET  /lastseen?users=a,b
+  POST /remind {"text","minutes"};  GET /reminders;  GET /reminders/due
   GET  /prefs  /  POST /prefs {"ignore":[ids],"friendsOnly":bool}
   GET  /users/search?q= -> {"users": [ids]} (substring match on IDs)
   GET  /events?token=   Server-Sent Events: friend-request, friend-accepted,
@@ -421,6 +428,9 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/events":
                 me = self._token_user(parse_qs(url.query).get("token", [""])[0])
                 social.serve_events(self, me)
+                if not social.is_listening(me):          # closed their last window
+                    with db() as conn:
+                        social.touch_last_seen(conn, me)
             elif url.path == "/friends":
                 me = self._token_user()
                 with db() as conn:
@@ -438,6 +448,29 @@ class Handler(BaseHTTPRequestHandler):
                 after = parse_qs(url.query).get("after", ["0"])[0]
                 with db() as conn:
                     self._json(200, {"ok": True, "announcements": social.announcements_since(conn, int(after or 0))})
+            elif url.path in ("/msgmeta", "/poll", "/lastseen", "/reminders", "/reminders/due"):
+                me = self._token_user()
+                q = parse_qs(url.query)
+                with db() as conn:
+                    try:
+                        if url.path == "/msgmeta":
+                            cv = q.get("conv", [""])[0].strip().lower()
+                            out = {"reactions": social.reactions_for(conn, me, cv), "edits": social.edits_for(conn, me, cv),
+                                   "pins": social.pins_for(conn, cv) if cv.startswith(("#", "&")) else []}
+                        elif url.path == "/poll":
+                            out = social.poll_state(conn, me, int(q.get("id", ["0"])[0] or 0))
+                        elif url.path == "/lastseen":
+                            users = [u for u in q.get("users", [""])[0].lower().split(",") if USERNAME_RE.match(u)]
+                            out = {"lastSeen": social.last_seen(conn, users)}
+                        elif url.path == "/reminders":
+                            out = {"reminders": social.pending_reminders(conn, me)}
+                        else:
+                            due = social.due_reminders(conn, me)
+                            social.mark_delivered(conn, [r["id"] for r in due])
+                            out = {"reminders": due}
+                    except social.SocialFail as f:
+                        raise Fail(f.status, f.message)
+                self._json(200, {"ok": True, **out})
             elif url.path == "/prefs":
                 me = self._token_user()
                 with db() as conn:
@@ -458,7 +491,8 @@ class Handler(BaseHTTPRequestHandler):
     # Signed-in calls (bearer token): not counted against the per-IP limit.
     SOCIAL = {"/friends/request", "/friends/respond", "/friends/remove", "/friends/move",
               "/friends/rename-group", "/typing", "/session/end", "/prefs", "/read",
-              "/profile/updated", "/session/revoke-others", "/redact", "/announce"}
+              "/profile/updated", "/session/revoke-others", "/redact", "/announce",
+              "/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind"}
 
     def do_POST(self):
         if self.path in self.SOCIAL:
@@ -581,6 +615,9 @@ class Handler(BaseHTTPRequestHandler):
                     social.push(me, "redact", item)
                 self._json(200, {"ok": True})
                 return
+            if self.path in ("/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind"):
+                self._json(200, {"ok": True, **self._extras(me, body)})
+                return
             if self.path == "/announce":
                 if me not in ADMINS:
                     raise Fail(403, "Only a09f admins can send announcements.")
@@ -652,6 +689,47 @@ class Handler(BaseHTTPRequestHandler):
             print(f"[register] social error: {e!r}", flush=True)
             self._json(500, {"ok": False, "error": "Something went wrong. Please try again later."})
 
+    def _extras(self, me, body):
+        def msg_key(sender_default=None):
+            sender = str(body.get("sender", sender_default or "")).strip().lower()
+            target = str(body.get("target", body.get("room", ""))).strip().lower()
+            h = str(body.get("hash", ""))[:16]
+            try:
+                t = int(body.get("time"))
+            except (TypeError, ValueError):
+                raise Fail(400, "Bad request.")
+            if not USERNAME_RE.match(sender) or not target or not re.match(r"^[0-9a-z]{1,16}$", h):
+                raise Fail(400, "Bad request.")
+            return (sender, target, t, h)
+        with db() as conn:
+            try:
+                if self.path == "/react":
+                    social.react(conn, me, msg_key(), str(body.get("emoji", "")), bool(body.get("on")))
+                    return {}
+                if self.path == "/edit":
+                    social.edit(conn, me, msg_key(me), body.get("text"))
+                    return {}
+                if self.path == "/pin":
+                    room = str(body.get("room", "")).strip().lower()
+                    if not room.startswith(("#", "&")):
+                        raise Fail(400, "Only room messages can be pinned.")
+                    social.pin(conn, me, room, msg_key(), body.get("text"), bool(body.get("on")))
+                    return {}
+                if self.path == "/poll/create":
+                    room = str(body.get("room", "")).strip().lower()
+                    if not room.startswith(("#", "&")):
+                        raise Fail(400, "Polls are for rooms.")
+                    return {"id": social.create_poll(conn, me, room, body.get("question"), body.get("options"))}
+                if self.path == "/poll/vote":
+                    opt = body.get("option")
+                    social.vote(conn, me, int(body.get("id") or 0), None if opt is None else int(opt))
+                    return {}
+                if self.path == "/remind":
+                    return social.add_reminder(conn, me, body.get("text"), body.get("minutes"))
+            except social.SocialFail as f:
+                raise Fail(f.status, f.message)
+        return {}
+
     def log_message(self, fmt, *args):
         # Request line only (no bodies/passwords); never print the SSE token,
         # and skip the chatty typing pings unless they fail.
@@ -661,8 +739,24 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[register] {self.client_address[0]} {line}", flush=True)
 
 
+def reminder_loop():
+    """Deliver due reminders to people who have a09f open; the rest get them
+    from /reminders/due when they sign in."""
+    while True:
+        time.sleep(10)
+        try:
+            with db() as conn:
+                due = [r for r in social.due_reminders(conn) if social.is_listening(r["user"])]
+                for r in due:
+                    social.push(r["user"], "reminder", r)
+                social.mark_delivered(conn, [r["id"] for r in due])
+        except Exception as e:
+            print(f"[register] reminder loop: {e!r}", flush=True)
+
+
 if __name__ == "__main__":
     db().close()
+    threading.Thread(target=reminder_loop, daemon=True).start()
     print(f"[register] listening on :{LISTEN_PORT}, network {NETWORK_NAME} -> {UPSTREAM_ADDR}, "
           f"smtp {SMTP_HOST or 'NOT CONFIGURED'}:{SMTP_PORT}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), Handler).serve_forever()

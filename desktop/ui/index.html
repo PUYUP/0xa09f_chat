@@ -129,8 +129,9 @@
   .fgroup::before { content: "▾"; font-size: 9px; }
   .fgroup.collapsed::before { content: "▸"; }
   .fgroup .fcount { font-weight: normal; color: var(--dim); }
-  .fgroup .more, .friend .more { margin-left: auto; visibility: hidden; padding: 0 4px; color: var(--dim); font-weight: bold; }
-  .fgroup:hover .more, .friend:hover .more { visibility: visible; }
+  .fgroup .more, .friend .more { margin-left: auto; padding: 0 5px; color: #b9b2a0; font-weight: bold; cursor: pointer; border-radius: 3px; }
+  .fgroup:hover .more, .friend:hover .more { color: var(--dim); }
+  .friend .more:hover, .fgroup .more:hover { background: #e8dcfa; }
   .friend .more:hover, .fgroup .more:hover { color: var(--purple-d); }
   .friend.pending .label { font-weight: normal; color: #999; font-style: italic; }
   .friend.st-pending::before { background: #fff !important; border: 1px dashed #aaa; }
@@ -220,11 +221,39 @@
   #anText { font: inherit; font-size: 13px; padding: 5px 6px; border: 1px solid #7f9db9; resize: vertical; user-select: text; }
   #onlineCount { margin-left: 10px; font-size: 11px; opacity: .85; }
   .msg { position: relative; }
-  .msg .del { visibility: hidden; margin-left: 8px; font-size: 11px; cursor: pointer; color: var(--dim); }
-  .msg:hover .del { visibility: visible; }
-  .msg .del[data-armed="1"] { visibility: visible; color: var(--error); font-weight: bold; }
   .msg.deleted .txt { color: #999; font-style: italic; }
   #fmtbar #fmtAction { font-size: 11px; color: var(--purple-d); }
+  /* message tools, reactions, replies, pins, polls */
+  .msg .mtools { display: none; position: absolute; right: 6px; top: -10px; background: #fff; border: 1px solid #d6d0bd;
+    border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,.15); padding: 0 2px; z-index: 2; }
+  .msg:hover .mtools, .msg .mtools:has(.armed) { display: flex; }
+  .mtools span { padding: 1px 5px; cursor: pointer; font-size: 12px; border-radius: 3px; }
+  .mtools span:hover { background: #fff3c4; }
+  .mtools span.armed { color: var(--error); font-weight: bold; }
+  .reactions { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 2px 64px; }
+  .rchip { font-size: 11px; padding: 0 6px; border: 1px solid #d6d0bd; border-radius: 10px; background: #faf8f2; cursor: pointer; }
+  .rchip.mine { border-color: var(--purple); background: #efe6fb; }
+  .rchip:hover { background: #fff3c4; }
+  .quote { display: block; margin: 2px 0 2px; padding: 1px 6px; border-left: 3px solid #c8b8e4; background: #f7f3fc;
+    color: #555; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 520px; }
+  .edited { color: #999; font-size: 10px; }
+  #composerBar { display: flex; align-items: center; gap: 8px; padding: 3px 10px; background: #f3edfb; border-top: 1px solid #ddd0f0;
+    font-size: 11px; color: #4a3a66; }
+  #composerBarText { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #composerBarX { cursor: pointer; font-weight: bold; color: var(--dim); }
+  #pinBar { background: #f6f2fb; border-bottom: 1px solid #ddd0f0; padding: 3px 10px; font-size: 11px; }
+  .pin { display: flex; gap: 4px; align-items: baseline; padding: 1px 0; }
+  .pin span:not(.pin-x) { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pin-x { cursor: pointer; color: var(--dim); font-weight: bold; }
+  .poll { margin: 4px 0 4px 64px; max-width: 380px; border: 1px solid #d6d0bd; border-radius: 6px; padding: 6px 8px; background: #fffdf6; }
+  .poll-q { font-weight: bold; margin-bottom: 4px; }
+  .poll-opt { position: relative; display: flex; justify-content: space-between; padding: 3px 6px; margin: 3px 0;
+    border: 1px solid #e2dccb; border-radius: 4px; cursor: pointer; overflow: hidden; }
+  .poll-opt:hover { border-color: var(--purple); }
+  .poll-opt.mine { border-color: var(--purple); font-weight: bold; }
+  .poll-bar { position: absolute; left: 0; top: 0; bottom: 0; background: #ece2fa; z-index: 0; }
+  .poll-label, .poll-n { position: relative; z-index: 1; }
+  .poll-foot { font-size: 10px; color: var(--dim); margin-top: 2px; }
   /* @mentions */
   .mention { color: var(--purple); font-weight: bold; }
   .mention.me { background: #ffe58a; color: #5a3d00; border-radius: 3px; padding: 0 2px; }
@@ -691,6 +720,7 @@
       <div class="ann-body"><span id="annText"></span> <span id="annMeta" class="ann-meta"></span></div>
       <span id="annClose" class="ann-x" title="Dismiss">✕</span>
     </div>
+    <div id="pinBar" style="display:none"></div>
     <div id="log"></div>
     <div id="typing"></div>
     <div id="fmtbar">
@@ -709,6 +739,7 @@
       <button id="fmtColor" class="fmt-color" title="Text color"></button>
       <button id="btnBuzz" class="buzz-btn" disabled>BUZZ!</button>
     </div>
+    <div id="composerBar" style="display:none"><span id="composerBarText"></span><span id="composerBarX" title="Cancel">✕</span></div>
     <div id="mentionBox"></div>
     <div id="composer">
       <input type="text" id="input" placeholder="Type your message here…">
