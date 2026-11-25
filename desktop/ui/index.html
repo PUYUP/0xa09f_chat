@@ -279,7 +279,11 @@
   }
 
   .pane-title .topic { font-weight: normal; opacity: .9; }
-  #chatTitle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #chatTitle { display: flex; align-items: center; gap: 6px; white-space: nowrap; container-type: inline-size; }
+  #chatTitle .title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #chatTitle .title-btns { flex: none; display: flex; gap: 4px; }
+  #chatTitle .title-btn { margin-left: 0; }
+  @container (max-width: 560px) { #chatTitle .title-btn .lbl { display: none; } }
   .title-btn { padding: 0 6px; font-size: 11px; font-weight: normal; margin-left: 6px; vertical-align: middle; }
   #topicInput { width: 55%; font-size: 12px; padding: 1px 4px; }
 

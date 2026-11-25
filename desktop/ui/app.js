@@ -565,6 +565,26 @@ function renderUsers() {
   }
 }
 
+/* Title bar: the name/topic may be cut short ("…"), the buttons never are.
+ * Each button becomes icon + label; the label hides when the pane is narrow. */
+function layoutTitle() {
+  const t = $("chatTitle");
+  const btns = [...t.querySelectorAll(".title-btn")];
+  if (!btns.length || t.querySelector(".title-btns")) return;
+  const box = document.createElement("span");
+  box.className = "title-btns";
+  for (const b of btns) {
+    const [, icon, label] = b.textContent.match(/^(\S+)\s+(.*)$/) || [null, b.textContent, ""];
+    b.title ||= label;
+    b.innerHTML = `${icon}<span class="lbl"> ${esc(label)}</span>`;
+    box.appendChild(b);
+  }
+  const text = document.createElement("span");
+  text.className = "title-text";
+  while (t.firstChild) text.appendChild(t.firstChild);
+  t.append(text, box);
+}
+
 function refreshSide() {
   renderLists(); renderUsers();
   const c = S.current && conv(S.current);
@@ -596,6 +616,7 @@ function refreshSide() {
     $("chatTitle").insertAdjacentHTML("beforeend", ` <button id="btnSearchConv" class="title-btn" title="Search messages">🔍 Search</button>`);
     $("btnSearchConv").onclick = openSearch;
   }
+  layoutTitle();
   $("input").placeholder = c?.kind === "pm" ? `Message ${c.name}…` : "Type your message here…";
   $("btnBuzz").disabled = c?.kind !== "pm";
   $("btnBuzz").title = c?.kind === "pm" ? `BUZZ! ${c.name}` : "Open a private chat to BUZZ someone";
