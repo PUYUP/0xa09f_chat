@@ -686,6 +686,7 @@ function onNumeric(num, params, trailing) {
       doDisconnect("Wrong ID or password. Please try again.", true);
       return;
   }
+  if (num === 401 && params[1]) { sysError(`There's no a09f user with the ID "${params[1]}".`); return; }
   if (num === 473 && isConference(params[1])) { sysError("You need a new invite to join this conference."); return; }
   if (num === 482 && isConference(params[1])) { sysError("Only the person who started the conference can invite people."); return; }
   if (ROOM_ERRORS[num]) sysError(ROOM_ERRORS[num]);
@@ -1496,12 +1497,12 @@ function closeConfDialog() { $("confDialog").style.display = "none"; S.confFor =
 
 function doConference() {
   const picked = [...$("cfFriends").querySelectorAll("input:checked")].map((i) => i.value);
-  const other = $("cfOther").value.trim();
-  if (other) {
-    if (!/^[a-z][a-z0-9_-]{2,15}$/i.test(other)) return showMsg("cfMsg", "That doesn't look like an a09f ID.", "error");
-    if (keyOf(other) === keyOf(S.me)) return showMsg("cfMsg", "That's you! Pick someone else.", "error");
-    if (!picked.some((p) => keyOf(p) === keyOf(other))) picked.push(other);
-  }
+  // Several IDs may be typed at once: "carol, dave eve"
+  const others = $("cfOther").value.split(/[\s,;]+/).filter(Boolean);
+  const bad = others.filter((o) => !/^[a-z][a-z0-9_-]{2,15}$/i.test(o));
+  if (bad.length) return showMsg("cfMsg", `"${bad[0]}" doesn't look like an a09f ID.`, "error");
+  if (others.some((o) => keyOf(o) === keyOf(S.me))) return showMsg("cfMsg", "You don't need to invite yourself!", "error");
+  for (const o of others) if (!picked.some((p) => keyOf(p) === keyOf(o))) picked.push(o);
   if (!picked.length) return showMsg("cfMsg", "Pick at least one person to invite.", "error");
   const room = S.confFor;
   closeConfDialog();
