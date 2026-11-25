@@ -47,7 +47,9 @@ HOST = args[0] if len(args) > 0 else "127.0.0.1"
 PORT = int(args[1]) if len(args) > 1 else (16697 if USE_TLS else 16667)
 
 BOUNCER_USER = ENV.get("SOJU_USER", "pointilis")
-BOUNCER_PASS = ENV.get("SOJU_PASSWORD", "change-me")
+BOUNCER_PASS = ENV.get("SOJU_PASSWORD")
+if not BOUNCER_PASS:
+    sys.exit("SOJU_PASSWORD is not set (put it in server/.env)")
 NETWORK = ENV.get("SOJU_NETWORK", "solanum")
 # Unique channel per run: soju replays stored channel history to new
 # clients, and replaying a busy channel can stall the session.
