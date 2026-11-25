@@ -269,6 +269,8 @@
   .st-offline::before { background: #c4c4c4 !important; border-color: #8a8a8a !important; }
   .st-unknown::before { background: #eee !important; border-color: #bbb !important; }
   .status-box { display: flex; align-items: center; gap: 4px; }
+  .header-status { margin-left: auto; }
+  body.offline .header-status { display: none; }
   .status-box select { font: inherit; padding: 2px; border: 1px solid #7f9db9; background: #fff; }
   #statusText { width: 170px; }
   #dot.on.st-busy { background: #e0393e; }
@@ -354,6 +356,20 @@
   <span class="brand">a09f</span>
   <span id="dot" title="Offline"></span>
   <span id="who"></span>
+  <div class="status-box header-status" title="Your status — what your friends see">
+    <select id="statusSel">
+      <option value="available">🟢 Available</option>
+      <option value="busy">⛔ Busy</option>
+      <option value="brb">🕐 Be Right Back</option>
+      <option value="stepped">🚶 Stepped Out</option>
+      <option value="custom">✏️ Custom message…</option>
+      <option value="invisible">👻 Invisible</option>
+    </select>
+    <span id="statusCustom" style="display:none">
+      <input type="text" id="statusText" maxlength="80" placeholder="What are you up to?">
+      <button id="btnStatusSet">Set</button>
+    </span>
+  </div>
 </header>
 
 <div id="signin" data-screen="signin">
@@ -419,21 +435,6 @@
 <div id="ctxMenu"></div>
 
 <div id="toolbar">
-  <div class="status-box" title="Your status — what your friends see">
-    <select id="statusSel">
-      <option value="available">🟢 Available</option>
-      <option value="busy">⛔ Busy</option>
-      <option value="brb">🕐 Be Right Back</option>
-      <option value="stepped">🚶 Stepped Out</option>
-      <option value="custom">✏️ Custom message…</option>
-      <option value="invisible">👻 Invisible</option>
-    </select>
-    <span id="statusCustom" style="display:none">
-      <input type="text" id="statusText" maxlength="80" placeholder="What are you up to?">
-      <button id="btnStatusSet">Set</button>
-    </span>
-  </div>
-  <span class="sep"></span>
   <button class="tool" id="btnAddFriend" title="Add a friend"><span class="ico">👥</span><span>Add Friend</span></button>
   <button class="tool" id="btnRooms" title="Browse all chat rooms"><span class="ico">🔍</span><span>Rooms</span></button>
   <button class="tool" id="btnConference" title="Start a private group chat with friends"><span class="ico">🗣️</span><span>Conference</span></button>
