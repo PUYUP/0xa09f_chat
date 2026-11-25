@@ -35,10 +35,15 @@ API (errors: 4xx/5xx {"ok": false, "error": "<human readable>"})
   POST /friends/move    {"nick","group"}
   POST /friends/rename-group {"from","to"}
   POST /typing          {"to","active"}
+  POST /read            {"to","time"}          "Seen" receipt for a private chat
+  POST /profile/updated                        tell friends (and my devices) to reload my profile
+  POST /session/revoke-others                  after a password change: sign out my other devices
   GET  /prefs  /  POST /prefs {"ignore":[ids],"friendsOnly":bool}
   GET  /users/search?q= -> {"users": [ids]} (substring match on IDs)
   GET  /events?token=   Server-Sent Events: friend-request, friend-accepted,
-                        friend-declined, typing
+                        friend-declined, friend-removed, friend-request-cancelled,
+                        typing, read, profile-updated, friends-changed and
+                        prefs-changed (my other devices), signed-out
 """
 
 import base64
@@ -333,6 +338,8 @@ def reset_confirm(username, code, password):
             raise bad
         conn.execute("DELETE FROM resets WHERE username = ?", (username,))
     set_password(username, password)
+    social.end_user_sessions(username)
+    social.push(username, "signed-out", {"except": "", "reason": "password"})
 
 
 def set_password(username, password):
@@ -429,7 +436,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # Signed-in calls (bearer token): not counted against the per-IP limit.
     SOCIAL = {"/friends/request", "/friends/respond", "/friends/remove", "/friends/move",
-              "/friends/rename-group", "/typing", "/session/end", "/prefs"}
+              "/friends/rename-group", "/typing", "/session/end", "/prefs", "/read",
+              "/profile/updated", "/session/revoke-others"}
 
     def do_POST(self):
         if self.path in self.SOCIAL:
@@ -493,7 +501,8 @@ class Handler(BaseHTTPRequestHandler):
     def _session(self, ip, username, body):
         if not USERNAME_RE.match(username) or not check_login(username, str(body.get("password", ""))):
             raise Fail(403, "Your password isn't right.")
-        self._json(200, {"ok": True, "token": social.new_session(username)})
+        token = social.new_session(username)
+        self._json(200, {"ok": True, "token": token, "sid": social.sid_of(token)})
 
     def _read_body(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -510,8 +519,28 @@ class Handler(BaseHTTPRequestHandler):
     def _social_post(self):
         try:
             me = self._token_user()
+            auth = self.headers.get("Authorization", "")
+            token = auth[7:] if auth.startswith("Bearer ") else ""
+            sid = social.sid_of(token)
             body = self._read_body()
             nick = lambda k: str(body.get(k, "")).strip().lower()
+            if self.path == "/read":
+                to = nick("to")
+                if USERNAME_RE.match(to) and to != me:
+                    social.push(to, "read", {"from": me, "time": int(body.get("time") or 0)})
+                self._json(200, {"ok": True})
+                return
+            if self.path == "/profile/updated":
+                with db() as conn:
+                    social.push_friends(conn, me, "profile-updated", {"nick": me})
+                social.push(me, "profile-updated", {"nick": me, "sid": sid})
+                self._json(200, {"ok": True})
+                return
+            if self.path == "/session/revoke-others":
+                social.end_user_sessions(me, keep_token=token)
+                social.push(me, "signed-out", {"except": sid, "reason": "password"})
+                self._json(200, {"ok": True})
+                return
             if self.path == "/typing":
                 to = nick("to")
                 if USERNAME_RE.match(to) and to != me:
@@ -529,6 +558,7 @@ class Handler(BaseHTTPRequestHandler):
                         prefs = social.set_prefs(conn, me, body, lambda u: bool(USERNAME_RE.match(u)))
                     except social.SocialFail as f:
                         raise Fail(f.status, f.message)
+                social.push(me, "prefs-changed", {"sid": sid})
                 self._json(200, {"ok": True, **prefs})
                 return
             with db() as conn:
@@ -552,6 +582,7 @@ class Handler(BaseHTTPRequestHandler):
                         result = "ok"
                 except social.SocialFail as f:
                     raise Fail(f.status, f.message)
+                social.push(me, "friends-changed", {"sid": sid})      # my other devices
                 self._json(200, {"ok": True, "result": result, **social.friends_state(conn, me)})
         except Fail as f:
             self._json(f.status, {"ok": False, "error": f.message})

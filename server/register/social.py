@@ -11,6 +11,7 @@ returns a bearer token, kept in memory only: after a restart the app simply
 signs in again. Live events go out over Server-Sent Events (GET /events).
 """
 
+import hashlib
 import json
 import queue
 import secrets
@@ -66,6 +67,23 @@ def session_user(token):
 def end_session(token):
     with _mu:
         _sessions.pop(token, None)
+
+
+def sid_of(token):
+    """Short public id of a session: lets a device recognise its own events."""
+    return hashlib.sha256((token or "").encode()).hexdigest()[:12]
+
+
+def end_user_sessions(username, keep_token=None):
+    with _mu:
+        for t, (u, _) in list(_sessions.items()):
+            if u == username and t != keep_token:
+                del _sessions[t]
+
+
+def push_friends(conn, me, event, data):
+    for (f,) in conn.execute("SELECT friend FROM friends WHERE owner = ?", (me,)):
+        push(f, event, data)
 
 
 # ---------- live events ----------

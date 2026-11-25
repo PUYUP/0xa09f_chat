@@ -105,6 +105,13 @@ server/protokol di layar.
 - **Start a09f when my computer starts** (`tauri-plugin-autostart`): dimulai
   tersembunyi di tray dengan argumen `--autostart`; kombinasikan dengan
   auto sign-in
+- **Serba live (SSE dari service akun)**: hapus teman berlaku dua arah dan
+  langsung hilang di sisi teman; perubahan teman/grup/ignore/"only friends" di
+  satu perangkat langsung tampil di perangkatmu yang lain; profil yang
+  disimpan memperbarui dialog profil yang sedang dibuka teman; status di
+  dialog profil ikut berubah; **✓ Seen** di private chat saat pesanmu sudah
+  dibaca (dikirim saat jendela fokus); ganti password (di app) atau reset
+  password mengeluarkan perangkat lain dan meminta sign in ulang
 - **@mention**: ketik `@` di room → daftar anggota (↑/↓, Tab/Enter, atau
   klik). `@nama` tampil tebal ungu; pesan yang menyebut namamu disorot kuning,
   berbunyi + notifikasi, dan room-nya mendapat badge **@** oranye sampai dibaca

@@ -228,6 +228,12 @@ function recountUnread(c) {
 function markRead(c) {
   const latest = c.msgs.reduce((t, m) => (m.others || m.cls === "me" ? Math.max(t, m.time) : t), 0);
   c.unread = 0; c.mentions = 0;
+  // "Seen" for the other person, once per new message of theirs we've now seen.
+  const theirs = c.kind === "pm" ? c.msgs.reduce((t, m) => (m.others ? Math.max(t, m.time) : t), 0) : 0;
+  if (theirs && S.token && theirs > (c.seenSent || 0) && S.focused) {
+    c.seenSent = latest;
+    socialApi("/read", { to: c.name, time: latest }).catch(() => {});
+  }
   if (latest && (c.readAt == null || latest > c.readAt)) {
     c.readAt = latest;
     if (has("draft/read-marker") && c.kind !== "status") {
@@ -404,8 +410,10 @@ function renderMsg(m) {
   }
   div.innerHTML = `<span class="time">${esc(fmtTime(m.time))}</span>` +
     `<span class="who">${esc(m.who)}:</span> <span class="txt">${txt}</span>`;
+  logEl.querySelector(".seen")?.remove();
   logEl.appendChild(div);
   logEl.scrollTop = logEl.scrollHeight;
+  if (!m.others && m.cls.includes("me")) renderSeen();
 }
 
 function renderLog() {
@@ -414,6 +422,7 @@ function renderLog() {
   const older = olderLink(c);
   if (older) logEl.appendChild(older);
   for (const m of c?.msgs || []) if (!(m.others && isIgnored(m.who))) renderMsg(m);
+  renderSeen();
 }
 
 function switchTo(key) {
@@ -905,7 +914,7 @@ function presenceChanged(nick, before) {
 function schedulePresenceRender() {
   if (S.renderQueued) return;
   S.renderQueued = true;
-  requestAnimationFrame(() => { S.renderQueued = false; renderLists(); renderUsers(); renderFind(); });
+  requestAnimationFrame(() => { S.renderQueued = false; renderLists(); renderUsers(); renderFind(); refreshProfileStatus(); });
 }
 
 /* "STATUS <code> [text]" posted in PRESENCE_ROOM. Newest line wins. */
@@ -1036,6 +1045,7 @@ async function openSession() {
   const { ok, data } = await accountApi("/session", { username: S.account, password: S.pw });
   if (!ok) throw new Error(data.error || "Couldn't reach your friends list.");
   S.token = data.token;
+  S.sid = data.sid;
   return S.token;
 }
 
@@ -1094,6 +1104,16 @@ function openEvents() {
     sys(`${d.nick} is no longer on your Friends list.`, "system");
   });
   on("friend-request-cancelled", () => refreshFriends());
+  // My other devices changed something: follow along quietly.
+  on("friends-changed", (d) => { if (d.sid !== S.sid) refreshFriends(); });
+  on("prefs-changed", (d) => { if (d.sid !== S.sid) loadPrefs().then(renderPrivacy); });
+  on("profile-updated", (d) => onProfileUpdated(d.nick, d.sid));
+  on("read", (d) => onSeen(d.from, d.time));
+  on("signed-out", (d) => {
+    if (d.except === S.sid || S.phase !== "online") return;
+    forgetSavedPassword();
+    doDisconnect("Your password was changed, so you were signed out here. Please sign in with the new password.", true);
+  });
   on("typing", (d) => onTyping(d.from, d.active));
   // EventSource reconnects by itself; a dead token (service restarted) shows
   // up as a closed stream: get a new session and listen again.
@@ -1766,6 +1786,7 @@ function pwDone() {
   $("pwDialog").style.display = "none";
   sys("Your password was changed. Use the new one next time you sign in.", "status");
   if ($("optRemember").checked) invoke("cred_save", { account: S.account, password: S.pw }).catch(() => {});
+  socialApi("/session/revoke-others", {}).catch(() => {});     // other devices must sign in again
 }
 
 function pwFail(message) {
@@ -2052,6 +2073,7 @@ function profileSaveDone(ok) {
   S.myProfile = ps.next;
   closeProfile();
   sys("Your profile was saved.", "status");
+  socialApi("/profile/updated", {}).catch(() => {});
 }
 
 function profileButton(nick) {
@@ -2433,6 +2455,46 @@ function onSearchBatch(lines) {
 
 function escapeTag(v) {
   return v.replace(/\\/g, "\\\\").replace(/;/g, "\\:").replace(/ /g, "\\s").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+}
+
+/* ---------- live updates: "Seen", profile changes ---------- */
+
+/* They read our private chat up to `time` (ms). */
+function onSeen(from, time) {
+  const c = conv(keyOf(from));
+  if (c?.kind !== "pm") return;
+  c.seenAt = Math.max(c.seenAt || 0, time);
+  if (keyOf(c.name) === S.current) renderSeen();
+}
+
+/* "✓ Seen" under my last message, when it's the newest and they've read it. */
+function renderSeen() {
+  logEl.querySelector(".seen")?.remove();
+  const c = S.current && conv(S.current);
+  if (c?.kind !== "pm" || !c.seenAt) return;
+  const last = c.msgs.filter((m) => m.others || m.cls.includes("me")).at(-1);
+  if (!last || last.others || last.time > c.seenAt) return;
+  const d = document.createElement("div");
+  d.className = "seen";
+  d.textContent = `✓ Seen ${fmtTime(c.seenAt)}`;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+/* Someone (or I, on another device) saved a profile: refresh what's open. */
+function onProfileUpdated(nick, sid) {
+  if ($("profileDialog").style.display === "none" || keyOf(S.profileNick) !== keyOf(nick)) return;
+  const mine = keyOf(nick) === keyOf(S.me);
+  if (mine && (sid === S.sid || S.profileSave)) return;      // our own save, or mid-edit save
+  requestInfo(nick, (info) => showProfile(nick, info));
+}
+
+/* Status shown in an open profile follows presence changes. */
+function refreshProfileStatus() {
+  if ($("profileDialog").style.display === "none" || !S.profileNick) return;
+  const st = statusOf(S.profileNick);
+  $("pfStatus").textContent = st.state === "unknown" ? "" : st.label;
+  $("pfDot").className = `pf-dot st-${st.state}`;
 }
 
 /* ---------- @mentions ---------- */
