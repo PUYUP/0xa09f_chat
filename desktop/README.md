@@ -134,6 +134,19 @@ server/protokol di layar.
   Stepped Out / custom-away / Offline → baris "Auto-reply" sekali per status
 - Room baru hanya didaftarkan ke ChanServ oleh perangkat yang benar-benar
   mengirim JOIN (soju juga meneruskan JOIN dari perangkatmu yang lain)
+- **/me**: ketik `/me waves` atau tombol ✨ /me → pesan aksi `* alice waves`
+- **Hapus pesan sendiri**: arahkan kursor ke pesanmu → 🗑 → "Delete?" → pesan
+  jadi "🚫 This message was deleted" di semua app, termasuk history. soju
+  tidak memberi msgid (REDACT tidak bisa), jadi pesan dikenali dari pengirim +
+  tujuan + waktu server (solanum memberi waktu sama ke semua salinan) + hash
+  teks; daftarnya disimpan service akun 30 hari (`/redact`, `/redactions`).
+  Catatan: client IRC lain tetap melihat pesannya
+- **Pengumuman admin** (📢 Announce, hanya ID di `ADMIN_USERS`): banner kuning
+  di atas percakapan semua app, live + untuk yang sign in dalam 7 hari;
+  ditutup dengan ✕ (diingat per akun)
+- **Jumlah online** di header: orang yang sedang membuka app a09f (koneksi
+  live ke service akun) — LUSERS tidak berguna karena soju membuat semua akun
+  selalu terhubung
 - **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
   mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
   **Only my friends can send me private messages** = user mode `+g` solanum +

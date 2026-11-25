@@ -37,6 +37,11 @@ class SocialFail(Exception):
 def init_schema(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS friends (owner TEXT NOT NULL, friend TEXT NOT NULL, "
                  "grp TEXT NOT NULL, added INTEGER NOT NULL, PRIMARY KEY (owner, friend))")
+    conn.execute("CREATE TABLE IF NOT EXISTS redactions (sender TEXT NOT NULL, target TEXT NOT NULL, "
+                 "time INTEGER NOT NULL, hash TEXT NOT NULL, created INTEGER NOT NULL, "
+                 "PRIMARY KEY (sender, target, time, hash))")
+    conn.execute("CREATE TABLE IF NOT EXISTS announcements (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                 "author TEXT NOT NULL, text TEXT NOT NULL, created INTEGER NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS prefs (owner TEXT PRIMARY KEY, data TEXT NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS friend_requests (from_user TEXT NOT NULL, to_user TEXT NOT NULL, "
                  "grp TEXT NOT NULL, msg TEXT NOT NULL, created INTEGER NOT NULL, "
@@ -92,6 +97,7 @@ def subscribe(username):
     q = queue.Queue(maxsize=200)
     with _mu:
         _listeners.setdefault(username, set()).add(q)
+    online_changed()
     return q
 
 
@@ -102,6 +108,40 @@ def unsubscribe(username, q):
             qs.discard(q)
             if not qs:
                 del _listeners[username]
+    online_changed()
+
+
+def online_count():
+    with _mu:
+        return len(_listeners)
+
+
+def push_all(event, data):
+    with _mu:
+        users = list(_listeners)
+    for u in users:
+        push(u, event, data)
+
+
+_online_timer = None
+
+
+def online_changed():
+    """Tell everyone how many people have a09f open (debounced)."""
+    global _online_timer
+    with _mu:
+        if _online_timer:
+            return
+        _online_timer = threading.Timer(2.0, _send_online)
+        _online_timer.daemon = True
+        _online_timer.start()
+
+
+def _send_online():
+    global _online_timer
+    with _mu:
+        _online_timer = None
+    push_all("online", {"count": online_count()})
 
 
 def push(username, event, data):
@@ -275,3 +315,42 @@ def search_users(all_users, me, q, limit=20):
     hits = [u for u in all_users if q in u and u != me]
     hits.sort(key=lambda u: (not u.startswith(q), len(u), u))
     return hits[:limit]
+
+
+# ---------- deleted messages ----------
+
+MAX_REDACT_AGE = 30 * 24 * 3600
+
+
+def redact(conn, me, target, msg_time, text_hash):
+    """Remember that `me` deleted their message (target, time, hash). Returns
+    the people to tell: the other person of a private chat, or everyone for
+    a room (the service doesn't know who's in it)."""
+    conn.execute("INSERT OR IGNORE INTO redactions (sender, target, time, hash, created) VALUES (?, ?, ?, ?, ?)",
+                 (me, target, int(msg_time), text_hash, int(time.time())))
+    conn.execute("DELETE FROM redactions WHERE created < ?", (int(time.time()) - MAX_REDACT_AGE,))
+
+
+def redactions_since(conn, since):
+    rows = conn.execute("SELECT sender, target, time, hash FROM redactions WHERE created >= ? ORDER BY created",
+                        (int(since),))
+    return [{"sender": a, "target": b, "time": c, "hash": d} for a, b, c, d in rows]
+
+
+# ---------- announcements (admins) ----------
+
+def announce(conn, me, text):
+    text = " ".join(str(text or "").split())[:500]
+    if not text:
+        raise SocialFail(400, "Please write the announcement first.")
+    cur = conn.execute("INSERT INTO announcements (author, text, created) VALUES (?, ?, ?)",
+                       (me, text, int(time.time())))
+    item = {"id": cur.lastrowid, "author": me, "text": text, "created": int(time.time())}
+    push_all("announcement", item)
+    return item
+
+
+def announcements_since(conn, after_id, max_age=7 * 24 * 3600):
+    rows = conn.execute("SELECT id, author, text, created FROM announcements WHERE id > ? AND created >= ? "
+                        "ORDER BY id DESC LIMIT 5", (int(after_id), int(time.time()) - max_age))
+    return [{"id": i, "author": a, "text": t, "created": c} for i, a, t, c in rows][::-1]

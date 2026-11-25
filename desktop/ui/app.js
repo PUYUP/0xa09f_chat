@@ -59,6 +59,8 @@ const S = {
   typing: new Map(),      // nick key -> hide timer, while they're typing to me
   prefs: { ignore: [], friendsOnly: false },   // privacy settings (account service)
   callerId: null,         // our +g state: null = unknown (fresh sign-in)
+  redactions: new Set(),  // deleted messages (see isRedacted)
+  admin: false,           // may send announcements
   style: { b: false, i: false, u: false, color: null },   // text style for what I send
   presence: new Map(),    // nick key -> {away: bool|null, online: bool|null, exists: bool|null}
   statuses: new Map(),    // nick key -> {code, text, time} from PRESENCE_ROOM
@@ -397,6 +399,8 @@ function syncStatusUi() {
 function renderMsg(m) {
   const div = document.createElement("div");
   div.className = `msg ${m.cls}`;
+  const cur = S.current && conv(S.current);
+  const deleted = cur && isRedacted(cur, m);
   let txt = m.buzz ? "BUZZ!!!" : emote(formatIrc(esc(m.txt)));
   if (m.invite) {
     const inRoom = conv(keyOf(m.invite))?.kind === "room";
@@ -413,8 +417,22 @@ function renderMsg(m) {
   if (m.others && !m.cls.includes("service") && S.current && isChannel(S.current) && mentionsMe(stripIrc(m.txt))) {
     div.classList.add("mention-me");
   }
+  if (deleted) { txt = "🚫 This message was deleted"; div.classList.add("deleted"); }
   div.innerHTML = `<span class="time">${esc(fmtTime(m.time))}</span>` +
     `<span class="who">${esc(m.who)}:</span> <span class="txt">${txt}</span>`;
+  // Your own messages can be deleted for everyone (click twice).
+  if (!deleted && !m.others && m.cls.includes("me") && !m.buzz && !m.invite && S.token && cur?.kind !== "status") {
+    const del = document.createElement("span");
+    del.className = "del";
+    del.textContent = "🗑";
+    del.title = "Delete this message for everyone";
+    del.onclick = () => {
+      if (del.dataset.armed) { del.textContent = "…"; deleteMessage(m); return; }
+      del.dataset.armed = "1"; del.textContent = "Delete?";
+      setTimeout(() => { if (del.isConnected) { del.dataset.armed = ""; del.textContent = "🗑"; } }, 4000);
+    };
+    div.appendChild(del);
+  }
   logEl.querySelector(".seen")?.remove();
   logEl.appendChild(div);
   logEl.scrollTop = logEl.scrollHeight;
@@ -1071,6 +1089,8 @@ async function openSession() {
   if (!ok) throw new Error(data.error || "Couldn't reach your friends list.");
   S.token = data.token;
   S.sid = data.sid;
+  S.admin = !!data.admin;
+  $("btnAnnounce").style.display = S.admin ? "" : "none";
   return S.token;
 }
 
@@ -1081,6 +1101,7 @@ async function startSocial() {
     applyFriends(await socialApi("/friends"));
     await loadPrefs();
     await migrateLocalFriends();
+    loadRedactions(); loadAnnouncements(); loadStats();
     openEvents();
   } catch (e) {
     if (S.phase !== "online") return;
@@ -1134,6 +1155,9 @@ function openEvents() {
   on("prefs-changed", (d) => { if (d.sid !== S.sid) loadPrefs().then(renderPrivacy); });
   on("profile-updated", (d) => onProfileUpdated(d.nick, d.sid));
   on("read", (d) => onSeen(d.from, d.time));
+  on("redact", onRedact);
+  on("announcement", (a) => showAnnouncement(a, true));
+  on("online", (d) => setOnlineCount(d.count));
   on("signed-out", (d) => {
     if (d.except === S.sid || S.phase !== "online") return;
     forgetSavedPassword();
@@ -3033,6 +3057,114 @@ function autoReply(target) {
   addMsg(target, { who: "Auto-reply", txt: text, cls: "service autoreply" });
 }
 
+/* ---------- deleting your own messages ---------- */
+
+/* soju gives us no msgid to REDACT with, so a message is identified by
+ * sender + where it was sent + server time (solanum stamps every copy with
+ * the same time) + a hash of its text. The account service keeps the list
+ * of deleted messages, so they stay hidden in everyone's history too. */
+function msgHash(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36);
+}
+
+/* Where a message was sent, as the sender saw it: the room, or the person. */
+function msgTarget(c, m) {
+  if (c.kind === "room") return keyOf(c.name);
+  return keyOf(m.others ? S.me : c.name);
+}
+
+const redactKey = (sender, target, time, hash) => `${keyOf(sender)}|${keyOf(target)}|${time}|${hash}`;
+
+function isRedacted(c, m) {
+  if (!S.redactions?.size || !m.time || m.cls.includes("service")) return false;
+  return S.redactions.has(redactKey(m.who, msgTarget(c, m), m.time, msgHash(m.rawTxt ?? m.txt)));
+}
+
+async function loadRedactions() {
+  try {
+    const since = Math.floor(Date.now() / 1000) - 30 * 24 * 3600;
+    const { redactions } = await socialApi(`/redactions?since=${since}`);
+    for (const r of redactions) S.redactions.add(redactKey(r.sender, r.target, r.time, r.hash));
+    renderLog();
+  } catch { /* not critical */ }
+}
+
+function onRedact(r) {
+  S.redactions.add(redactKey(r.sender, r.target, r.time, r.hash));
+  renderLog();
+}
+
+async function deleteMessage(m) {
+  const c = S.current && conv(S.current);
+  if (!c || m.others) return;
+  try {
+    await socialApi("/redact", { target: msgTarget(c, m), time: m.time, hash: msgHash(m.rawTxt ?? m.txt) });
+  } catch (e) { sys(e.message, "error"); }
+}
+
+/* ---------- announcements from a09f admins ---------- */
+
+const annSeenKey = () => `a09f.annSeen.${S.account}`;
+
+async function loadAnnouncements() {
+  try {
+    const after = +localStorage.getItem(annSeenKey()) || 0;
+    const { announcements } = await socialApi(`/announcements?after=${after}`);
+    if (announcements.length) showAnnouncement(announcements.at(-1));
+  } catch { /* not critical */ }
+}
+
+function showAnnouncement(a, live = false) {
+  S.announcement = a;
+  $("annText").innerHTML = emote(esc(a.text));
+  $("annMeta").textContent = `— ${a.author}, ${new Date(a.created * 1000).toLocaleString()}`;
+  $("annBar").style.display = "";
+  if (live) {
+    Sound.play("buzz");
+    notify("📢 a09f announcement", a.text, null);
+  }
+}
+
+function dismissAnnouncement() {
+  if (S.announcement) localStorage.setItem(annSeenKey(), String(S.announcement.id));
+  $("annBar").style.display = "none";
+  S.announcement = null;
+}
+
+function openAnnounce() {
+  $("annDialog").style.display = "";
+  $("anText").value = "";
+  showMsg("anMsg", "");
+  $("anText").focus();
+}
+function closeAnnounce() { $("annDialog").style.display = "none"; }
+
+async function sendAnnouncement() {
+  const text = $("anText").value.trim();
+  if (!text) { $("anText").focus(); return; }
+  $("anSend").disabled = true;
+  try {
+    await socialApi("/announce", { text });
+    closeAnnounce();
+    sys("Your announcement was sent to everyone.", "system");
+  } catch (e) {
+    showMsg("anMsg", e.message, "error");
+  } finally { $("anSend").disabled = false; }
+}
+
+/* ---------- people online (with a09f open) ---------- */
+
+function setOnlineCount(n) {
+  S.onlineCount = n;
+  $("onlineCount").textContent = n ? `👥 ${n} online` : "";
+}
+
+async function loadStats() {
+  try { setOnlineCount((await socialApi("/stats")).online); } catch {}
+}
+
 /* ---------- actions ---------- */
 
 async function doSignIn() {
@@ -3061,7 +3193,8 @@ function doDisconnect(message = "", isError = false) {
   stopSocial(); S.friendGroups.clear(); S.incoming = []; S.outgoing = [];
   S.prefs = { ignore: [], friendsOnly: false }; S.callerId = null; S.accepted = null; S.blockedTold = null;
   S.findResults = null; S.searching = false;
-  for (const id of ["privacyDialog", "findDialog", "searchDialog", "roomDialog"]) $(id).style.display = "none";
+  for (const id of ["privacyDialog", "findDialog", "searchDialog", "roomDialog", "annDialog", "annBar"]) $(id).style.display = "none";
+  S.redactions.clear(); S.admin = false; S.announcement = null; $("btnAnnounce").style.display = "none"; setOnlineCount(0);
   S.csReq = null; S.csChain = null; S.roomDialogFor = null;
   for (const t of S.typing.values()) clearTimeout(t);
   S.typing.clear(); S.typingTo = null; $("typing").textContent = ""; hideMenu();
@@ -3129,6 +3262,13 @@ function sendChat() {
   $("input").value = "";
   // Power-user shortcuts still work, but nothing on screen relies on them.
   if (text.startsWith("/join ")) { joinOrSwitch(text.slice(6)); return; }
+  if (/^\/me\s+\S/.test(text)) {               // action: "* alice waves"
+    const c = S.current && conv(S.current);
+    if (!c || c.kind === "status") { sys("Join a room first, then say hi!", "tip"); return; }
+    stopTyping();
+    sendTo(c.name, `\x01ACTION ${text.replace(/^\/me\s+/, "")}\x01`);
+    return;
+  }
   if (text.startsWith("/part ")) { send(`PART ${text.slice(6).trim()}`); return; }
   if (text.startsWith("/msg ")) {
     const i = text.indexOf(" ", 5);
@@ -3428,6 +3568,16 @@ $("friendAddGroup").onchange = () => {
 };
 $("input").addEventListener("input", onComposerInput);
 $("btnPrivacy").onclick = openPrivacy;
+$("btnAnnounce").onclick = openAnnounce;
+$("anClose").onclick = closeAnnounce;
+$("anSend").onclick = sendAnnouncement;
+$("annDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closeAnnounce(); });
+$("annClose").onclick = dismissAnnouncement;
+$("fmtAction").onclick = () => {
+  const inp = $("input");
+  if (!inp.value.startsWith("/me ")) inp.value = "/me " + inp.value;
+  inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length);
+};
 $("rdClose").onclick = closeRoomDialog;
 $("roomDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closeRoomDialog(); });
 for (const id of ["rdPrivate", "rdHidden", "rdAnnounce", "rdKey", "rdLimit"]) $(id).addEventListener("input", () => { S.roomFormDirty = true; });

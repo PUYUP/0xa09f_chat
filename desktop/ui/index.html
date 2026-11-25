@@ -211,6 +211,20 @@
   .msg.autoreply .txt { font-style: italic; color: #6b5a33; }
   .msg .knock-btn, .msg .letin-btn, .msg .key-join { margin-left: 6px; padding: 0 8px; font-size: 11px; }
   .msg .key-input { font-size: 11px; padding: 1px 4px; margin-left: 6px; }
+  /* announcements, deleted messages, online count */
+  #annBar { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; background: #fff4c2; border-bottom: 1px solid #e8c95a; }
+  .ann-ico { font-size: 16px; }
+  .ann-body { flex: 1; word-break: break-word; }
+  .ann-meta { color: #8a6d00; font-size: 10px; }
+  .ann-x { cursor: pointer; color: #8a6d00; font-weight: bold; padding: 0 4px; }
+  #anText { font: inherit; font-size: 13px; padding: 5px 6px; border: 1px solid #7f9db9; resize: vertical; user-select: text; }
+  #onlineCount { margin-left: 10px; font-size: 11px; opacity: .85; }
+  .msg { position: relative; }
+  .msg .del { visibility: hidden; margin-left: 8px; font-size: 11px; cursor: pointer; color: var(--dim); }
+  .msg:hover .del { visibility: visible; }
+  .msg .del[data-armed="1"] { visibility: visible; color: var(--error); font-weight: bold; }
+  .msg.deleted .txt { color: #999; font-style: italic; }
+  #fmtbar #fmtAction { font-size: 11px; color: var(--purple-d); }
   /* @mentions */
   .mention { color: var(--purple); font-weight: bold; }
   .mention.me { background: #ffe58a; color: #5a3d00; border-radius: 3px; padding: 0 2px; }
@@ -373,6 +387,7 @@
   <span class="brand">a09f</span>
   <span id="dot" title="Offline"></span>
   <span id="who"></span>
+  <span id="onlineCount" title="People with a09f open right now"></span>
   <div class="status-box header-status" title="Your status — what your friends see">
     <select id="statusSel">
       <option value="available">🟢 Available</option>
@@ -456,6 +471,7 @@
   <button class="tool" id="btnRooms" title="Browse all chat rooms"><span class="ico">🔍</span><span>Rooms</span></button>
   <button class="tool" id="btnConference" title="Start a private group chat with friends"><span class="ico">🗣️</span><span>Conference</span></button>
   <button class="tool" id="btnProfile" title="Edit your profile"><span class="ico">👤</span><span>Profile</span></button>
+  <button class="tool" id="btnAnnounce" style="display:none" title="Send an announcement to everyone"><span class="ico">📢</span><span>Announce</span></button>
   <button class="tool" id="btnPrivacy" title="Who can message you, people you ignore"><span class="ico">🔒</span><span>Privacy</span></button>
   <button class="tool" id="btnPassword" title="Change your password"><span class="ico">🔑</span><span>Password</span></button>
   <span style="flex:1"></span>
@@ -573,6 +589,17 @@
       </div>
     </div>
   </div>
+  <div id="annDialog" class="modal" style="display:none">
+    <div class="pane pf-pane">
+      <div class="pane-title">📢 Announcement to everyone <span class="x" id="anClose" title="Close">✕</span></div>
+      <div class="pw-body">
+        <div class="hint">Shown at the top of every a09f window, including people who sign in later (for 7 days).</div>
+        <textarea id="anText" rows="4" maxlength="500" placeholder="e.g. a09f will restart tonight at 22:00 for a few minutes."></textarea>
+        <button id="anSend" class="rd-btn">Send to Everyone</button>
+        <div id="anMsg" class="form-msg"></div>
+      </div>
+    </div>
+  </div>
   <div id="privacyDialog" class="modal" style="display:none">
     <div class="pane pf-pane">
       <div class="pane-title">Privacy <span class="x" id="pvClose" title="Close">✕</span></div>
@@ -659,6 +686,11 @@
 
   <div id="center" class="pane">
     <div class="pane-title" id="chatTitle">Conversation</div>
+    <div id="annBar" style="display:none">
+      <span class="ann-ico">📢</span>
+      <div class="ann-body"><span id="annText"></span> <span id="annMeta" class="ann-meta"></span></div>
+      <span id="annClose" class="ann-x" title="Dismiss">✕</span>
+    </div>
     <div id="log"></div>
     <div id="typing"></div>
     <div id="fmtbar">
@@ -669,6 +701,7 @@
       <button data-emo=":P" title="tongue">😛</button>
       <button data-emo="<3" title="heart">❤️</button>
       <button id="fmtMore" title="More smileys">➕</button>
+      <button id="fmtAction" title="Action: type what you do, e.g. “waves” → * alice waves">✨ /me</button>
       <span class="fmt-sep"></span>
       <button id="fmtB" class="fmt" title="Bold"><b>B</b></button>
       <button id="fmtI" class="fmt" title="Italic"><i>I</i></button>

@@ -38,6 +38,11 @@ API (errors: 4xx/5xx {"ok": false, "error": "<human readable>"})
   POST /read            {"to","time"}          "Seen" receipt for a private chat
   POST /profile/updated                        tell friends (and my devices) to reload my profile
   POST /session/revoke-others                  after a password change: sign out my other devices
+  POST /redact          {"target","time","hash"}   delete one of my messages for everyone
+  GET  /redactions?since=<unix>
+  POST /announce        {"text"}               admins only (ADMIN_USERS)
+  GET  /announcements?after=<id>
+  GET  /stats                                  {"online": people with a09f open}
   GET  /prefs  /  POST /prefs {"ignore":[ids],"friendsOnly":bool}
   GET  /users/search?q= -> {"users": [ids]} (substring match on IDs)
   GET  /events?token=   Server-Sent Events: friend-request, friend-accepted,
@@ -102,6 +107,7 @@ _attempts = defaultdict(deque)        # ip -> timestamps
 _creates = defaultdict(deque)
 _login_fails = defaultdict(deque)     # "ip|username" -> timestamps of wrong passwords
 MAX_LOGIN_FAILS_PER_HOUR = int(os.environ.get("MAX_LOGIN_FAILS_PER_HOUR", "10"))
+ADMINS = {u.strip().lower() for u in os.environ.get("ADMIN_USERS", "").split(",") if u.strip()}
 
 
 class Fail(Exception):
@@ -419,6 +425,19 @@ class Handler(BaseHTTPRequestHandler):
                 me = self._token_user()
                 with db() as conn:
                     self._json(200, {"ok": True, **social.friends_state(conn, me)})
+            elif url.path == "/stats":
+                self._token_user()
+                self._json(200, {"ok": True, "online": social.online_count()})
+            elif url.path == "/redactions":
+                self._token_user()
+                since = parse_qs(url.query).get("since", ["0"])[0]
+                with db() as conn:
+                    self._json(200, {"ok": True, "redactions": social.redactions_since(conn, int(since or 0))})
+            elif url.path == "/announcements":
+                self._token_user()
+                after = parse_qs(url.query).get("after", ["0"])[0]
+                with db() as conn:
+                    self._json(200, {"ok": True, "announcements": social.announcements_since(conn, int(after or 0))})
             elif url.path == "/prefs":
                 me = self._token_user()
                 with db() as conn:
@@ -439,7 +458,7 @@ class Handler(BaseHTTPRequestHandler):
     # Signed-in calls (bearer token): not counted against the per-IP limit.
     SOCIAL = {"/friends/request", "/friends/respond", "/friends/remove", "/friends/move",
               "/friends/rename-group", "/typing", "/session/end", "/prefs", "/read",
-              "/profile/updated", "/session/revoke-others"}
+              "/profile/updated", "/session/revoke-others", "/redact", "/announce"}
 
     def do_POST(self):
         if self.path in self.SOCIAL:
@@ -515,7 +534,7 @@ class Handler(BaseHTTPRequestHandler):
     def _session(self, ip, username, body):
         self._password_ok(ip, username, str(body.get("password", "")))
         token = social.new_session(username)
-        self._json(200, {"ok": True, "token": token, "sid": social.sid_of(token)})
+        self._json(200, {"ok": True, "token": token, "sid": social.sid_of(token), "admin": username in ADMINS})
 
     def _read_body(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -542,6 +561,36 @@ class Handler(BaseHTTPRequestHandler):
                 if USERNAME_RE.match(to) and to != me:
                     social.push(to, "read", {"from": me, "time": int(body.get("time") or 0)})
                 self._json(200, {"ok": True})
+                return
+            if self.path == "/redact":
+                target = str(body.get("target", "")).strip().lower()
+                h = str(body.get("hash", ""))[:16]
+                try:
+                    t = int(body.get("time"))
+                except (TypeError, ValueError):
+                    raise Fail(400, "Bad request.")
+                if not target or not re.match(r"^[0-9a-z]{1,16}$", h):
+                    raise Fail(400, "Bad request.")
+                with db() as conn:
+                    social.redact(conn, me, target, t, h)
+                item = {"sender": me, "target": target, "time": t, "hash": h}
+                if target.startswith(("#", "&")):
+                    social.push_all("redact", item)
+                else:
+                    social.push(target, "redact", item)
+                    social.push(me, "redact", item)
+                self._json(200, {"ok": True})
+                return
+            if self.path == "/announce":
+                if me not in ADMINS:
+                    raise Fail(403, "Only a09f admins can send announcements.")
+                with db() as conn:
+                    try:
+                        item = social.announce(conn, me, body.get("text"))
+                    except social.SocialFail as f:
+                        raise Fail(f.status, f.message)
+                print(f"[register] announcement #{item['id']} by {me}", flush=True)
+                self._json(200, {"ok": True, **item})
                 return
             if self.path == "/profile/updated":
                 with db() as conn:

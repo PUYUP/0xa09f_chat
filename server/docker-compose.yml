@@ -149,6 +149,7 @@ services:
       UPSTREAM_ADDR: irc+insecure://solanum:6667
       NETWORK_NAME: ${SOJU_NETWORK:-solanum}
       DATA_DIR: /data                         # recovery emails + reset codes (SQLite)
+      ADMIN_USERS: ${ADMIN_USERS:-}           # comma-separated IDs allowed to send announcements
       # Password-reset email. Defaults deliver to the local Mailpit catcher;
       # point these at a real SMTP server in production.
       SMTP_HOST: ${SMTP_HOST:-mailpit}
