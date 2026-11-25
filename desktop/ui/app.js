@@ -310,8 +310,9 @@ function msgFrom(l, from) {
   if (action) { txt = action[1].replace(/\x01$/, ""); cls += " action"; }
   const buzz = !!action && txt.trim().toUpperCase() === BUZZ_TEXT;
   if (buzz) cls += " buzz";
+  const inv = action && txt.match(INVITE_RE);
   return {
-    who: from, txt, cls, buzz,
+    who: from, txt, cls, buzz, invite: inv ? inv[1] : null,
     time: l.tags.time ? Date.parse(l.tags.time) : Date.now(),
     id: l.tags.msgid || null,
     others: !mine,
@@ -362,7 +363,13 @@ function syncStatusUi() {
 function renderMsg(m) {
   const div = document.createElement("div");
   div.className = `msg ${m.cls}`;
-  const txt = m.buzz ? "BUZZ!!!" : emote(esc(m.txt));
+  let txt = m.buzz ? "BUZZ!!!" : emote(esc(m.txt));
+  if (m.invite) {
+    const inRoom = conv(keyOf(m.invite))?.kind === "room";
+    txt = m.others
+      ? `invited you to a conference 🗣️ <button class="invite-join" data-room="${esc(m.invite)}">${inRoom ? "Open" : "Join"}</button>`
+      : "sent a conference invite 🗣️";
+  }
   div.innerHTML = `<span class="time">${esc(fmtTime(m.time))}</span>` +
     `<span class="who">${esc(m.who)}:</span> <span class="txt">${txt}</span>`;
   logEl.appendChild(div);
@@ -390,7 +397,11 @@ function convItem(c, cls, onClose) {
   d.className = cls + (keyOf(c.name) === S.current ? " active" : "") + (c.unread ? " unread" : "");
   const label = document.createElement("span");
   label.className = "label";
-  label.textContent = c.kind === "room" ? roomName(c.name) : c.name;
+  label.textContent = c.kind === "room" ? roomLabel(c.name) : c.name;
+  if (c.kind === "room" && isConference(c.name)) {
+    d.classList.add("conf");
+    d.title = "Conference with " + (confPeople(c).join(", ") || "nobody yet");
+  }
   d.appendChild(label);
   if (c.unread) {
     const b = document.createElement("span");
@@ -451,6 +462,7 @@ function renderUsers() {
       name.title = "Room owner / moderator";
     }
     d.appendChild(name);
+    d.appendChild(profileButton(nick));
     if (st.state !== "unknown") {
       const sl = document.createElement("span");
       sl.className = "status-text";
@@ -477,16 +489,24 @@ function refreshSide() {
   renderLists(); renderUsers();
   const c = S.current && conv(S.current);
   let title = "Conversation";
-  if (c?.kind === "room") {
+  if (c?.kind === "room" && isConference(c.name)) {
+    const people = confPeople(c);
+    title = esc(roomLabel(c.name)) + ` <span class="topic">— ${people.length ? "with " + esc(people.join(", ")) : "waiting for people to join"}</span>`;
+    if (amOp(c)) title += ` <button id="btnInvite" class="title-btn" title="Invite more friends">➕ Invite</button>`;
+    title += ` <button id="btnLeave" class="title-btn" title="Leave this conference">🚪 Leave</button>`;
+  } else if (c?.kind === "room") {
     title = esc(roomName(c.name)) + (c.topic ? ` <span class="topic">— ${emote(esc(c.topic))}</span>` : "");
     if (amOp(c)) title += ` <button id="btnTopic" class="title-btn" title="Change this room's topic">✏️ Topic</button>`;
     title += ` <button id="btnLeave" class="title-btn" title="Leave this room">🚪 Leave</button>`;
   } else if (c?.kind === "pm") {
-    title = `Private chat with ${esc(c.name)}`;
+    title = `Private chat with ${esc(c.name)}` +
+      ` <button id="btnPmProfile" class="title-btn" title="See ${esc(c.name)}'s profile">👤 Profile</button>`;
   }
   $("chatTitle").innerHTML = title;
   if ($("btnTopic")) $("btnTopic").onclick = () => editTopic(c);
   if ($("btnLeave")) $("btnLeave").onclick = () => leaveRoom(c);
+  if ($("btnInvite")) $("btnInvite").onclick = () => openConfDialog(c);
+  if ($("btnPmProfile")) $("btnPmProfile").onclick = () => openProfile(c.name);
   $("input").placeholder = c?.kind === "pm" ? `Message ${c.name}…` : "Type your message here…";
   $("btnBuzz").disabled = c?.kind !== "pm";
   $("btnBuzz").title = c?.kind === "pm" ? `BUZZ! ${c.name}` : "Open a private chat to BUZZ someone";
@@ -533,13 +553,13 @@ function onJoin(fromNick, channel) {
   if (keyOf(fromNick) === keyOf(S.me)) {
     send(`NAMES ${channel}`);
     if (S.burstDone) {
-      sys(`You joined ${roomName(channel)}`, "system", channel); fetchHistory(c);
+      sys(`You joined ${roomLabel(channel)}`, "system", channel); fetchHistory(c);
       c.justJoined = true;      // onNames decides whether this is a brand-new room
     }
     S.current = null;          // force switchTo to re-render
     switchTo(channel);
   } else if (!isService(fromNick)) {          // ChanServ & co. come and go silently
-    addMsg(channel, { who: fromNick, txt: "joined the room", cls: "action" });
+    addMsg(channel, { who: fromNick, txt: isConference(channel) ? "joined the conference" : "joined the room", cls: "action" });
   }
   refreshSide();
 }
@@ -550,14 +570,19 @@ function onPart(fromNick, channel) {
   if (keyOf(fromNick) === keyOf(S.me)) {
     S.convs.delete(key);
     if (S.current === key) { S.current = null; switchTo(rooms().at(-1)?.name || null); renderLog(); }
-    if (S.leaving?.delete(key)) {   // shown in whatever is on screen now
-      sys(`You left ${roomName(channel)}. You can rejoin it any time from 🔍 Rooms.`, "system");
+    if (S.confEnded?.delete(key)) {
+      S.leaving?.delete(key);
+      sys("That conference has already ended.", "tip");
+    } else if (S.leaving?.delete(key)) {   // shown in whatever is on screen now
+      sys(isConference(channel)
+        ? `You left the conference. You'll need a new invite to join it again.`
+        : `You left ${roomName(channel)}. You can rejoin it any time from 🔍 Rooms.`, "system");
     }
     refreshSide();
     return;
   }
   conv(key)?.members.delete(fromNick);
-  if (!isService(fromNick)) addMsg(channel, { who: fromNick, txt: "left the room", cls: "action" });
+  if (!isService(fromNick)) addMsg(channel, { who: fromNick, txt: isConference(channel) ? "left the conference" : "left the room", cls: "action" });
   refreshSide();
 }
 
@@ -600,7 +625,12 @@ function onNames(params, trailing) {
   if (c.justJoined) {
     c.justJoined = false;
     const mine = c.members.get(S.me) || "";
-    if (c.members.size === 1 && /[@~&]/.test(mine)) claimRoom(c);
+    const alone = c.members.size === 1 && /[@~&]/.test(mine);   // we just created it
+    if (isConference(channel)) {
+      const pc = S.pendingConf;
+      if (pc?.key === keyOf(channel)) { S.pendingConf = null; if (alone) startConference(c, pc.invitees); }
+      else if (alone) endedConference(c);        // everyone had left: don't revive it
+    } else if (alone) claimRoom(c);
   }
   if (keyOf(channel) === S.current) refreshSide();
 }
@@ -625,7 +655,8 @@ const ROOM_ERRORS = {
   474: "You're banned from that room.",
   475: "That room needs a password.",
   477: "You need a registered name to join that room.",
-  401: "That person isn't online.",
+  401: "There's no a09f user with that ID.",
+  482: "Only the owner can do that.",
 };
 
 function onNumeric(num, params, trailing) {
@@ -655,7 +686,17 @@ function onNumeric(num, params, trailing) {
       doDisconnect("Wrong ID or password. Please try again.", true);
       return;
   }
-  if (ROOM_ERRORS[num]) sys(ROOM_ERRORS[num], "error");
+  if (num === 473 && isConference(params[1])) { sysError("You need a new invite to join this conference."); return; }
+  if (num === 482 && isConference(params[1])) { sysError("Only the person who started the conference can invite people."); return; }
+  if (ROOM_ERRORS[num]) sysError(ROOM_ERRORS[num]);
+}
+
+/* An invite to a wrong ID fails twice (INVITE + the invite message): say it once. */
+function sysError(text) {
+  const now = Date.now();
+  if (S.lastError?.text === text && now - S.lastError.at < 3000) return;
+  S.lastError = { text, at: now };
+  sys(text, "error");
 }
 
 function onCap(params, trailing) {
@@ -973,6 +1014,7 @@ function renderFriends() {
       (pm?.unread ? `<span class="badge">${pm.unread > 99 ? "99+" : pm.unread}</span>` : "") +
       `<span class="close" title="Remove from Friends">×</span>`;
     d.querySelector(".close").onclick = (e) => { e.stopPropagation(); removeFriend(nick); };
+    d.insertBefore(profileButton(nick), d.querySelector(".close"));
     d.onclick = () => openPm(nick);
     el.appendChild(d);
   }
@@ -1160,8 +1202,11 @@ function onSelfWhoisDone() {
 }
 
 function onNickServ(text) {
-  const t = text.toLowerCase().replace(/[\x02\x1d\x1f\x0f]/g, "");
+  const raw = text.replace(/[\x02\x1d\x1f\x0f]/g, "");
+  const t = raw.toLowerCase();
   if (S.pwChange?.step === "nickserv") return pwStepNickServ(t);
+  if (S.infoReq && onInfoLine(raw)) return;
+  if (S.profileSave && onProfileSaveReply(t)) return;
   if (S.link === "registering") {
     if (t.includes("is now registered to")) return linked();
     if (t.includes("is already registered") || t.includes("already registered")) {
@@ -1391,6 +1436,247 @@ function renderRoomBrowser() {
   }
 }
 
+/* ---------- conferences (private group chats) ---------- */
+
+/* A conference is a secret, invite-only room (+si) named #conf-<owner>-<code>.
+ * It is never registered with ChanServ, so it disappears once everyone has
+ * left. Each invitee gets an IRC INVITE (lets them past +i) plus a private
+ * "/me invited you to a conference: #room" line, which soju keeps in history,
+ * so the invite still reaches people who are signed out. */
+const CONF_PREFIX = "#conf-";
+const INVITE_TEXT = "invited you to a conference:";
+const INVITE_RE = /^invited you to a conference: (#conf-\S+)\s*$/i;
+const isConference = (name) => keyOf(name).startsWith(CONF_PREFIX);
+
+function confOwner(name) {
+  return (name.slice(CONF_PREFIX.length).match(/^(.+)-[a-z0-9]{4}$/i) || [])[1] || "";
+}
+
+function roomLabel(name) {
+  if (!isConference(name)) return roomName(name);
+  const owner = confOwner(name);
+  let label = keyOf(owner) === keyOf(S.me) ? "My conference" : `${owner || "Someone"}'s conference`;
+  // Two conferences by the same person: tell them apart by their code.
+  const twins = rooms().filter((r) => isConference(r.name) && keyOf(confOwner(r.name)) === keyOf(owner));
+  if (twins.length > 1) label += ` (${name.slice(-4)})`;
+  return label;
+}
+
+/* Everyone in the conference except you (and services). */
+const confPeople = (c) => [...c.members.keys()].filter((n) => keyOf(n) !== keyOf(S.me) && !isService(n)).sort();
+
+function openConfDialog(room) {
+  S.confFor = room;            // null = start a new one, else invite more to it
+  $("cfTitle").textContent = room ? "Invite to Conference" : "Start a Conference";
+  $("cfStart").textContent = room ? "Send Invites" : "Start Conference";
+  $("cfOther").value = "";
+  showMsg("cfMsg", "");
+  const el = $("cfFriends");
+  el.innerHTML = "";
+  const here = room ? new Set([...room.members.keys()].map(keyOf)) : new Set();
+  const list = S.friends.filter((f) => !here.has(keyOf(f))).sort((a, b) =>
+    (STATE_ORDER[statusOf(a).state] - STATE_ORDER[statusOf(b).state]) || a.localeCompare(b));
+  for (const nick of list) {
+    const st = statusOf(nick);
+    const row = document.createElement("label");
+    row.className = `st-${st.state}`;
+    row.innerHTML = `<input type="checkbox" value="${esc(nick)}"><span class="st"></span>` +
+      `<span>${esc(nick)}</span><span class="status-text">${esc(st.label)}</span>`;
+    el.appendChild(row);
+  }
+  if (!list.length) {
+    el.innerHTML = `<div class="empty-hint">${S.friends.length ? "All your friends are already here." :
+      "No friends yet. Type someone's ID below, or add friends with 👥 Add Friend."}</div>`;
+  }
+  $("confDialog").style.display = "";
+  (el.querySelector("input") || $("cfOther")).focus();
+}
+
+function closeConfDialog() { $("confDialog").style.display = "none"; S.confFor = null; }
+
+function doConference() {
+  const picked = [...$("cfFriends").querySelectorAll("input:checked")].map((i) => i.value);
+  const other = $("cfOther").value.trim();
+  if (other) {
+    if (!/^[a-z][a-z0-9_-]{2,15}$/i.test(other)) return showMsg("cfMsg", "That doesn't look like an a09f ID.", "error");
+    if (keyOf(other) === keyOf(S.me)) return showMsg("cfMsg", "That's you! Pick someone else.", "error");
+    if (!picked.some((p) => keyOf(p) === keyOf(other))) picked.push(other);
+  }
+  if (!picked.length) return showMsg("cfMsg", "Pick at least one person to invite.", "error");
+  const room = S.confFor;
+  closeConfDialog();
+  if (room) { inviteToConference(room, picked); return; }
+  const code = Math.random().toString(36).slice(2, 6).padEnd(4, "0");
+  const name = `${CONF_PREFIX}${S.me.toLowerCase()}-${code}`;
+  S.pendingConf = { key: keyOf(name), invitees: picked };
+  send(`JOIN ${name}`);
+}
+
+/* We just created the room (and are its op): lock it down, then invite. */
+function startConference(c, invitees) {
+  send(`MODE ${c.name} +si`);
+  sys("You started a conference. Only the people you invite can join.", "system", c.name);
+  inviteToConference(c, invitees);
+}
+
+function inviteToConference(c, nicks) {
+  const seen = new Set();
+  const list = nicks.filter((n) => {
+    const k = keyOf(n);
+    if (seen.has(k) || k === keyOf(S.me) || c.members.has(n)) return false;
+    seen.add(k);
+    return true;
+  });
+  if (!list.length) return;
+  for (const nick of list) {
+    send(`INVITE ${nick} ${c.name}`);
+    send(`PRIVMSG ${nick} :\x01ACTION ${INVITE_TEXT} ${c.name}\x01`);
+  }
+  sys(`Invite sent to ${list.join(", ")}.`, "system", c.name);
+}
+
+/* Joined a conference nobody was in any more: we'd only be reviving an empty
+ * room, so leave it again and say so. */
+function endedConference(c) {
+  (S.confEnded ||= new Set()).add(keyOf(c.name));
+  send(`PART ${c.name} :Conference ended`);
+}
+
+/* ---------- profiles (NickServ properties) ---------- */
+
+/* Profiles are Atheme account metadata: SET PROPERTY <key> <value> to write,
+ * INFO <nick> ("Metadata : key = value") for anyone to read. */
+const PROFILE_FIELDS = { name: "pfName", location: "pfLocation", about: "pfAbout" };
+const INFO_TIMEOUT = 8000;
+
+function openProfile(nick) {
+  if (!nick) return;
+  const mine = keyOf(nick) === keyOf(S.me);
+  S.profileNick = nick;
+  const st = statusOf(nick);
+  $("pfTitle").textContent = mine ? "My Profile" : `${nick}'s Profile`;
+  $("pfNick").textContent = nick;
+  $("pfStatus").textContent = st.state === "unknown" ? "" : st.label;
+  $("pfDot").className = `pf-dot st-${st.state}`;
+  $("pfView").style.display = mine ? "none" : "";
+  $("pfEdit").style.display = mine ? "" : "none";
+  $("pfAddFriend").style.display = mine || isFriend(nick) ? "none" : "";
+  for (const id of ["pfvName", "pfvLocation", "pfvAbout", "pfvSince"]) $(id).textContent = "…";
+  for (const id of Object.values(PROFILE_FIELDS)) { $(id).value = ""; $(id).disabled = true; }
+  $("pfSave").disabled = true;
+  showMsg("pfMsg", "Loading…");
+  $("profileDialog").style.display = "";
+  requestPresence([nick]);
+  requestInfo(nick, (info) => showProfile(nick, info));
+}
+
+function closeProfile() {
+  if (S.profileSave) return;          // let the save finish
+  $("profileDialog").style.display = "none";
+  S.profileNick = null;
+}
+
+function showProfile(nick, info) {
+  if (keyOf(S.profileNick) !== keyOf(nick)) return;     // dialog moved on
+  const mine = keyOf(nick) === keyOf(S.me);
+  if (!info) { showMsg("pfMsg", "Couldn't load this profile right now. Please try again.", "error"); return; }
+  const p = info.props;
+  if (mine) {
+    S.myProfile = { name: p.name || "", location: p.location || "", about: p.about || "" };
+    for (const [k, id] of Object.entries(PROFILE_FIELDS)) { $(id).value = S.myProfile[k]; $(id).disabled = false; }
+    $("pfSave").disabled = false;
+    showMsg("pfMsg", S.link === "linked" ? "" : "Your profile can't be saved right now. Please sign out and back in.",
+            S.link === "linked" ? "" : "error");
+    $("pfName").focus();
+    return;
+  }
+  const show = (id, v) => { $(id).innerHTML = v ? emote(esc(v)) : "<i>Not set</i>"; };
+  show("pfvName", p.name); show("pfvLocation", p.location); show("pfvAbout", p.about);
+  $("pfvSince").innerHTML = info.since ? esc(info.since) : "<i>Unknown</i>";
+  showMsg("pfMsg", info.registered ? "" : `${nick} hasn't set up a profile yet.`);
+}
+
+/* One INFO at a time; a newer request replaces an older one. */
+function requestInfo(nick, cb) {
+  clearTimeout(S.infoReq?.timer);
+  S.infoReq = { nick, cb, started: false, registered: true, since: "", props: {} };
+  S.infoReq.timer = setTimeout(() => finishInfo(false), INFO_TIMEOUT);
+  send(`PRIVMSG NickServ :INFO ${nick}`);
+}
+
+function finishInfo(ok) {
+  const r = S.infoReq;
+  if (!r) return;
+  clearTimeout(r.timer);
+  S.infoReq = null;
+  r.cb(ok ? r : null);
+}
+
+/* Returns true when the NickServ line belonged to the pending INFO. */
+function onInfoLine(t) {
+  const r = S.infoReq;
+  let m;
+  if (/^Information on \S+/i.test(t)) { r.started = true; return true; }
+  if (!r.started && (m = t.match(/^(\S+) is not registered/i)) && keyOf(m[1]) === keyOf(r.nick)) {
+    r.registered = false; finishInfo(true); return true;
+  }
+  if (!r.started) return false;
+  if (/\*\*\* End of Info \*\*\*/i.test(t)) { finishInfo(true); return true; }
+  if ((m = t.match(/^Registered\s*:\s*(\w{3}) (\d+) [\d:]+ (\d{4})/))) r.since = `${m[1]} ${m[2]}, ${m[3]}`;
+  else if ((m = t.match(/^Metadata\s*:\s*(\S+) = (.*)$/))) r.props[m[1].toLowerCase()] = m[2];
+  return true;                       // other INFO lines (flags, last seen, …) are swallowed
+}
+
+const cleanField = (v) => v.replace(/[\x00-\x1f\x7f]+/g, " ").replace(/\s+/g, " ").trim();
+
+function saveProfile() {
+  if (!S.myProfile) return;
+  if (S.link !== "linked") {
+    showMsg("pfMsg", "Your profile can't be saved right now. Please sign out and back in.", "error"); return;
+  }
+  const next = {};
+  for (const [k, id] of Object.entries(PROFILE_FIELDS)) next[k] = cleanField($(id).value);
+  const changed = Object.keys(next).filter((k) => next[k] !== S.myProfile[k]);
+  if (!changed.length) { closeProfile(); return; }
+  // Empty value = remove the property.
+  const lines = changed.map((k) => `PRIVMSG NickServ :SET PROPERTY ${k}${next[k] ? " " + next[k] : ""}`);
+  S.profileSave = { pending: changed.length, next };
+  S.profileSave.timer = setTimeout(() => profileSaveDone(false), 5000 + 1200 * lines.length);
+  $("pfSave").disabled = true; $("pfSave").textContent = "Saving…";
+  showMsg("pfMsg", "");
+  serviceQueue(lines);
+}
+
+function onProfileSaveReply(t) {
+  if (/metadata entry \S+ (added|has been deleted|was not set)/.test(t)) {
+    if (--S.profileSave.pending <= 0) profileSaveDone(true);
+    return true;
+  }
+  if (/too many|invalid|cannot|denied|not logged in|you are not/.test(t)) { profileSaveDone(false); return true; }
+  return false;
+}
+
+function profileSaveDone(ok) {
+  const ps = S.profileSave;
+  if (!ps) return;
+  clearTimeout(ps.timer);
+  S.profileSave = null;
+  $("pfSave").disabled = false; $("pfSave").textContent = "Save Profile";
+  if (!ok) { showMsg("pfMsg", "Couldn't save your profile right now. Please try again.", "error"); return; }
+  S.myProfile = ps.next;
+  closeProfile();
+  sys("Your profile was saved.", "status");
+}
+
+function profileButton(nick) {
+  const b = document.createElement("span");
+  b.className = "profile-btn";
+  b.textContent = "👤";
+  b.title = keyOf(nick) === keyOf(S.me) ? "Edit your profile" : `See ${nick}'s profile`;
+  b.onclick = (e) => { e.stopPropagation(); openProfile(nick); };
+  return b;
+}
+
 /* ---------- actions ---------- */
 
 async function doSignIn() {
@@ -1419,6 +1705,10 @@ function doDisconnect(message = "", isError = false) {
   S.pw = null; S.link = null; S.selfAccount = null; S.claiming = null; S.svcQueue = [];
   clearTimeout(S.pwChange?.timer); S.pwChange = null; S.roomList = null; S.listBuf = null;
   $("roomBrowser").style.display = "none"; $("pwDialog").style.display = "none";
+  $("profileDialog").style.display = "none"; $("confDialog").style.display = "none";
+  clearTimeout(S.infoReq?.timer); S.infoReq = null; clearTimeout(S.profileSave?.timer); S.profileSave = null;
+  S.myProfile = null; S.pendingConf = null; S.confEnded = null;
+  $("pfSave").disabled = false; $("pfSave").textContent = "Save Profile";
   $("pwSave").disabled = false; $("pwSave").textContent = "Change Password"; S.myStatus = { code: "available", text: "" };
   clearTimeout(S.presenceTimer);
   logEl.innerHTML = "";
@@ -1441,7 +1731,7 @@ function joinOrSwitch(name) {
 function leaveRoom(c) {
   if (!c || c.kind !== "room") return;
   (S.leaving ||= new Set()).add(keyOf(c.name));
-  send(`PART ${c.name} :Left the room`);
+  send(`PART ${c.name} :${isConference(c.name) ? "Left the conference" : "Left the room"}`);
 }
 
 function openPm(nick) {
@@ -1540,6 +1830,20 @@ $("statusText").addEventListener("keydown", (e) => { if (e.key === "Enter") $("b
 $("btnAddFriend").onclick = () => toggleAddFriend(true);
 $("btnRooms").onclick = openRoomBrowser;
 $("btnPassword").onclick = openPwDialog;
+$("btnProfile").onclick = () => openProfile(S.me);
+$("btnConference").onclick = () => openConfDialog(null);
+$("pfClose").onclick = closeProfile;
+$("profileForm").addEventListener("submit", (e) => { e.preventDefault(); saveProfile(); });
+$("profileDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closeProfile(); });
+$("pfMessage").onclick = () => { const n = S.profileNick; closeProfile(); openPm(n); };
+$("pfAddFriend").onclick = () => { addFriend(S.profileNick); $("pfAddFriend").style.display = "none"; };
+$("cfClose").onclick = closeConfDialog;
+$("confForm").addEventListener("submit", (e) => { e.preventDefault(); doConference(); });
+$("confDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closeConfDialog(); });
+logEl.addEventListener("click", (e) => {
+  const b = e.target.closest(".invite-join");
+  if (b) joinOrSwitch(b.dataset.room);
+});
 $("pwClose").onclick = closePwDialog;
 $("pwForm").addEventListener("submit", (e) => { e.preventDefault(); doChangePassword(); });
 $("pwDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closePwDialog(); });

@@ -66,6 +66,20 @@ server/protokol di layar.
 - **Keluar room**: × di daftar Chat Rooms atau 🚪 Leave di judul room → `PART`;
   soju ikut melupakan room-nya. Room milikmu tetap terdaftar (GUARD) dan bisa
   dimasuki lagi dari 🔍 Rooms
+- **Profil** (👤 Profile): Name, Location, About me disimpan sebagai metadata
+  akun NickServ (`SET PROPERTY name|location|about <value>`, value kosong =
+  hapus). Profil orang lain dibuka lewat 👤 di daftar Friends/Members atau
+  tombol 👤 Profile di judul private chat → `NickServ INFO <id>` (baris
+  `Metadata : key = value` + `Registered` untuk "Member since"). Butuh akun yang
+  sudah tertaut ke NickServ; terlihat oleh semua user
+- **Conference** (🗣️ Conference): chat grup privat. App membuat room
+  `#conf-<owner>-<kode>` dengan mode `+si` (rahasia + invite-only), tidak
+  didaftarkan ke ChanServ (hilang saat semua keluar). Tiap undangan =
+  `INVITE` (lolos +i) + `/me invited you to a conference: #conf-…` di private
+  chat; baris itu tersimpan di history soju, jadi undangan tetap sampai walau
+  penerimanya sedang sign out, dan tampil dengan tombol **Join**. Pemilik bisa
+  mengundang lagi lewat ➕ Invite. Room conference kosong yang di-join ulang
+  langsung ditinggalkan ("That conference has already ended")
 - **Ganti password** (🔑 Password): berurutan `BouncerServ user update
   -password` → `NickServ SET PASSWORD` (kalau tertaut) → `BouncerServ sasl
   set-plain`; tiap langkah menunggu balasan, timeout 10 dtk

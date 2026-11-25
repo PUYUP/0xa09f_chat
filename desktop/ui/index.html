@@ -94,6 +94,36 @@
   .pw-body input { padding: 5px 6px; font-size: 13px; }
   .pw-body .hint { margin-top: 2px; }
   #pwSave { margin-top: 14px; padding: 6px; font-weight: bold; }
+  .modal .pf-pane { width: 340px; }
+  .pf-head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #faf8fd; border-bottom: 1px solid var(--lilac-2); }
+  .pf-dot { width: 14px; height: 14px; border-radius: 50%; background: #bbb; flex: none; }
+  .pf-dot.st-online { background: var(--online); } .pf-dot.st-busy { background: #d9261c; }
+  .pf-dot.st-away { background: #f0a020; } .pf-dot.st-offline, .pf-dot.st-unknown { background: #bbb; }
+  .pf-nick { font-weight: bold; font-size: 14px; color: var(--purple-d); }
+  .pf-body { padding: 10px 16px 12px; }
+  #pfView .pf-row { display: grid; grid-template-columns: 96px 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px solid #f0ebf7; }
+  #pfView .pf-row > span:first-child { color: var(--dim); }
+  #pfView .pf-row > span:last-child { word-break: break-word; white-space: pre-wrap; }
+  #pfView .pf-row i { color: #aaa; }
+  .pf-actions { display: flex; gap: 6px; margin-top: 12px; }
+  .pf-actions button { flex: 1; padding: 5px; }
+  #pfAbout { font: inherit; font-size: 13px; padding: 5px 6px; border: 1px solid #7f9db9; resize: vertical; user-select: text; }
+  #pfMsg, #cfMsg { padding: 0 16px 10px; }
+  #cfMsg { padding: 0; }
+  .cf-list { border: 1px solid var(--lilac-2); max-height: 160px; overflow-y: auto; padding: 2px 0; }
+  .cf-list label { display: flex; align-items: center; gap: 6px; margin: 0; padding: 3px 8px; font-weight: normal; color: var(--ink); cursor: pointer; }
+  .cf-list label:hover { background: #fff8dc; }
+  .cf-list .st { width: 9px; height: 9px; border-radius: 50%; background: #bbb; }
+  .cf-list .st-online .st { background: var(--online); } .cf-list .st-busy .st { background: #d9261c; } .cf-list .st-away .st { background: #f0a020; }
+  .cf-list .status-text { margin-left: auto; }
+  .cf-list .empty-hint { padding: 6px 8px; }
+  #cfStart { margin-top: 14px; padding: 6px; font-weight: bold; }
+  .chan.conf::before { content: "🗣️"; }
+  .msg .invite-join { margin-left: 8px; padding: 0 8px; font-size: 11px; }
+  .user .profile-btn, .friend .profile-btn { visibility: hidden; padding: 0 2px; font-size: 11px; cursor: pointer; }
+  .user .profile-btn { order: 9; margin-left: auto; } .user .add-friend { order: 10; margin-left: 0; }
+  .friend .profile-btn { margin-left: auto; }
+  .user:hover .profile-btn, .friend:hover .profile-btn { visibility: visible; }
   .pane { background: #fff; border: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
   .pane-title {
     padding: 4px 8px; font-weight: bold; color: #fff;
@@ -274,6 +304,8 @@
   <span class="sep"></span>
   <button class="tool" id="btnAddFriend" title="Add a friend"><span class="ico">👥</span><span>Add Friend</span></button>
   <button class="tool" id="btnRooms" title="Browse all chat rooms"><span class="ico">🔍</span><span>Rooms</span></button>
+  <button class="tool" id="btnConference" title="Start a private group chat with friends"><span class="ico">🗣️</span><span>Conference</span></button>
+  <button class="tool" id="btnProfile" title="Edit your profile"><span class="ico">👤</span><span>Profile</span></button>
   <button class="tool" id="btnPassword" title="Change your password"><span class="ico">🔑</span><span>Password</span></button>
   <span style="flex:1"></span>
   <button class="tool" id="btnEmote" title="Insert smiley"><span class="ico">😊</span><span>Smiley</span></button>
@@ -311,6 +343,50 @@
         <input type="password" id="pwNew2" autocomplete="new-password">
         <button type="submit" id="pwSave">Change Password</button>
         <div id="pwMsg" class="form-msg"></div>
+      </div>
+    </form>
+  </div>
+  <div id="profileDialog" class="modal" style="display:none">
+    <form class="pane pf-pane" id="profileForm" autocomplete="off">
+      <div class="pane-title"><span id="pfTitle">Profile</span> <span class="x" id="pfClose" title="Close">✕</span></div>
+      <div class="pf-head">
+        <span id="pfDot" class="pf-dot"></span>
+        <div><div id="pfNick" class="pf-nick"></div><div id="pfStatus" class="status-text"></div></div>
+      </div>
+      <div id="pfView" class="pf-body">
+        <div class="pf-row"><span>Name</span><span id="pfvName"></span></div>
+        <div class="pf-row"><span>Location</span><span id="pfvLocation"></span></div>
+        <div class="pf-row pf-about"><span>About</span><span id="pfvAbout"></span></div>
+        <div class="pf-row"><span>Member since</span><span id="pfvSince"></span></div>
+        <div class="pf-actions">
+          <button type="button" id="pfMessage">💬 Send Message</button>
+          <button type="button" id="pfAddFriend">➕ Add Friend</button>
+        </div>
+      </div>
+      <div id="pfEdit" class="pf-body pw-body">
+        <label for="pfName">Name</label>
+        <input type="text" id="pfName" maxlength="40" placeholder="What should people call you?">
+        <label for="pfLocation">Location</label>
+        <input type="text" id="pfLocation" maxlength="40" placeholder="City or country">
+        <label for="pfAbout">About me</label>
+        <textarea id="pfAbout" maxlength="200" rows="3" placeholder="A few words about yourself"></textarea>
+        <div class="hint">Anyone on a09f can see your profile.</div>
+        <button type="submit" id="pfSave">Save Profile</button>
+      </div>
+      <div id="pfMsg" class="form-msg"></div>
+    </form>
+  </div>
+  <div id="confDialog" class="modal" style="display:none">
+    <form class="pane pf-pane" id="confForm" autocomplete="off">
+      <div class="pane-title"><span id="cfTitle">Start a Conference</span> <span class="x" id="cfClose" title="Close">✕</span></div>
+      <div class="pw-body">
+        <div class="hint">A private group chat: only the friends you invite can join.</div>
+        <label>Invite friends</label>
+        <div id="cfFriends" class="cf-list"></div>
+        <label for="cfOther">Or invite someone by ID</label>
+        <input type="text" id="cfOther" maxlength="16" placeholder="Their a09f ID (optional)">
+        <button type="submit" id="cfStart">Start Conference</button>
+        <div id="cfMsg" class="form-msg"></div>
       </div>
     </form>
   </div>
