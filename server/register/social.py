@@ -36,6 +36,7 @@ class SocialFail(Exception):
 def init_schema(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS friends (owner TEXT NOT NULL, friend TEXT NOT NULL, "
                  "grp TEXT NOT NULL, added INTEGER NOT NULL, PRIMARY KEY (owner, friend))")
+    conn.execute("CREATE TABLE IF NOT EXISTS prefs (owner TEXT PRIMARY KEY, data TEXT NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS friend_requests (from_user TEXT NOT NULL, to_user TEXT NOT NULL, "
                  "grp TEXT NOT NULL, msg TEXT NOT NULL, created INTEGER NOT NULL, "
                  "PRIMARY KEY (from_user, to_user))")
@@ -204,3 +205,46 @@ def rename_group(conn, me, old, new):
     new = clean_group(new)
     conn.execute("UPDATE friends SET grp = ? WHERE owner = ? AND grp = ?", (new, me, old))
     conn.execute("UPDATE friend_requests SET grp = ? WHERE from_user = ? AND grp = ?", (new, me, old))
+
+
+# ---------- privacy preferences ----------
+
+MAX_IGNORE = 200
+PREF_DEFAULTS = {"ignore": [], "friendsOnly": False}
+
+
+def get_prefs(conn, me):
+    row = conn.execute("SELECT data FROM prefs WHERE owner = ?", (me,)).fetchone()
+    prefs = dict(PREF_DEFAULTS)
+    if row:
+        try:
+            prefs.update(json.loads(row[0]))
+        except ValueError:
+            pass
+    return prefs
+
+
+def set_prefs(conn, me, body, valid_id):
+    prefs = get_prefs(conn, me)
+    if "ignore" in body:
+        ids = body["ignore"] if isinstance(body["ignore"], list) else []
+        clean = sorted({str(i).strip().lower() for i in ids if valid_id(str(i).strip().lower())} - {me})
+        if len(clean) > MAX_IGNORE:
+            raise SocialFail(400, f"You can ignore at most {MAX_IGNORE} people.")
+        prefs["ignore"] = clean
+    if "friendsOnly" in body:
+        prefs["friendsOnly"] = bool(body["friendsOnly"])
+    conn.execute("INSERT INTO prefs (owner, data) VALUES (?, ?) ON CONFLICT(owner) DO UPDATE SET data = excluded.data",
+                 (me, json.dumps(prefs)))
+    return prefs
+
+
+# ---------- find people ----------
+
+def search_users(all_users, me, q, limit=20):
+    q = q.strip().lower()
+    if len(q) < 2:
+        raise SocialFail(400, "Type at least 2 letters.")
+    hits = [u for u in all_users if q in u and u != me]
+    hits.sort(key=lambda u: (not u.startswith(q), len(u), u))
+    return hits[:limit]

@@ -35,7 +35,7 @@ const MAX_BUFFER = 500;
 
 /* IRCv3 capabilities we use when the server offers them. */
 const WANTED_CAPS = ["sasl", "server-time", "message-tags", "batch", "echo-message", "away-notify",
-                     "draft/chathistory", "draft/read-marker", "draft/pre-away"];
+                     "draft/chathistory", "draft/read-marker", "draft/pre-away", "soju.im/search"];
 
 const logEl = $("log"), roomsEl = $("channels"), pmsEl = $("pms"), usersEl = $("users");
 const dotEl = $("dot"), whoEl = $("who");
@@ -57,6 +57,9 @@ const S = {
   outgoing: [],           // my pending requests: {to, group}
   token: null,            // account-service session (friends, typing)
   typing: new Map(),      // nick key -> hide timer, while they're typing to me
+  prefs: { ignore: [], friendsOnly: false },   // privacy settings (account service)
+  callerId: null,         // our +g state: null = unknown (fresh sign-in)
+  style: { b: false, i: false, u: false, color: null },   // text style for what I send
   presence: new Map(),    // nick key -> {away: bool|null, online: bool|null, exists: bool|null}
   statuses: new Map(),    // nick key -> {code, text, time} from PRESENCE_ROOM
   myStatus: { code: "available", text: "" },
@@ -173,6 +176,7 @@ const pms = () => [...S.convs.values()].filter((c) => c.kind === "pm");
 /* Add a message to a conversation. `history` messages are merged in time
  * order; live ones are appended. */
 function addMsg(target, m, { history = false } = {}) {
+  if (m.others && target && isIgnored(m.who)) return;       // ignored: never shown, no chat opened
   const c = target ? getConv(target, isChannel(target) ? "room" : "pm")
                    : (S.current && conv(S.current)) || getConv(STATUS, "status");
   if (m.id && c.ids.has(m.id)) return;
@@ -285,6 +289,7 @@ function onHistoryBatch(target, lines) {
     const t = convTarget(l.params[0], from);
     addMsg(t, msgFrom(l, from), { history: true });
   }
+  if (onOlderBatch(target, lines.filter((l) => l.cmd === "PRIVMSG" || l.cmd === "NOTICE").length)) return;
   const c = conv(keyOf(target));
   if (!c) return;
   c.historyDone = true;
@@ -384,7 +389,7 @@ function syncStatusUi() {
 function renderMsg(m) {
   const div = document.createElement("div");
   div.className = `msg ${m.cls}`;
-  let txt = m.buzz ? "BUZZ!!!" : emote(esc(m.txt));
+  let txt = m.buzz ? "BUZZ!!!" : emote(formatIrc(esc(m.txt)));
   if (m.invite) {
     const inRoom = conv(keyOf(m.invite))?.kind === "room";
     txt = m.others
@@ -399,7 +404,10 @@ function renderMsg(m) {
 
 function renderLog() {
   logEl.innerHTML = "";
-  for (const m of conv(S.current || STATUS)?.msgs || []) renderMsg(m);
+  const c = conv(S.current || STATUS);
+  const older = olderLink(c);
+  if (older) logEl.appendChild(older);
+  for (const m of c?.msgs || []) if (!(m.others && isIgnored(m.who))) renderMsg(m);
 }
 
 function switchTo(key) {
@@ -454,7 +462,7 @@ function renderLists() {
     roomsEl.appendChild(item);
   }
   pmsEl.innerHTML = "";
-  const list = pms().sort((a, b) => (b.msgs.at(-1)?.time || 0) - (a.msgs.at(-1)?.time || 0));
+  const list = pms().filter((c) => !isIgnored(c.name)).sort((a, b) => (b.msgs.at(-1)?.time || 0) - (a.msgs.at(-1)?.time || 0));
   for (const c of list) pmsEl.appendChild(convItem(c, "pm", () => closePm(c)));
   $("pmsEmpty").style.display = list.length ? "none" : "";
 }
@@ -493,8 +501,10 @@ function renderUsers() {
       d.appendChild(sl);
     }
     if (!self) {
-      d.title = `Chat privately with ${nick} (${st.label})`;
+      d.title = `Chat privately with ${nick} (${st.label}). Right-click for more.`;
       d.onclick = () => openPm(nick);
+      d.oncontextmenu = (e) => { e.preventDefault(); personMenu(e, nick); };
+      if (isIgnored(nick)) d.classList.add("ignored");
       if (!isFriend(nick)) {
         const add = document.createElement("span");
         add.className = "add-friend";
@@ -523,13 +533,19 @@ function refreshSide() {
     title += ` <button id="btnLeave" class="title-btn" title="Leave this room">🚪 Leave</button>`;
   } else if (c?.kind === "pm") {
     title = `Private chat with ${esc(c.name)}` +
-      ` <button id="btnPmProfile" class="title-btn" title="See ${esc(c.name)}'s profile">👤 Profile</button>`;
+      ` <button id="btnPmProfile" class="title-btn" title="See ${esc(c.name)}'s profile">👤 Profile</button>` +
+      ` <button id="btnPmIgnore" class="title-btn">${isIgnored(c.name) ? "✅ Unignore" : "🚫 Ignore"}</button>`;
   }
   $("chatTitle").innerHTML = title;
   if ($("btnTopic")) $("btnTopic").onclick = () => editTopic(c);
   if ($("btnLeave")) $("btnLeave").onclick = () => leaveRoom(c);
   if ($("btnInvite")) $("btnInvite").onclick = () => openConfDialog(c);
   if ($("btnPmProfile")) $("btnPmProfile").onclick = () => openProfile(c.name);
+  if ($("btnPmIgnore")) $("btnPmIgnore").onclick = () => ignoreUser(c.name, !isIgnored(c.name));
+  if (c && c.kind !== "status") {
+    $("chatTitle").insertAdjacentHTML("beforeend", ` <button id="btnSearchConv" class="title-btn" title="Search messages">🔍 Search</button>`);
+    $("btnSearchConv").onclick = openSearch;
+  }
   $("input").placeholder = c?.kind === "pm" ? `Message ${c.name}…` : "Type your message here…";
   $("btnBuzz").disabled = c?.kind !== "pm";
   $("btnBuzz").title = c?.kind === "pm" ? `BUZZ! ${c.name}` : "Open a private chat to BUZZ someone";
@@ -702,6 +718,8 @@ function onNumeric(num, params, trailing) {
       if (num === 318 && keyOf(params[1]) === keyOf(S.me) && S.link === "checking") { onSelfWhoisDone(); return; }
       if (onWhoisReply(num, params, trailing)) return;
       break;
+    case 716: case 718: onCallerId(num, params); return;
+    case 717: return;
     case 730: onMonitor(trailing, true); return;
     case 731: onMonitor(trailing, false); return;
     // SASL finished (success or failure): end CAP negotiation so registration completes.
@@ -776,13 +794,14 @@ function handleLine(line) {
       const ref = params[0].slice(1);
       if (params[0].startsWith("+")) {
         const type = params[1];
-        if (type === "chathistory" || type === "draft/chathistory-targets") {
+        if (type === "chathistory" || type === "draft/chathistory-targets" || type === "soju.im/search") {
           S.batches.set(ref, { type, params: params.slice(2), lines: [] });
         }
       } else {
         const b = S.batches.get(ref);
         S.batches.delete(ref);
         if (b?.type === "chathistory") onHistoryBatch(b.params[0], b.lines);
+        else if (b?.type === "soju.im/search") onSearchBatch(b.lines);
         else if (b) onTargetsBatch(b.lines);
       }
       return;
@@ -873,7 +892,7 @@ function presenceChanged(nick, before) {
 function schedulePresenceRender() {
   if (S.renderQueued) return;
   S.renderQueued = true;
-  requestAnimationFrame(() => { S.renderQueued = false; renderLists(); renderUsers(); });
+  requestAnimationFrame(() => { S.renderQueued = false; renderLists(); renderUsers(); renderFind(); });
 }
 
 /* "STATUS <code> [text]" posted in PRESENCE_ROOM. Newest line wins. */
@@ -1012,6 +1031,7 @@ async function startSocial() {
   try {
     await openSession();
     applyFriends(await socialApi("/friends"));
+    await loadPrefs();
     await migrateLocalFriends();
     openEvents();
   } catch (e) {
@@ -1089,7 +1109,8 @@ function applyFriends(state) {
   S.outgoing = state.outgoing || [];
   const added = S.friends.filter((n) => !before.has(keyOf(n)));
   if (added.length) { send(`MONITOR + ${added.join(",")}`); requestPresence(added); }
-  renderLists(); renderUsers();
+  applyFriendsOnly();
+  renderLists(); renderUsers(); renderFind();
 }
 
 async function friendCall(path, body, okMessage) {
@@ -1240,7 +1261,7 @@ function friendRow(nick, pending) {
 function renderRequests() {
   const el = $("friendRequests");
   el.innerHTML = "";
-  for (const r of S.incoming) {
+  for (const r of S.incoming.filter((r) => !isIgnored(r.from))) {
     const d = document.createElement("div");
     d.className = "freq";
     d.innerHTML = `<div>📨 <b>${esc(r.from)}</b> wants to be your friend</div>` +
@@ -1309,6 +1330,7 @@ function friendMenu(e, nick, pending) {
     { label: "📁 Move to a new group…", keepOpen: true,
       run: () => menuPrompt("New group name", "", (g) => moveFriend(nick, g)) },
     "-",
+    { label: isIgnored(nick) ? "✅ Unignore" : "🚫 Ignore", run: () => ignoreUser(nick, !isIgnored(nick)) },
     { label: "✖ Remove from Friends", danger: true, run: () => removeFriend(nick) },
   ]);
 }
@@ -1455,10 +1477,10 @@ function onIncoming(c, m) {
   if (m.buzz) { if (c.kind === "pm") receiveBuzz(c, m); return; }
   if (c.kind === "pm") {
     if (!(S.focused && key === S.current)) Sound.play("message");
-    notify(`${m.who}`, m.txt, key);
+    notify(`${m.who}`, stripIrc(m.txt), key);
   } else if (c.kind === "room" && mentionsMe(m.txt)) {
     Sound.play("mention");
-    notify(`${m.who} in ${roomName(c.name)}`, m.txt, key);
+    notify(`${m.who} in ${roomName(c.name)}`, stripIrc(m.txt), key);
   }
 }
 
@@ -2022,6 +2044,378 @@ function profileButton(nick) {
   return b;
 }
 
+/* ---------- privacy: ignore list, "only friends can message me" ---------- */
+
+/* Both settings live in the account service (follow you to any computer).
+ * Ignoring is done here in the app: their messages are simply not shown.
+ * "Only friends" uses solanum's caller-id: user mode +g, with every friend on
+ * the ACCEPT list; the server then drops anyone else's private messages. */
+const isIgnored = (nick) => S.prefs.ignore.some((i) => keyOf(i) === keyOf(nick));
+
+async function loadPrefs() {
+  try {
+    const p = await socialApi("/prefs");
+    S.prefs = { ignore: p.ignore || [], friendsOnly: !!p.friendsOnly };
+  } catch { return; }
+  applyFriendsOnly();
+  renderLists(); renderLog();
+}
+
+async function savePrefs(patch) {
+  const p = await socialApi("/prefs", patch);
+  S.prefs = { ignore: p.ignore || [], friendsOnly: !!p.friendsOnly };
+  return S.prefs;
+}
+
+async function ignoreUser(nick, on) {
+  const list = on ? [...S.prefs.ignore, nick] : S.prefs.ignore.filter((i) => keyOf(i) !== keyOf(nick));
+  try {
+    await savePrefs({ ignore: list });
+    sys(on ? `You're ignoring ${nick}. You won't see their messages.` : `You're no longer ignoring ${nick}.`, "system");
+    renderLists(); renderLog(); refreshSide(); renderPrivacy();
+  } catch (e) { sys(e.message, "error"); }
+}
+
+/* Keep +g and the ACCEPT list in line with the setting and the friends list. */
+function applyFriendsOnly() {
+  if (S.phase !== "online" || !S.me) return;
+  if (!S.prefs.friendsOnly) {
+    // null = unknown: the bouncer may still be +g from an earlier session.
+    if (S.callerId !== false) { send(`MODE ${S.me} -g`); S.callerId = false; }
+    return;
+  }
+  const want = new Set(S.friends.map(keyOf));
+  const have = S.accepted || new Set();
+  const add = [...want].filter((n) => !have.has(n));
+  const drop = [...have].filter((n) => !want.has(n));
+  for (let i = 0; i < add.length; i += 10) send(`ACCEPT ${add.slice(i, i + 10).join(",")}`);
+  for (let i = 0; i < drop.length; i += 10) send(`ACCEPT ${drop.slice(i, i + 10).map((n) => "-" + n).join(",")}`);
+  S.accepted = want;
+  if (!S.callerId) { send(`MODE ${S.me} +g`); S.callerId = true; }
+}
+
+function openPrivacy() {
+  $("privacyDialog").style.display = "";
+  $("pvFriendsOnly").checked = S.prefs.friendsOnly;
+  showMsg("pvMsg", "");
+  renderPrivacy();
+}
+function closePrivacy() { $("privacyDialog").style.display = "none"; }
+
+function renderPrivacy() {
+  if ($("privacyDialog").style.display === "none") return;
+  const el = $("pvIgnored");
+  el.innerHTML = "";
+  if (!S.prefs.ignore.length) { el.innerHTML = `<div class="empty-hint">You're not ignoring anyone.</div>`; return; }
+  for (const nick of S.prefs.ignore) {
+    const row = document.createElement("div");
+    row.className = "pv-row";
+    row.innerHTML = `<span>🚫 ${esc(nick)}</span><button>Unignore</button>`;
+    row.querySelector("button").onclick = () => ignoreUser(nick, false);
+    el.appendChild(row);
+  }
+}
+
+async function onFriendsOnlyToggle() {
+  const on = $("pvFriendsOnly").checked;
+  try {
+    await savePrefs({ friendsOnly: on });
+    applyFriendsOnly();
+    showMsg("pvMsg", on ? "Only your friends can send you private messages now." :
+      "Anyone can send you private messages now.", "ok");
+  } catch (e) {
+    $("pvFriendsOnly").checked = !on;
+    showMsg("pvMsg", e.message, "error");
+  }
+}
+
+/* 716: they only take messages from friends. 718: someone was blocked by our +g. */
+function onCallerId(num, params) {
+  const nick = params[1];
+  if (num === 716) {
+    sysError(`${nick} only accepts messages from friends. Send them a friend request first.`);
+  } else if (num === 718 && !isIgnored(nick)) {
+    S.blockedTold ||= new Set();
+    if (S.blockedTold.has(keyOf(nick))) return;
+    S.blockedTold.add(keyOf(nick));
+    sys(`${nick} tried to message you, but only friends can message you (🔒 Privacy).`, "tip");
+  }
+}
+
+/* Right-click menu for people in rooms / private chats. */
+function personMenu(e, nick) {
+  if (keyOf(nick) === keyOf(S.me)) return;
+  showMenu(e, [
+    { label: "💬 Send Message", run: () => openPm(nick) },
+    { label: "👤 View Profile", run: () => openProfile(nick) },
+    ...(isFriend(nick) || isPendingFriend(nick) ? [] : [{ label: "➕ Add Friend", run: () => addFriend(nick) }]),
+    "-",
+    isIgnored(nick)
+      ? { label: "✅ Unignore", run: () => ignoreUser(nick, false) }
+      : { label: "🚫 Ignore", danger: true, run: () => ignoreUser(nick, true) },
+  ]);
+}
+
+/* ---------- text style (bold / italic / underline / color) ---------- */
+
+/* Sent as standard IRC formatting codes, so other IRC clients show them too.
+ * Like classic messengers, the style applies to everything you send. */
+const IRC_COLORS = ["#ffffff", "#000000", "#00007f", "#009300", "#ff0000", "#7f0000", "#9c009c", "#fc7f00",
+  "#ffff00", "#00fc00", "#009393", "#00ffff", "#0000fc", "#ff00ff", "#7f7f7f", "#d2d2d2"];
+const PICKER_COLORS = [1, 2, 3, 4, 5, 6, 7, 10, 12, 13, 14];     // readable on white
+
+function loadStyle() {
+  try { S.style = { b: false, i: false, u: false, color: null, ...JSON.parse(localStorage.getItem("a09f.style")) }; }
+  catch { S.style = { b: false, i: false, u: false, color: null }; }
+  syncStyleUi();
+}
+
+function setStyle(patch) {
+  S.style = { ...S.style, ...patch };
+  localStorage.setItem("a09f.style", JSON.stringify(S.style));
+  syncStyleUi();
+}
+
+function syncStyleUi() {
+  const st = S.style;
+  $("fmtB").classList.toggle("on", st.b);
+  $("fmtI").classList.toggle("on", st.i);
+  $("fmtU").classList.toggle("on", st.u);
+  $("fmtColor").style.background = st.color == null ? "#000" : IRC_COLORS[st.color];
+  const inp = $("input").style;
+  inp.fontWeight = st.b ? "bold" : ""; inp.fontStyle = st.i ? "italic" : "";
+  inp.textDecoration = st.u ? "underline" : ""; inp.color = st.color == null ? "" : IRC_COLORS[st.color];
+}
+
+function styled(text) {
+  const st = S.style;
+  let pre = "";
+  if (st.color != null) pre += "\x03" + String(st.color).padStart(2, "0");
+  if (st.b) pre += "\x02";
+  if (st.i) pre += "\x1d";
+  if (st.u) pre += "\x1f";
+  return pre ? pre + text + "\x0f" : text;
+}
+
+function colorMenu(e) {
+  const m = $("ctxMenu");
+  m.innerHTML = `<div class="menu-title">Text color</div><div class="swatches"></div>`;
+  const sw = m.querySelector(".swatches");
+  const add = (code, title) => {
+    const b = document.createElement("span");
+    b.className = "swatch" + (S.style.color === code ? " on" : "");
+    b.style.background = code == null ? "#000" : IRC_COLORS[code];
+    b.title = title;
+    b.onclick = (ev) => { ev.stopPropagation(); setStyle({ color: code }); hideMenu(); $("input").focus(); };
+    sw.appendChild(b);
+  };
+  add(null, "Default");
+  for (const c of PICKER_COLORS) add(c, "");
+  m.style.display = "block";
+  placeMenu(m, e);
+}
+
+function placeMenu(m, e) {
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.min(e.clientX, innerWidth - r.width - 6) + "px";
+  m.style.top = Math.max(6, Math.min(e.clientY - r.height - 8, innerHeight - r.height - 6)) + "px";
+}
+
+/* IRC formatting codes -> HTML. Input is already HTML-escaped (codes are
+ * control characters, which esc() leaves alone). Colors use classes so the
+ * smiley replacement never sees a ":" inside a style attribute. */
+function formatIrc(html) {
+  if (!/[\x02\x03\x0f\x16\x1d\x1e\x1f]/.test(html)) return html;
+  let out = "", st = { b: 0, i: 0, u: 0, s: 0, fg: null, bg: null }, open = false, pending = false;
+  const close = () => { if (open) { out += "</span>"; open = false; } };
+  const openSpan = () => {
+    const cls = [st.b && "f-b", st.i && "f-i", st.u && "f-u", st.s && "f-s",
+      st.fg != null && `f-c${st.fg}`, st.bg != null && `f-bg${st.bg}`].filter(Boolean);
+    if (cls.length) { out += `<span class="${cls.join(" ")}">`; open = true; }
+  };
+  for (let i = 0; i < html.length; i++) {
+    const ch = html[i];
+    if ("\x02\x1d\x1f\x1e\x0f\x16\x03".includes(ch)) {
+      close();
+      if (ch === "\x02") st.b ^= 1;
+      else if (ch === "\x1d") st.i ^= 1;
+      else if (ch === "\x1f") st.u ^= 1;
+      else if (ch === "\x1e") st.s ^= 1;
+      else if (ch === "\x0f") st = { b: 0, i: 0, u: 0, s: 0, fg: null, bg: null };
+      else if (ch === "\x03") {
+        const m = html.slice(i + 1).match(/^(\d{1,2})(?:,(\d{1,2}))?/);
+        if (m) { st.fg = +m[1] % 16; if (m[2] != null) st.bg = +m[2] % 16; i += m[0].length; }
+        else { st.fg = null; st.bg = null; }
+      }
+      pending = true;
+    } else {
+      if (pending) { openSpan(); pending = false; }
+      out += ch;
+    }
+  }
+  close();
+  return out;
+}
+
+const stripIrc = (t) => (t || "").replace(/\x03(\d{1,2}(,\d{1,2})?)?/g, "").replace(/[\x02\x0f\x16\x1d\x1e\x1f]/g, "");
+
+/* ---------- smiley picker ---------- */
+
+const SMILEYS = ["🙂", "😁", "😂", "🤣", "😉", "😊", "😍", "😘", "😎", "🤔", "😴", "😜", "🙁", "😢", "😭", "😡",
+  "😱", "🤗", "🙄", "😇", "🥳", "👍", "👎", "👏", "🙏", "💪", "❤️", "💔", "🌹", "☕", "🍕", "🎉", "🔥", "⭐", "💯", "👋"];
+
+function smileyMenu(e) {
+  const m = $("ctxMenu");
+  m.innerHTML = `<div class="smileys"></div>`;
+  const box = m.querySelector(".smileys");
+  for (const s of SMILEYS) {
+    const b = document.createElement("span");
+    b.textContent = s;
+    b.onclick = (ev) => { ev.stopPropagation(); insertEmote(s); hideMenu(); };
+    box.appendChild(b);
+  }
+  m.style.display = "block";
+  placeMenu(m, e);
+}
+
+/* ---------- find people ---------- */
+
+function openFind() {
+  $("findDialog").style.display = "";
+  $("fdQuery").value = "";
+  $("fdResults").innerHTML = `<div class="empty-hint">Type part of an a09f ID to search.</div>`;
+  $("fdQuery").focus();
+}
+function closeFind() { $("findDialog").style.display = "none"; }
+
+async function doFind() {
+  const q = $("fdQuery").value.trim();
+  const el = $("fdResults");
+  if (q.length < 2) { el.innerHTML = `<div class="empty-hint">Type at least 2 letters.</div>`; return; }
+  el.innerHTML = `<div class="empty-hint">Searching…</div>`;
+  try {
+    const { users } = await socialApi(`/users/search?q=${encodeURIComponent(q)}`);
+    S.findResults = users;
+    requestPresence(users);
+    renderFind();
+  } catch (e) { el.innerHTML = `<div class="empty-hint">${esc(e.message)}</div>`; }
+}
+
+function renderFind() {
+  if ($("findDialog").style.display === "none" || !S.findResults) return;
+  const el = $("fdResults");
+  el.innerHTML = "";
+  if (!S.findResults.length) { el.innerHTML = `<div class="empty-hint">No one found with that ID.</div>`; return; }
+  for (const nick of S.findResults) {
+    const st = statusOf(nick);
+    const row = document.createElement("div");
+    row.className = `fd-row st-${st.state}`;
+    const rel = isFriend(nick) ? `<span class="fd-tag">✓ Friend</span>`
+      : isPendingFriend(nick) ? `<span class="fd-tag">Request sent</span>`
+      : `<button class="fd-add">➕ Add Friend</button>`;
+    row.innerHTML = `<span class="st"></span><b>${esc(nick)}</b><span class="status-text">${esc(st.label)}</span>` +
+      `<button class="fd-prof">Profile</button><button class="fd-msg">Message</button>${rel}`;
+    row.querySelector(".fd-prof").onclick = () => openProfile(nick);
+    row.querySelector(".fd-msg").onclick = () => { closeFind(); openPm(nick); };
+    row.querySelector(".fd-add")?.addEventListener("click", async () => { await addFriend(nick); renderFind(); });
+    el.appendChild(row);
+  }
+}
+
+/* ---------- message archive: older messages + search ---------- */
+
+const OLDER_PAGE = 100;
+
+function loadOlder(c) {
+  if (!c || c.loadingOlder || c.noMore || !has("draft/chathistory")) return;
+  const oldest = c.msgs.find((m) => m.id || m.who !== "System");
+  if (!oldest) return;
+  c.loadingOlder = true;
+  c.olderBefore = c.msgs.length;
+  S.olderFor = keyOf(c.name);
+  send(`CHATHISTORY BEFORE ${c.name} timestamp=${new Date(oldest.time).toISOString()} ${OLDER_PAGE}`);
+}
+
+/* Called after a chathistory batch: was it a "load older" page? */
+function onOlderBatch(target, count) {
+  const c = conv(keyOf(target));
+  if (!c?.loadingOlder) return false;
+  c.loadingOlder = false;
+  if (count < OLDER_PAGE) c.noMore = true;
+  if (keyOf(c.name) === S.current) {
+    const keep = logEl.scrollHeight - logEl.scrollTop;
+    renderLog();
+    logEl.scrollTop = logEl.scrollHeight - keep;        // stay where the reader was
+  }
+  return true;
+}
+
+function olderLink(c) {
+  if (!c || c.kind === "status" || !c.historyDone || !has("draft/chathistory")) return null;
+  const d = document.createElement("div");
+  d.className = "older";
+  if (c.noMore) { d.textContent = "— Start of conversation —"; return d; }
+  d.innerHTML = `<a>${c.loadingOlder ? "Loading…" : "⬆ Load older messages"}</a>`;
+  d.querySelector("a").onclick = () => { loadOlder(c); d.querySelector("a").textContent = "Loading…"; };
+  return d;
+}
+
+function openSearch() {
+  if (!has("soju.im/search")) { sys("Message search isn't available on this server.", "error"); return; }
+  const c = S.current && conv(S.current);
+  $("searchDialog").style.display = "";
+  const sel = $("srIn");
+  sel.innerHTML = "";
+  sel.add(new Option("All conversations", ""));
+  for (const x of [...rooms(), ...pms().filter((p) => !isIgnored(p.name))]) {
+    sel.add(new Option(x.kind === "room" ? roomLabel(x.name) : `Chat with ${x.name}`, x.name, false,
+      c && keyOf(x.name) === keyOf(c.name)));
+  }
+  $("srResults").innerHTML = `<div class="empty-hint">Search the messages a09f has kept for you.</div>`;
+  $("srQuery").focus(); $("srQuery").select();
+}
+function closeSearch() { $("searchDialog").style.display = "none"; }
+
+function doSearch() {
+  const q = $("srQuery").value.trim();
+  if (!q) { $("srQuery").focus(); return; }
+  // Attributes use message-tag escaping (soju parses them like tags).
+  const attrs = [`text=${escapeTag(q)}`, "limit=100"];
+  const where = $("srIn").value;
+  if (where) attrs.unshift(`in=${where}`);
+  S.searching = true;
+  $("srResults").innerHTML = `<div class="empty-hint">Searching…</div>`;
+  send(`SEARCH ${attrs.join(";")}`);
+}
+
+function onSearchBatch(lines) {
+  S.searching = false;
+  const el = $("srResults");
+  el.innerHTML = "";
+  const hits = lines.filter((l) => l.cmd === "PRIVMSG" || l.cmd === "NOTICE")
+    .map((l) => { const from = nickOf(l.prefix); return { from, target: convTarget(l.params[0], from), m: msgFrom(l, from) }; })
+    .filter((h) => !isIgnored(h.from) && !isPresenceRoom(h.target))
+    .sort((a, b) => b.m.time - a.m.time);
+  if (!hits.length) { el.innerHTML = `<div class="empty-hint">No messages found.</div>`; return; }
+  for (const h of hits) {
+    const row = document.createElement("div");
+    row.className = "sr-row";
+    const where = isChannel(h.target) ? roomLabel(h.target) : `Chat with ${h.target}`;
+    const d = new Date(h.m.time);
+    row.innerHTML = `<div class="sr-meta">${esc(d.toLocaleDateString())} ${esc(fmtTime(h.m.time))} · ${esc(where)}</div>` +
+      `<div><b>${esc(h.from)}:</b> ${emote(formatIrc(esc(h.m.txt)))}</div>`;
+    row.onclick = () => {
+      closeSearch();
+      if (isChannel(h.target)) joinOrSwitch(h.target); else openPm(h.target);
+    };
+    el.appendChild(row);
+  }
+}
+
+function escapeTag(v) {
+  return v.replace(/\\/g, "\\\\").replace(/;/g, "\\:").replace(/ /g, "\\s").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+}
+
 /* ---------- actions ---------- */
 
 async function doSignIn() {
@@ -2048,6 +2442,9 @@ function doDisconnect(message = "", isError = false) {
   S.caps.clear(); S.convs.clear(); S.batches.clear(); S.away = false;
   S.presence.clear(); S.statuses.clear(); S.whois.clear(); S.friends = [];
   stopSocial(); S.friendGroups.clear(); S.incoming = []; S.outgoing = [];
+  S.prefs = { ignore: [], friendsOnly: false }; S.callerId = null; S.accepted = null; S.blockedTold = null;
+  S.findResults = null; S.searching = false;
+  for (const id of ["privacyDialog", "findDialog", "searchDialog"]) $(id).style.display = "none";
   for (const t of S.typing.values()) clearTimeout(t);
   S.typing.clear(); S.typingTo = null; $("typing").textContent = ""; hideMenu();
   S.inPresence = false; S.presenceReady = false; S.announced = false;
@@ -2116,7 +2513,7 @@ function sendChat() {
   const c = S.current && conv(S.current);
   if (!c || c.kind === "status") { sys("Join a room first, then say hi!", "tip"); return; }
   stopTyping();
-  sendTo(c.name, text);
+  sendTo(c.name, styled(text));
 }
 
 async function doCreateAccount() {
@@ -2391,6 +2788,24 @@ $("friendAddGroup").onchange = () => {
   if (isNew) $("friendAddNewGroup").focus();
 };
 $("input").addEventListener("input", onComposerInput);
+$("btnPrivacy").onclick = openPrivacy;
+$("pvClose").onclick = closePrivacy;
+$("pvFriendsOnly").onchange = onFriendsOnlyToggle;
+$("privacyDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closePrivacy(); });
+$("fdClose").onclick = closeFind;
+$("fdGo").onclick = doFind;
+$("fdQuery").addEventListener("keydown", (e) => { if (e.key === "Enter") doFind(); if (e.key === "Escape") closeFind(); });
+$("toFind").onclick = () => { toggleAddFriend(false); openFind(); };
+$("emptyFind").onclick = openFind;
+$("srClose").onclick = closeSearch;
+$("srGo").onclick = doSearch;
+$("srQuery").addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); if (e.key === "Escape") closeSearch(); });
+$("fmtB").onclick = () => { setStyle({ b: !S.style.b }); $("input").focus(); };
+$("fmtI").onclick = () => { setStyle({ i: !S.style.i }); $("input").focus(); };
+$("fmtU").onclick = () => { setStyle({ u: !S.style.u }); $("input").focus(); };
+$("fmtColor").onclick = (e) => { e.stopPropagation(); colorMenu(e); };
+$("fmtMore").onclick = (e) => { e.stopPropagation(); smileyMenu(e); };
+loadStyle();
 
 listen("irc-line", (e) => handleLine(e.payload))
   .catch(() => setPhase("offline", "Something went wrong starting a09f. Please restart the app.", true));

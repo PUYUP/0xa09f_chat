@@ -35,6 +35,8 @@ API (errors: 4xx/5xx {"ok": false, "error": "<human readable>"})
   POST /friends/move    {"nick","group"}
   POST /friends/rename-group {"from","to"}
   POST /typing          {"to","active"}
+  GET  /prefs  /  POST /prefs {"ignore":[ids],"friendsOnly":bool}
+  GET  /users/search?q= -> {"users": [ids]} (substring match on IDs)
   GET  /events?token=   Server-Sent Events: friend-request, friend-accepted,
                         friend-declined, typing
 """
@@ -161,6 +163,19 @@ def db():
 
 
 _exists_cache = {}          # username -> (exists, checked_at)
+
+
+_users_cache = {"at": 0.0, "users": []}
+
+
+def all_users():
+    """Every soju account ID (sojuctl "user status" lists them), cached a minute."""
+    if time.time() - _users_cache["at"] > 60:
+        rc, out = sojuctl("user", "status")
+        if rc == 0:
+            users = [l.split(":", 1)[0].strip() for l in out.splitlines() if ":" in l]
+            _users_cache.update(at=time.time(), users=[u for u in users if USERNAME_RE.match(u)])
+    return _users_cache["users"]
 
 
 def user_exists(username):
@@ -395,6 +410,18 @@ class Handler(BaseHTTPRequestHandler):
                 me = self._token_user()
                 with db() as conn:
                     self._json(200, {"ok": True, **social.friends_state(conn, me)})
+            elif url.path == "/prefs":
+                me = self._token_user()
+                with db() as conn:
+                    self._json(200, {"ok": True, **social.get_prefs(conn, me)})
+            elif url.path == "/users/search":
+                me = self._token_user()
+                q = parse_qs(url.query).get("q", [""])[0]
+                try:
+                    users = social.search_users(all_users(), me, q)
+                except social.SocialFail as f:
+                    raise Fail(f.status, f.message)
+                self._json(200, {"ok": True, "users": users})
             else:
                 self._json(404, {"ok": False, "error": "not found"})
         except Fail as f:
@@ -402,7 +429,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # Signed-in calls (bearer token): not counted against the per-IP limit.
     SOCIAL = {"/friends/request", "/friends/respond", "/friends/remove", "/friends/move",
-              "/friends/rename-group", "/typing", "/session/end"}
+              "/friends/rename-group", "/typing", "/session/end", "/prefs"}
 
     def do_POST(self):
         if self.path in self.SOCIAL:
@@ -495,6 +522,14 @@ class Handler(BaseHTTPRequestHandler):
                 auth = self.headers.get("Authorization", "")
                 social.end_session(auth[7:])
                 self._json(200, {"ok": True})
+                return
+            if self.path == "/prefs":
+                with db() as conn:
+                    try:
+                        prefs = social.set_prefs(conn, me, body, lambda u: bool(USERNAME_RE.match(u)))
+                    except social.SocialFail as f:
+                        raise Fail(f.status, f.message)
+                self._json(200, {"ok": True, **prefs})
                 return
             with db() as conn:
                 try:

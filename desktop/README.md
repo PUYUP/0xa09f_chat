@@ -105,6 +105,23 @@ server/protokol di layar.
 - **Start a09f when my computer starts** (`tauri-plugin-autostart`): dimulai
   tersembunyi di tray dengan argumen `--autostart`; kombinasikan dengan
   auto sign-in
+- **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
+  mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
+  **Only my friends can send me private messages** = user mode `+g` solanum +
+  semua teman di daftar `ACCEPT` (maks `max_accept` = 100). Pengirim lain
+  mendapat 716 dan kita Tip sekali (718). Disimpan di service akun (`/prefs`).
+  Catatan: `+g`/ACCEPT hilang kalau koneksi upstream soju putus sampai app
+  sign in lagi
+- **Gaya teks**: tombol B / I / U dan warna di bar smiley, berlaku untuk semua
+  pesan yang kamu kirim (diingat di komputer ini); dikirim sebagai kode format
+  IRC standar (`\x02` `\x1d` `\x1f` `\x03NN`) dan pesan masuk berformat
+  ditampilkan. ➕ membuka pilihan 36 smiley
+- **Cari orang**: "Search for people…" di form Add Friend → `GET /users/search`
+  (cocok sebagian ID), dengan Profile / Message / Add Friend
+- **Arsip pesan**: "⬆ Load older messages" di atas percakapan
+  (`CHATHISTORY BEFORE`, 100 per halaman) dan 🔍 Search di judul percakapan
+  (`SEARCH` soju, cap `soju.im/search`), bisa semua percakapan atau satu saja;
+  klik hasil membuka percakapannya
 - **Lupa password** (Sign In → *Forgot password?*): isi ID → kode 6 digit
   dikirim ke email pemulihan (`POST /reset/request`) → isi kode + password baru
   (`POST /reset/confirm`). Server mengganti password di soju, NickServ, dan
