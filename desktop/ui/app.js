@@ -919,7 +919,8 @@ function schedulePresenceRender() {
 
 /* "STATUS <code> [text]" posted in PRESENCE_ROOM. Newest line wins. */
 function onStatusLine(from, l) {
-  const m = (l.params.length > 1 ? l.text || "" : "").match(/^STATUS (\w+)(?: (.*))?$/);
+  // The text is usually the trailing parameter, so it isn't in l.params.
+  const m = (l.text || "").match(/^STATUS (\w+)(?: (.*))?$/);
   if (!m || !STATUS_PRESETS[m[1]]) return;
   const time = l.tags.time ? Date.parse(l.tags.time) : Date.now();
   const key = keyOf(from);
