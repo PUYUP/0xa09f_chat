@@ -204,6 +204,8 @@ function addMsg(target, m, { history = false } = {}) {
     renderLists();
   }
   if (!history && m.others && S.burstDone) onIncoming(c, m);
+  // Keep "newest first" ordering when the open chat (or my own message) moves it up.
+  if (!history && c.kind !== "status" && isConvMsg(m) && (key === S.current || !m.others)) renderLists();
   if (!history && m.others && c.kind === "pm" && S.typing.has(keyOf(c.name))) onTyping(c.name, false);
 }
 
@@ -506,7 +508,10 @@ function renderLists() {
   renderFriends();
   updateTitle();
   roomsEl.innerHTML = "";
-  for (const c of rooms()) {
+  // Newest conversation first (join/leave lines don't count), then by name.
+  const lastAt = (c) => c.msgs.reduce((t, m) => (isConvMsg(m) ? Math.max(t, m.time) : t), 0);
+  const roomList = rooms().sort((a, b) => (lastAt(b) - lastAt(a)) || roomLabel(a.name).localeCompare(roomLabel(b.name)));
+  for (const c of roomList) {
     const item = convItem(c, "chan", () => leaveRoom(c));
     item.querySelector(".close").title = "Leave this room";
     roomsEl.appendChild(item);
