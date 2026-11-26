@@ -43,7 +43,8 @@ API (errors: 4xx/5xx {"ok": false, "error": "<human readable>"})
   POST /announce        {"text"}               admins only (ADMIN_USERS)
   GET  /announcements?after=<id>
   GET  /stats                                  {"online": people with a09f open}
-  GET  /msgmeta?conv=   reactions + edits (+ pins for a room) of one conversation
+  GET  /msgmeta?conv=[&from=&to=]  reactions, edits, expiries (+ pins) of one conversation,
+                        optionally only for messages sent between from..to (ms)
   POST /react {"sender","target","time","hash","emoji","on"}
   POST /edit  {"target","time","hash","text"}         (my own messages)
   POST /pin   {"room","sender","time","hash","text","on"}
@@ -478,8 +479,12 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         if url.path == "/msgmeta":
                             cv = q.get("conv", [""])[0].strip().lower()
-                            out = {"reactions": social.reactions_for(conn, me, cv), "edits": social.edits_for(conn, me, cv),
-                                   "expiring": social.expiries_for(conn, me, cv),
+                            try:
+                                rng = (int(q.get("from", ["0"])[0] or 0), int(q.get("to", [str(2**62)])[0] or 2**62))
+                            except ValueError:
+                                raise Fail(400, "Bad request.")
+                            out = {"reactions": social.reactions_for(conn, me, cv, *rng), "edits": social.edits_for(conn, me, cv, *rng),
+                                   "expiring": social.expiries_for(conn, me, cv, *rng),
                                    "pins": social.pins_for(conn, cv) if cv.startswith(("#", "&")) else []}
                         elif url.path == "/poll":
                             out = social.poll_state(conn, me, int(q.get("id", ["0"])[0] or 0))

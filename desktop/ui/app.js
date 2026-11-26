@@ -31,7 +31,7 @@ const PRESENCE_ROOM = "#a09f-presence";
 const PRESENCE_HISTORY = 500;
 const HISTORY_LIMIT = 100;        // messages fetched per conversation
 const TARGETS_DAYS = 30;          // private chats active within this window are restored
-const MAX_BUFFER = 500;
+const MAX_BUFFER = 1000;           // messages kept per conversation (a sliding window)
 
 /* IRCv3 capabilities we use when the server offers them. */
 const WANTED_CAPS = ["sasl", "server-time", "message-tags", "batch", "echo-message", "away-notify",
@@ -185,6 +185,14 @@ function addMsg(target, m, { history = false } = {}) {
   if (m.id) c.ids.add(m.id);
   m.time = m.time || Date.now();
   m.live = !history;
+  // Scrolled far back (newest messages dropped from memory): a live message
+  // isn't appended after the gap; the "jump to latest" bar counts it instead.
+  if (!history && c.hasNewer) {
+    if (isConvMsg(m)) c.newerCount = (c.newerCount || 0) + 1;
+    if (keyOf(c.name) === S.current) renderNewerBar();
+    if (m.others) { recountUnread(c); renderLists(); if (S.burstDone) onIncoming(c, m); }
+    return;
+  }
   if (history && c.msgs.length && c.msgs[c.msgs.length - 1].time > m.time) {
     let i = c.msgs.length;
     while (i > 0 && c.msgs[i - 1].time > m.time) i--;
@@ -192,11 +200,18 @@ function addMsg(target, m, { history = false } = {}) {
   } else {
     c.msgs.push(m);
   }
-  if (c.msgs.length > MAX_BUFFER) c.msgs.shift();
+  // Sliding window: loading older pages drops the newest messages (they can
+  // be fetched again with "jump to latest"); new messages drop the oldest.
+  while (c.msgs.length > MAX_BUFFER) {
+    const gone = c.loadingOlder ? c.msgs.pop() : c.msgs.shift();
+    if (gone.id) c.ids.delete(gone.id);
+    if (c.loadingOlder) c.hasNewer = true; else c.noMore = false;
+  }
 
   const key = keyOf(c.name);
   if (key === S.current) {
-    if (history) renderLog(); else renderMsg(m);
+    // History arrives in pages: onHistoryBatch draws the log once per page.
+    if (!history) renderMsg(m);
     // Only count it as read if the person can actually see the window.
     if (m.others) { if (S.focused) markRead(c); else { recountUnread(c); renderLists(); } }
   } else if (m.others) {
@@ -308,7 +323,10 @@ function onHistoryBatch(target, lines) {
   if (onOlderBatch(target, lines.filter((l) => l.cmd === "PRIVMSG" || l.cmd === "NOTICE").length)) return;
   const c = conv(keyOf(target));
   if (!c) return;
+  const firstPage = !c.historyDone;
   c.historyDone = true;
+  if (keyOf(c.name) === S.current) renderLog();          // one redraw per page
+  if (firstPage && S.token && (keyOf(c.name) === S.current || S.meta?.has(keyOf(c.name)))) loadMeta(c);
   if (keyOf(c.name) === S.current) markRead(c);
   else { recountUnread(c); notifyOffline(c); }
   renderLists();
@@ -408,7 +426,7 @@ function renderMsg(m) {
   const cur = S.current && conv(S.current);
   const deleted = cur && isRedacted(cur, m);
   const withMeta = cur && cur.kind !== "status" && isRealMsg(m);
-  const edited = withMeta ? metaFor(keyOf(cur.name)).edits.get(msgKeyStr(msgKeyParts(cur, m))) : undefined;
+  const edited = withMeta ? metaFor(keyOf(cur.name)).edits.get(msgKeyOf(cur, m)) : undefined;
   let body = edited ?? m.txt;
   let quote = "";
   const rp = !m.buzz && body.match(REPLY_RE);
@@ -439,15 +457,19 @@ function renderMsg(m) {
     paintName(div.querySelector(".who"), m.who);
     div.querySelector(".who").dataset.nick = m.who;
   }
-  if (withMeta) div.dataset.key = msgKeyStr(msgKeyParts(cur, m));      // for jumping to it
+  if (withMeta) div.dataset.key = msgKeyOf(cur, m);      // for jumping to it
   if (S.jump && div.dataset.key === S.jump.key && Date.now() < S.jump.until) div.classList.add("flash");
   if (withMeta && !deleted) {
-    const due = metaFor(keyOf(cur.name)).expiring.get(msgKeyStr(msgKeyParts(cur, m)));
+    const due = metaFor(keyOf(cur.name)).expiring.get(msgKeyOf(cur, m));
     if (due) div.querySelector(".txt").insertAdjacentHTML("beforeend", ` <span class="expiry" data-due="${due}" title="Disappears ${esc(new Date(due * 1000).toLocaleString())}">${expiryLabel(due)}</span>`);
     if (isSaved(cur, m)) div.querySelector(".txt").insertAdjacentHTML("beforeend", ` <span class="saved-star" title="Saved">⭐</span>`);
   }
   if (poll && !deleted) div.appendChild(pollCard(+poll[1]));
-  if (withMeta && !deleted && S.token) { reactionChips(div, cur, m); messageTools(div, cur, m); }
+  if (withMeta && !deleted && S.token) {
+    reactionChips(div, cur, m);
+    // The hover toolbar is built on first hover, not for every message up front.
+    div.addEventListener("mouseenter", () => { if (!div.querySelector(".mtools")) messageTools(div, cur, m); });
+  }
   const stick = nearBottom();
   logEl.querySelector(".seen")?.remove();
   if (isConvMsg(m)) logEl.querySelector(".older.empty")?.remove();      // first message: drop the hint
@@ -474,6 +496,7 @@ function renderLog() {
   try {
     for (const m of c?.msgs || []) if (!(m.others && isIgnored(m.who))) renderMsg(m);
     renderSeen();
+    renderNewerBar();
   } finally { S.bulkRender = false; }
   logEl.dataset.conv = convKey;
   if (S.jump && Date.now() < S.jump.until) keepJump();
@@ -2554,14 +2577,16 @@ const OLDER_PAGE = 100;
 /* A message people actually sent (not a local join/leave line or a notice). */
 const isConvMsg = (m) => isRealMsg(m) && !m.local;
 
-function loadOlder(c) {
+function loadOlder(c, limit = OLDER_PAGE) {
   if (!c || c.loadingOlder || c.noMore || !has("draft/chathistory")) return;
   const oldest = c.msgs.find(isConvMsg);
   if (!oldest) { c.noMore = true; renderLog(); return; }
   c.loadingOlder = true;
   c.olderBefore = c.msgs.length;
+  c.olderFrom = oldest.time;
+  c.olderLimit = limit;
   S.olderFor = keyOf(c.name);
-  send(`CHATHISTORY BEFORE ${c.name} timestamp=${new Date(oldest.time).toISOString()} ${OLDER_PAGE}`);
+  send(`CHATHISTORY BEFORE ${c.name} timestamp=${new Date(oldest.time).toISOString()} ${limit}`);
 }
 
 /* Called after a chathistory batch: was it a "load older" page? */
@@ -2569,11 +2594,18 @@ function onOlderBatch(target, count) {
   const c = conv(keyOf(target));
   if (!c?.loadingOlder) return false;
   c.loadingOlder = false;
-  if (count < OLDER_PAGE) c.noMore = true;
-  if (keyOf(c.name) === S.current) {
-    const keep = logEl.scrollHeight - logEl.scrollTop;
+  if (count < (c.olderLimit || OLDER_PAGE)) c.noMore = true;
+  const real = c.msgs.filter(isConvMsg);
+  if (count && real.length && c.olderFrom) loadMeta(c, { from: real[0].time, to: c.olderFrom - 1, merge: true });
+  if (keyOf(c.name) === S.current && !S.silentOlder) {
+    // Keep the message at the top of the view where it was (pages are added
+    // above it, and the window may drop messages below it).
+    const top = logEl.getBoundingClientRect().top;
+    const anchor = [...logEl.querySelectorAll(".msg[data-key]")].find((e) => e.getBoundingClientRect().bottom > top);
+    const delta = anchor ? anchor.getBoundingClientRect().top - top : 0;
     renderLog();
-    logEl.scrollTop = logEl.scrollHeight - keep;        // stay where the reader was
+    const again = anchor && logEl.querySelector(`.msg[data-key="${CSS.escape(anchor.dataset.key)}"]`);
+    if (again) logEl.scrollTop += again.getBoundingClientRect().top - logEl.getBoundingClientRect().top - delta;
   }
   return true;
 }
@@ -3211,7 +3243,7 @@ const redactKey = (sender, target, time, hash) => `${keyOf(sender)}|${keyOf(targ
 
 function isRedacted(c, m) {
   if (!S.redactions?.size || !m.time || m.cls.includes("service")) return false;
-  return S.redactions.has(redactKey(m.who, msgTarget(c, m), m.time, msgHash(m.rawTxt ?? m.txt)));
+  return S.redactions.has(msgKeyOf(c, m));
 }
 
 async function loadRedactions() {
@@ -3305,6 +3337,13 @@ function msgKeyParts(c, m) {
   return { sender: keyOf(m.who), target: msgTarget(c, m), time: m.time, hash: msgHash(m.rawTxt ?? m.txt) };
 }
 const msgKeyStr = (k) => redactKey(k.sender, k.target, k.time, k.hash);
+/* msgKeyStr(msgKeyParts(c, m)), computed once per message (hashing the text
+ * for every message on every redraw adds up in long conversations). */
+function msgKeyOf(c, m) {
+  if (m._key && m._keyConv === c.name) return m._key;
+  m._keyConv = c.name;
+  return (m._key = msgKeyStr(msgKeyParts(c, m)));
+}
 
 /* The conversation a meta event belongs to, from this user's point of view. */
 function metaConv(target, sender) {
@@ -3321,20 +3360,25 @@ function metaFor(convKey) {
   return S.meta.get(convKey);
 }
 
-async function loadMeta(c) {
+/* Reactions / edits / expiries for the messages we hold (a time range), not
+ * the whole conversation. `merge` adds a range (an older page) to what we
+ * have; otherwise it replaces it. Pins are per room and always fetched. */
+async function loadMeta(c, { from = null, to = null, merge = false } = {}) {
   if (!c || c.kind === "status" || !S.token) return;
   const key = keyOf(c.name);
+  const real = c.msgs.filter(isConvMsg);
+  if (from == null) from = real.length ? real[0].time : Date.now();
+  if (to == null && c.hasNewer && real.length) to = real.at(-1).time;
   try {
-    const d = await socialApi(`/msgmeta?conv=${encodeURIComponent(c.name)}`);
+    const d = await socialApi(`/msgmeta?conv=${encodeURIComponent(c.name)}&from=${from}` + (to != null ? `&to=${to}` : ""));
     const meta = metaFor(key);
-    meta.reactions.clear(); meta.edits.clear();
+    if (!merge) { meta.reactions.clear(); meta.edits.clear(); meta.expiring.clear(); }
     for (const r of d.reactions) addReaction(meta, r, true);
     for (const e of d.edits) meta.edits.set(msgKeyStr(e), e.text);
-    meta.expiring.clear();
     for (const x of d.expiring || []) meta.expiring.set(msgKeyStr(x), x.due);
     meta.pins = d.pins || [];
     meta.loaded = true;
-    if (S.current === key) { renderLog(); renderPins(); }
+    if (S.current === key && !S.silentOlder) { renderLog(); renderPins(); }
   } catch { /* not critical */ }
 }
 
@@ -3408,7 +3452,7 @@ function messageTools(div, c, m) {
 }
 
 function reactionChips(div, c, m) {
-  const byEmoji = metaFor(keyOf(c.name)).reactions.get(msgKeyStr(msgKeyParts(c, m)));
+  const byEmoji = metaFor(keyOf(c.name)).reactions.get(msgKeyOf(c, m));
   if (!byEmoji?.size) return;
   const row = document.createElement("div");
   row.className = "reactions";
@@ -3802,7 +3846,7 @@ async function loadSaved() {
   } catch {}
 }
 
-function isSaved(c, m) { return S.savedKeys?.has(msgKeyStr(msgKeyParts(c, m))); }
+function isSaved(c, m) { return !!S.savedKeys?.size && S.savedKeys.has(msgKeyOf(c, m)); }
 
 function toggleSave(c, m) {
   const on = !isSaved(c, m);
@@ -4022,11 +4066,35 @@ function onImvEvent(d) {
   if (S.current === keyOf(other)) applyImv();
 }
 
+/* ---------- sliding window: back to the newest messages ---------- */
+
+function renderNewerBar() {
+  logEl.querySelector(".newer")?.remove();
+  const c = S.current && conv(S.current);
+  if (!c?.hasNewer) return;
+  const d = document.createElement("div");
+  d.className = "older newer";
+  d.innerHTML = `<a>⬇ ${c.newerCount ? `${c.newerCount} new message${c.newerCount === 1 ? "" : "s"} — ` : ""}Jump to latest</a>`;
+  d.querySelector("a").onclick = () => jumpToLatest(c);
+  logEl.appendChild(d);
+}
+
+/* Drop the old window and load the newest page again. */
+function jumpToLatest(c) {
+  c.msgs = []; c.ids.clear();
+  c.hasNewer = false; c.newerCount = 0; c.noMore = false;
+  c.historyLoaded = false; c.historyDone = false;
+  logEl.dataset.conv = "";                      // reopen at the bottom
+  renderLog();
+  fetchHistory(c);
+}
+
 /* ---------- jump to a message (Saved, Search) ---------- */
 
 /* Open the conversation, load older pages until the message is there (up to
  * MAX_JUMP_PAGES), scroll it to the middle and flash it. */
-const MAX_JUMP_PAGES = 15;
+const JUMP_PAGE = 500;             // bigger pages when hunting for a message (soju allows 1000)
+const MAX_JUMP_PAGES = 40;         // ~20,000 messages back
 
 async function jumpToMessage(convName, key) {
   if (isChannel(convName)) {
@@ -4035,14 +4103,21 @@ async function jumpToMessage(convName, key) {
   } else openPm(convName);
   const c = conv(keyOf(convName));
   const find = () => logEl.querySelector(`.msg[data-key="${CSS.escape(key)}"]`);
+  const inMemory = () => c.msgs.some((m) => isConvMsg(m) && msgKeyOf(c, m) === key);
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let t = 0; t < 40 && (!c.historyDone || (S.token && !metaFor(keyOf(c.name)).loaded)); t++) await wait(150);
+  // Page back without redrawing each page; draw once when it's found.
+  S.silentOlder = true;
+  try {
+    for (let page = 0; !inMemory() && page < MAX_JUMP_PAGES && !c.noMore && S.current === keyOf(c.name); page++) {
+      $("typing").textContent = `Looking back for the message… (${c.msgs.length} loaded)`;
+      loadOlder(c, JUMP_PAGE);
+      for (let t = 0; t < 300 && c.loadingOlder; t++) await wait(50);
+    }
+  } finally { S.silentOlder = false; }
+  renderTyping();
+  renderLog();
   let el = find();
-  for (let page = 0; !el && page < MAX_JUMP_PAGES && !c.noMore && S.current === keyOf(c.name); page++) {
-    loadOlder(c);
-    for (let t = 0; t < 60 && c.loadingOlder; t++) await wait(150);
-    el = find();
-  }
   if (!el) { sys("That message isn't in the chat history any more (it may have been deleted).", "tip"); return; }
   // Re-renders in the next moments (reactions/edits loading, …) keep the spot.
   S.jump = { key, until: Date.now() + 2000 };

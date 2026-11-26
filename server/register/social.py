@@ -421,9 +421,15 @@ def react(conn, me, key, emoji, on):
          {"sender": key[0], "target": key[1], "time": key[2], "hash": key[3], "user": me, "emoji": emoji, "on": on})
 
 
-def reactions_for(conn, me, conv):
+def time_range(t_from, t_to):
+    """Optional message-time window (ms) so apps only fetch what they show."""
+    return " AND time >= ? AND time <= ?", (int(t_from or 0), int(t_to or 2**62))
+
+
+def reactions_for(conn, me, conv, t_from=None, t_to=None):
     where, args = conv_filter(me, conv)
-    rows = conn.execute(f"SELECT sender, target, time, hash, user, emoji FROM reactions WHERE {where}", args)
+    rw, ra = time_range(t_from, t_to)
+    rows = conn.execute(f"SELECT sender, target, time, hash, user, emoji FROM reactions WHERE {where}{rw}", (*args, *ra))
     return [dict(zip(("sender", "target", "time", "hash", "user", "emoji"), r)) for r in rows]
 
 
@@ -438,9 +444,10 @@ def edit(conn, me, key, text):
          {"sender": key[0], "target": key[1], "time": key[2], "hash": key[3], "text": text})
 
 
-def edits_for(conn, me, conv):
+def edits_for(conn, me, conv, t_from=None, t_to=None):
     where, args = conv_filter(me, conv)
-    rows = conn.execute(f"SELECT sender, target, time, hash, text FROM edits WHERE {where}", args)
+    rw, ra = time_range(t_from, t_to)
+    rows = conn.execute(f"SELECT sender, target, time, hash, text FROM edits WHERE {where}{rw}", (*args, *ra))
     return [dict(zip(("sender", "target", "time", "hash", "text"), r)) for r in rows]
 
 
@@ -602,9 +609,10 @@ def set_expiry(conn, me, key, after_secs):
          {"sender": key[0], "target": key[1], "time": key[2], "hash": key[3], "due": due})
 
 
-def expiries_for(conn, me, conv):
+def expiries_for(conn, me, conv, t_from=None, t_to=None):
     where, args = conv_filter(me, conv)
-    rows = conn.execute(f"SELECT sender, target, time, hash, due FROM expiring WHERE {where}", args)
+    rw, ra = time_range(t_from, t_to)
+    rows = conn.execute(f"SELECT sender, target, time, hash, due FROM expiring WHERE {where}{rw}", (*args, *ra))
     return [dict(zip(("sender", "target", "time", "hash", "due"), r)) for r in rows]
 
 

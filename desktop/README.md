@@ -196,6 +196,15 @@ server/protokol di layar.
 - **Tema percakapan (IMVironment)**: 🎨 Theme di judul private chat →
   Beach, Starry night, Rainy day, Love, Outer space, Forest, Snowfall,
   Sunset (animasi CSS, tanpa gambar); tampil di kedua sisi, live (`/imv`)
+- **Percakapan panjang**: dibuka dengan 100 pesan terakhir; memori per
+  percakapan adalah *jendela geser* 1.000 pesan — Load older membuang yang
+  paling baru (bar "⬇ Jump to latest" untuk kembali), pesan baru membuang
+  yang paling lama, jadi scroll bisa sampai pesan pertama. History digambar
+  sekali per halaman, toolbar pesan dibuat saat hover, identitas pesan
+  dihitung sekali per pesan, dan reaksi/edit/expiry diambil hanya untuk
+  rentang waktu pesan yang dimuat (`/msgmeta?from=&to=`). Lompat ke pesan
+  (Saved/Search) memuat halaman 500 pesan tanpa menggambar tiap halaman
+  (±2.500 pesan ke belakang ≈ 8 detik)
 - **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
   mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
   **Only my friends can send me private messages** = user mode `+g` solanum +
