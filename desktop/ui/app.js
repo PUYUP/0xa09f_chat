@@ -587,7 +587,8 @@ function renderUsers() {
     people = [...c.members.keys()].filter((n) => !isService(n));   // hide ChanServ & co.
   }
   requestPresence(people);
-  for (const nick of people.sort((a, b) => a.localeCompare(b))) {
+  // Nearest timezone first, then by name.
+  for (const nick of people.sort((a, b) => (tzSortKey(a) - tzSortKey(b)) || a.localeCompare(b))) {
     const self = keyOf(nick) === keyOf(S.me);
     const st = statusOf(nick);
     const d = document.createElement("div");
@@ -664,7 +665,8 @@ function refreshSide() {
     if (amOp(c)) title += ` <button id="btnRoomSettings" class="title-btn" title="Room settings and moderation">⚙️ Settings</button>`;
     title += ` <button id="btnLeave" class="title-btn" title="Leave this room">🚪 Leave</button>`;
   } else if (c?.kind === "pm") {
-    title = `Private chat with ${esc(c.name)}` +
+    const lt = localTimeText(c.name);
+    title = `Private chat with ${esc(c.name)}` + (lt ? ` <span class="topic">— ${esc(lt)}</span>` : "") +
       ` <button id="btnPmProfile" class="title-btn" title="See ${esc(c.name)}'s profile">👤 Profile</button>` +
       ` <button id="btnPmTheme" class="title-btn" title="Chat theme (both of you see it)">🎨 Theme</button>` +
       ` <button id="btnPmIgnore" class="title-btn">${isIgnored(c.name) ? "✅ Unignore" : "🚫 Ignore"}</button>`;
@@ -1202,6 +1204,7 @@ async function startSocial() {
     await migrateLocalFriends();
     loadRedactions(); loadAnnouncements(); loadStats();
     loadLastSeen(); loadDueReminders(); loadSaved();
+    shareMyTz(); S.friends.forEach(tzOf);
     nameColor(S.me); S.friends.forEach(nameColor);
     clearInterval(S.lastSeenTimer);
     S.lastSeenTimer = setInterval(loadLastSeen, 120000);
@@ -1410,7 +1413,7 @@ function renderFriends() {
   const sig = JSON.stringify([S.friends, [...S.friendGroups], S.outgoing, S.incoming.map((r) => r.from),
     S.friends.map((n) => [statusOf(n), S.typing.has(keyOf(n)), conv(keyOf(n))?.unread || 0, S.lastSeen?.get(keyOf(n)) || 0]),
     [...(S.collapsedGroups || [])], $("friendAdd").style.display, S.prefs.ignore,
-    S.friends.map((n) => S.nameColors?.get(keyOf(n)) ?? "")]);
+    S.friends.map((n) => S.nameColors?.get(keyOf(n)) ?? ""), S.friends.map((n) => S.tz?.get(keyOf(n)) ?? "")]);
   if (sig === S.friendsSig) return;
   S.friendsSig = sig;
   el.innerHTML = "";
@@ -1431,7 +1434,8 @@ function renderFriends() {
   for (const g of groups) {
     const items = byGroup.get(g).sort((a, b) =>
       (a.pending - b.pending) ||
-      (STATE_ORDER[statusOf(a.nick).state] - STATE_ORDER[statusOf(b.nick).state]) || a.nick.localeCompare(b.nick));
+      (STATE_ORDER[statusOf(a.nick).state] - STATE_ORDER[statusOf(b.nick).state]) ||
+      (tzSortKey(a.nick) - tzSortKey(b.nick)) || a.nick.localeCompare(b.nick));
     const real = items.filter((i) => !i.pending);
     const on = real.filter((i) => !["offline", "unknown"].includes(statusOf(i.nick).state)).length;
     const head = document.createElement("div");
@@ -2018,7 +2022,12 @@ function renderRoomBrowser() {
   const list = (S.roomList || [])
     .filter((r) => !isPresenceRoom(r.name))
     .filter((r) => !q || r.name.toLowerCase().includes(q) || r.topic.toLowerCase().includes(q))
-    .sort((a, b) => b.users - a.users || a.name.localeCompare(b.name));
+    .sort((a, b) => {
+      const da = S.roomTz?.get(keyOf(a.name)), db = S.roomTz?.get(keyOf(b.name));
+      const ka = da == null ? 360 : tzDistance(da, myOffset()), kb = db == null ? 360 : tzDistance(db, myOffset());
+      return (ka - kb) || b.users - a.users || a.name.localeCompare(b.name);     // nearest first
+    });
+  loadRoomTz(list.map((r) => r.name));
   const today = new Map((S.trending || []).map((t) => [keyOf(t.room), t.msgs]));
   const visible = new Set((S.roomList || []).map((r) => keyOf(r.name)));
   const hot = (S.trending || []).filter((t) => visible.has(keyOf(t.room)) && !isPresenceRoom(t.room));
@@ -2036,7 +2045,8 @@ function renderRoomBrowser() {
     const joined = conv(keyOf(r.name))?.kind === "room";
     row.innerHTML = `<span class="rname" title="${esc(r.name)}">${esc(roomName(r.name))}</span>` +
       `<span class="rcount">${r.users} ${r.users === 1 ? "person" : "people"}` +
-      (today.get(keyOf(r.name)) ? `<br><small>🔥 ${today.get(keyOf(r.name))} today</small>` : "") + `</span>` +
+      (today.get(keyOf(r.name)) ? `<br><small>🔥 ${today.get(keyOf(r.name))} today</small>` : "") +
+      (roomTzText(r.name) ? `<br><small class="tz-note">${roomTzText(r.name)}</small>` : "") + `</span>` +
       `<span class="rtopic" title="${esc(r.topic)}">${emote(esc(r.topic)) || "<i>No topic</i>"}</span>` +
       (joined ? `<span class="joined" title="Open this room">✓ Joined</span>` : `<button>Join</button>`);
     const go = () => { joinOrSwitch(r.name); closeRoomBrowser(); };
@@ -2167,7 +2177,7 @@ function openProfile(nick) {
   const st = statusOf(nick);
   $("pfTitle").textContent = mine ? "My Profile" : `${nick}'s Profile`;
   $("pfNick").textContent = nick;
-  $("pfStatus").textContent = st.state === "unknown" ? "" : st.label;
+  $("pfStatus").textContent = (st.state === "unknown" ? "" : st.label) + (localTimeText(nick) ? `  ·  ${localTimeText(nick)}` : "");
   $("pfDot").className = `pf-dot st-${st.state}`;
   $("pfView").style.display = mine ? "none" : "";
   $("pfEdit").style.display = mine ? "" : "none";
@@ -2542,8 +2552,10 @@ async function doFind() {
   if (q.length < 2) { el.innerHTML = `<div class="empty-hint">Type at least 2 letters.</div>`; return; }
   el.innerHTML = `<div class="empty-hint">Searching…</div>`;
   try {
-    const { users } = await socialApi(`/users/search?q=${encodeURIComponent(q)}`);
-    S.findResults = users;
+    const { users, tz } = await socialApi(`/users/search?q=${encodeURIComponent(q)}`);
+    S.tz ||= new Map();
+    for (const [u, v] of Object.entries(tz || {})) S.tz.set(u, v.offset);
+    S.findResults = users;                       // already nearest timezone first
     requestPresence(users);
     renderFind();
   } catch (e) { el.innerHTML = `<div class="empty-hint">${esc(e.message)}</div>`; }
@@ -2561,7 +2573,9 @@ function renderFind() {
     const rel = isFriend(nick) ? `<span class="fd-tag">✓ Friend</span>`
       : isPendingFriend(nick) ? `<span class="fd-tag">Request sent</span>`
       : `<button class="fd-add">➕ Add Friend</button>`;
-    row.innerHTML = `<span class="st"></span><b>${esc(nick)}</b><span class="status-text">${esc(st.label)}</span>` +
+    const lt = localTimeText(nick);
+    row.innerHTML = `<span class="st"></span><b>${esc(nick)}</b><span class="status-text">${esc(st.label)}` +
+      (lt ? `<br><small class="tz-note">${esc(lt)}</small>` : "") + `</span>` +
       `<button class="fd-prof">Profile</button><button class="fd-msg">Message</button>${rel}`;
     row.querySelector(".fd-prof").onclick = () => openProfile(nick);
     row.querySelector(".fd-msg").onclick = () => { closeFind(); openPm(nick); };
@@ -3982,7 +3996,8 @@ function showCard(el, nick) {
   const me = keyOf(nick) === keyOf(S.me);
   card.dataset.nick = nick;
   card.innerHTML = `<div class="hc-head"><span class="pf-dot st-${st.state}"></span><b class="hc-nick">${esc(nick)}</b></div>` +
-    `<div class="hc-status">${esc(st.state === "unknown" ? "" : st.label)}</div><div class="hc-info">…</div>` +
+    `<div class="hc-status">${esc(st.state === "unknown" ? "" : st.label)}</div>` +
+    (localTimeText(nick) ? `<div class="hc-time">${esc(localTimeText(nick))}</div>` : "") + `<div class="hc-info">…</div>` +
     `<div class="hc-btns">${me ? "" : `<button class="hc-msg">💬 Message</button>`}<button class="hc-prof">👤 Profile</button>` +
     (me || isFriend(nick) || isPendingFriend(nick) ? "" : `<button class="hc-add">➕</button>`) + `</div>`;
   card.querySelector(".hc-nick").style.color = nameColor(nick) || "";
@@ -4131,6 +4146,115 @@ function keepJump() {
   logEl.querySelector(`.msg[data-key="${CSS.escape(S.jump.key)}"]`)?.scrollIntoView({ block: "center" });
 }
 
+/* ---------- timezones: nearest first, local time, far-away warning ---------- */
+
+/* Offsets are minutes east of UTC. Distances wrap around the clock, so
+ * UTC+12 and UTC-11 are 1 hour apart. */
+const MY_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+const myOffset = () => -new Date().getTimezoneOffset();
+const TZ_FAR = 5 * 60;                    // more than 5h apart: warn before the first message
+
+function tzDistance(a, b) { const d = Math.abs(a - b) % 1440; return Math.min(d, 1440 - d); }
+
+function shareMyTz() {
+  socialApi("/tz", { tz: MY_TZ, offset: myOffset() }).catch(() => {});
+}
+
+/* Someone's UTC offset, or null when unknown (fetched in batches). */
+function tzOf(nick) {
+  if (!nick || isService(nick)) return null;
+  const key = keyOf(nick);
+  if (key === keyOf(S.me)) return myOffset();
+  S.tz ||= new Map();
+  if (S.tz.has(key)) return S.tz.get(key);
+  if (S.token) {
+    (S.tzQueue ||= new Set()).add(key);
+    clearTimeout(S.tzTimer);
+    S.tzTimer = setTimeout(fetchTz, 250);
+  }
+  return null;
+}
+
+async function fetchTz() {
+  const users = [...(S.tzQueue || [])];
+  S.tzQueue = new Set();
+  if (!users.length || !S.token) return;
+  for (const u of users) S.tz.set(u, null);
+  try {
+    const { tz } = await socialApi(`/tz?users=${users.map(encodeURIComponent).join(",")}`);
+    if (!Object.keys(tz).length) return;
+    for (const [u, v] of Object.entries(tz)) S.tz.set(u, v.offset);
+    S.friendsSig = null;
+    renderLists(); renderUsers(); renderFind(); refreshSide();
+  } catch {}
+}
+
+/* Distance from me in minutes (null = unknown). */
+function tzGap(nick) {
+  const o = tzOf(nick);
+  return o == null ? null : tzDistance(o, myOffset());
+}
+
+/* "03:12 · 12h behind" style text for someone (null when unknown). */
+function localTimeText(nick) {
+  const o = tzOf(nick);
+  if (o == null || keyOf(nick) === keyOf(S.me)) return null;
+  const t = new Date(Date.now() + (o - myOffset()) * 60000);
+  const hm = t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  let diff = o - myOffset();
+  if (diff > 720) diff -= 1440;
+  if (diff < -720) diff += 1440;
+  const h = Math.round(Math.abs(diff) / 60 * 2) / 2;          // to the half hour
+  const rel = diff === 0 ? "same time as you" : `${h}h ${diff > 0 ? "ahead" : "behind"}`;
+  const night = t.getHours() < 7 || t.getHours() >= 22 ? " 🌙" : "";
+  return `🕑 ${hm}${night} · ${rel}`;
+}
+
+/* Sort helper: nearest timezone first, unknown in the middle-ish (6h). */
+const tzSortKey = (nick) => tzGap(nick) ?? 360;
+
+/* Rooms: typical timezone of the people chatting there. */
+async function loadRoomTz(names) {
+  S.roomTz ||= new Map();
+  const want = names.map(keyOf).filter((n) => !S.roomTz.has(n));
+  if (!want.length || !S.token) return;
+  for (const n of want) S.roomTz.set(n, null);
+  try {
+    const { tz } = await socialApi(`/roomtz?rooms=${want.map(encodeURIComponent).join(",")}`);
+    for (const [r, o] of Object.entries(tz)) S.roomTz.set(r, o);
+    renderRoomBrowser();
+  } catch {}
+}
+
+function roomTzText(name) {
+  const o = S.roomTz?.get(keyOf(name));
+  if (o == null) return "";
+  let diff = o - myOffset();
+  if (diff > 720) diff -= 1440;
+  if (diff < -720) diff += 1440;
+  const h = Math.round(Math.abs(diff) / 60);
+  return h === 0 ? "🕑 your time" : `🕑 ${diff > 0 ? "+" : "−"}${h}h`;
+}
+
+/* First message to a far-away stranger: confirm before sending. */
+function needsTzConfirm(c) {
+  if (c?.kind !== "pm" || isFriend(c.name) || c.tzOk) return false;
+  const gap = tzGap(c.name);
+  return gap != null && gap > TZ_FAR;
+}
+
+function askTzConfirm(c, send) {
+  const o = tzOf(c.name);
+  const their = new Date(Date.now() + (o - myOffset()) * 60000);
+  const hm = their.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const night = their.getHours() < 7 || their.getHours() >= 22;
+  const rel = localTimeText(c.name).split(" · ").pop();
+  showComposerBar(`${night ? "🌙" : "🕑"} It's ${esc(hm)} for <b>${esc(c.name)}</b> (${esc(rel)})` +
+    (night ? " — they may be asleep." : " — far from your timezone.") +
+    ` <button id="tzSend" class="title-btn">Send anyway</button>`);
+  $("tzSend").onclick = () => { c.tzOk = true; clearComposerBar(); send(); };
+}
+
 /* ---------- actions ---------- */
 
 async function doSignIn() {
@@ -4162,7 +4286,7 @@ function doDisconnect(message = "", isError = false) {
   for (const id of ["privacyDialog", "findDialog", "searchDialog", "roomDialog", "annDialog", "annBar", "createRoomDialog"]) $(id).style.display = "none";
   S.pendingCreate = null; S.listProbe = null; S.createName = null;
   S.meta = new Map(); S.polls = new Map(); S.lastSeen = new Map(); clearInterval(S.lastSeenTimer);
-  S.nameColors = new Map(); S.colorQueue = new Set();
+  S.nameColors = new Map(); S.colorQueue = new Set(); S.tz = new Map(); S.tzQueue = new Set(); S.roomTz = new Map();
   S.saved = []; S.savedKeys = new Set(); S.imv = new Map(); S.roomTyping = new Map(); S.pendingExpire = []; S.cardCache = new Map();
   for (const id of ["qsDialog", "savedDialog"]) $(id).style.display = "none";
   hideCard(); setExpire(0); applyImv();
@@ -4343,6 +4467,11 @@ function sendChat() {
   }
   const c = S.current && conv(S.current);
   if (!c || c.kind === "status") { sys("Join a room first, then say hi!", "tip"); return; }
+  if (needsTzConfirm(c)) {
+    $("input").value = text;               // keep it until they decide
+    askTzConfirm(c, () => sendChat());     // the text is still in the box; tzOk lets it through
+    return;
+  }
   stopTyping();
   const body = withReply(styled(text));
   if (S.expireAfter) (S.pendingExpire ||= []).push({ conv: keyOf(c.name), txt: body, after: S.expireAfter });

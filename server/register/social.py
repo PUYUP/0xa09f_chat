@@ -67,6 +67,10 @@ def init_schema(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS room_activity (room TEXT NOT NULL, day TEXT NOT NULL, msgs INTEGER NOT NULL, "
                  "PRIMARY KEY (room, day))")
     conn.execute("CREATE TABLE IF NOT EXISTS imv (pair TEXT PRIMARY KEY, theme TEXT NOT NULL, by_user TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS user_tz (user TEXT PRIMARY KEY, tz TEXT NOT NULL, offset INTEGER NOT NULL, "
+                 "updated INTEGER NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS room_tz (room TEXT NOT NULL, day TEXT NOT NULL, offset INTEGER NOT NULL, "
+                 "msgs INTEGER NOT NULL, PRIMARY KEY (room, day, offset))")
     conn.execute("CREATE TABLE IF NOT EXISTS announcements (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                  "author TEXT NOT NULL, text TEXT NOT NULL, created INTEGER NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS prefs (owner TEXT PRIMARY KEY, data TEXT NOT NULL)")
@@ -681,3 +685,58 @@ def set_imv(conn, me, other, theme):
 def get_imv(conn, me, other):
     row = conn.execute("SELECT theme, by_user FROM imv WHERE pair = ?", (pair_key(me, other),)).fetchone()
     return {"theme": row[0] if row else "none", "by": row[1] if row else None}
+
+
+# ---------- timezones ----------
+
+def tz_distance(a, b):
+    """Minutes between two UTC offsets on the 24h clock (UTC+12 and UTC-11 are 1h apart)."""
+    d = abs(a - b) % 1440
+    return min(d, 1440 - d)
+
+
+def set_tz(conn, me, tz, offset):
+    tz = str(tz or "")[:64]
+    offset = int(offset)
+    if not -720 <= offset <= 840:
+        raise SocialFail(400, "Bad timezone.")
+    conn.execute("INSERT OR REPLACE INTO user_tz VALUES (?, ?, ?, ?)", (me, tz, offset, int(time.time())))
+
+
+def user_tz(conn, users):
+    users = list(users)[:300]
+    if not users:
+        return {}
+    q = ",".join("?" * len(users))
+    return {u: {"tz": t, "offset": o} for u, t, o in
+            conn.execute(f"SELECT user, tz, offset FROM user_tz WHERE user IN ({q})", users)}
+
+
+def note_room_tz(conn, room, user):
+    row = conn.execute("SELECT offset FROM user_tz WHERE user = ?", (user,)).fetchone()
+    if not row:
+        return
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    conn.execute("INSERT INTO room_tz VALUES (?, ?, ?, 1) ON CONFLICT(room, day, offset) DO UPDATE SET msgs = msgs + 1",
+                 (room, day, row[0]))
+
+
+def room_tz(conn, rooms):
+    """A room's typical UTC offset: the message-weighted median of the
+    senders' offsets over the last 7 days (None when nobody reported)."""
+    since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 7 * 86400))
+    out = {}
+    for room in list(rooms)[:200]:
+        rows = sorted(conn.execute("SELECT offset, SUM(msgs) FROM room_tz WHERE room = ? AND day >= ? GROUP BY offset",
+                                   (room, since)))
+        total = sum(n for _, n in rows)
+        if not total:
+            out[room] = None
+            continue
+        acc = 0
+        for off, n in rows:
+            acc += n
+            if acc * 2 >= total:
+                out[room] = off
+                break
+    return out

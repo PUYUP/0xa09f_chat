@@ -56,6 +56,8 @@ API (errors: 4xx/5xx {"ok": false, "error": "<human readable>"})
   POST /save {"sender","target","time","hash","conv","text","on"};  GET /saved
   POST /activity {"room"};  GET /trending          messages per room today
   POST /imv {"with","theme"};  GET /imv?with=     shared theme of a private chat
+  POST /tz {"tz","offset"};  GET /tz?users=a,b;  GET /roomtz?rooms=#a,#b
+       timezones (offset = minutes east of UTC); search results come nearest-first
   GET  /prefs  /  POST /prefs {"ignore":[ids],"friendsOnly":bool}
   GET  /users/search?q= -> {"users": [ids]} (substring match on IDs)
   GET  /events?token=   Server-Sent Events: friend-request, friend-accepted,
@@ -454,6 +456,17 @@ class Handler(BaseHTTPRequestHandler):
                 after = parse_qs(url.query).get("after", ["0"])[0]
                 with db() as conn:
                     self._json(200, {"ok": True, "announcements": social.announcements_since(conn, int(after or 0))})
+            elif url.path in ("/tz", "/roomtz"):
+                self._token_user()
+                q = parse_qs(url.query)
+                with db() as conn:
+                    if url.path == "/tz":
+                        users = [u for u in q.get("users", [""])[0].lower().split(",") if USERNAME_RE.match(u)]
+                        out = {"tz": social.user_tz(conn, users)}
+                    else:
+                        rooms = [r for r in q.get("rooms", [""])[0].lower().split(",") if r.startswith(("#", "&")) and len(r) <= 50]
+                        out = {"tz": social.room_tz(conn, rooms)}
+                self._json(200, {"ok": True, **out})
             elif url.path in ("/saved", "/trending", "/imv"):
                 me = self._token_user()
                 with db() as conn:
@@ -508,10 +521,16 @@ class Handler(BaseHTTPRequestHandler):
                 me = self._token_user()
                 q = parse_qs(url.query).get("q", [""])[0]
                 try:
-                    users = social.search_users(all_users(), me, q)
+                    users = social.search_users(all_users(), me, q, limit=60)
                 except social.SocialFail as f:
                     raise Fail(f.status, f.message)
-                self._json(200, {"ok": True, "users": users})
+                with db() as conn:
+                    tzs = social.user_tz(conn, users + [me])
+                mine = tzs.get(me, {}).get("offset")
+                if mine is not None:     # nearest timezone first; unknown ones last; keep match order otherwise
+                    users.sort(key=lambda u: social.tz_distance(mine, tzs[u]["offset"]) if u in tzs else 10**6)
+                self._json(200, {"ok": True, "users": users[:20],
+                                 "tz": {u: tzs[u] for u in users[:20] if u in tzs}})
             else:
                 self._json(404, {"ok": False, "error": "not found"})
         except Fail as f:
@@ -522,7 +541,7 @@ class Handler(BaseHTTPRequestHandler):
               "/friends/rename-group", "/typing", "/session/end", "/prefs", "/read",
               "/profile/updated", "/session/revoke-others", "/redact", "/announce",
               "/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind", "/namecolor",
-              "/expire", "/save", "/activity", "/imv"}
+              "/expire", "/save", "/activity", "/imv", "/tz"}
 
     def do_POST(self):
         if self.path in self.SOCIAL:
@@ -658,6 +677,15 @@ class Handler(BaseHTTPRequestHandler):
                 if room.startswith(("#", "&")) and len(room) <= 50 and not room.startswith("#conf-"):
                     with db() as conn:
                         social.note_activity(conn, room)
+                        social.note_room_tz(conn, room, me)
+                self._json(200, {"ok": True})
+                return
+            if self.path == "/tz":
+                with db() as conn:
+                    try:
+                        social.set_tz(conn, me, body.get("tz"), body.get("offset", 0))
+                    except (social.SocialFail, TypeError, ValueError):
+                        raise Fail(400, "Bad timezone.")
                 self._json(200, {"ok": True})
                 return
             if self.path == "/imv":

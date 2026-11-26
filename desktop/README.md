@@ -205,6 +205,15 @@ server/protokol di layar.
   rentang waktu pesan yang dimuat (`/msgmeta?from=&to=`). Lompat ke pesan
   (Saved/Search) memuat halaman 500 pesan tanpa menggambar tiap halaman
   (±2.500 pesan ke belakang ≈ 8 detik)
+- **Zona waktu**: app mengirim zona waktu sistem (`Intl`, offset UTC) ke
+  service akun saat sign in (`/tz`). Urutan "terdekat dulu" (selisih jam
+  melingkar, UTC+12 vs UTC−11 = 1 jam): hasil Find People (diurutkan
+  server), daftar room di 🔍 Rooms (zona room = median offset pengirim pesan
+  7 hari terakhir, `/roomtz`), teman per grup (setelah status), dan Members.
+  Jam lokal orang tampil di judul private chat, kartu hover, Profile, dan
+  Find People ("🕑 21:13 🌙 · 12h behind"). Pesan pertama ke **bukan teman**
+  yang selisihnya > 5 jam minta konfirmasi ("Send anyway"); teman tidak
+  pernah dibatasi
 - **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
   mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
   **Only my friends can send me private messages** = user mode `+g` solanum +
