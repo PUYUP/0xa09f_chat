@@ -214,6 +214,21 @@ server/protokol di layar.
   Find People ("🕑 21:13 🌙 · 12h behind"). Pesan pertama ke **bukan teman**
   yang selisihnya > 5 jam minta konfirmasi ("Send anyway"); teman tidak
   pernah dibatasi
+- **Kirim nanti** (⏰ di bar format): 1 jam lagi, besok 08:00, pagi hari si
+  penerima (private chat, sesuai jam aktif/08:00 waktu mereka), atau waktu
+  bebas. Disimpan service akun dan dikirim tepat waktu oleh soju atas nama
+  pengirim (`network quote`), jadi tetap terkirim walau app ditutup; masuk
+  history kedua pihak. Antrian tampil di atas kotak ketik (✕ untuk batal).
+  Bar peringatan zona waktu juga punya tombol "Send at their 08:00"
+- **Jam aktif** (👤 Profile → Active hours, waktu lokal sendiri): di luar jam
+  itu nama tampil 😴 dan **siapa pun** (termasuk teman) diminta konfirmasi
+  sebelum mengirim, dengan opsi kirim saat jam aktif mereka mulai
+- **Link**: URL di pesan bisa diklik (dibuka di browser sistem lewat
+  `tauri-plugin-opener`) dan mendapat kartu pratinjau (judul, deskripsi,
+  gambar). Halaman diambil service akun dengan pengaman SSRF (hanya http/https
+  port web, semua alamat hasil DNS harus publik dan koneksi ke IP yang sudah
+  dicek, redirect dicek ulang, batas ukuran/waktu); gambar lewat proxy
+  service sehingga IP user tidak sampai ke situs lain
 - **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
   mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
   **Only my friends can send me private messages** = user mode `+g` solanum +

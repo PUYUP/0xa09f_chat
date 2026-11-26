@@ -71,6 +71,9 @@ def init_schema(conn):
                  "updated INTEGER NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS room_tz (room TEXT NOT NULL, day TEXT NOT NULL, offset INTEGER NOT NULL, "
                  "msgs INTEGER NOT NULL, PRIMARY KEY (room, day, offset))")
+    conn.execute("CREATE TABLE IF NOT EXISTS scheduled (id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, "
+                 "target TEXT NOT NULL, text TEXT NOT NULL, due INTEGER NOT NULL, sent INTEGER NOT NULL DEFAULT 0)")
+    conn.execute("CREATE TABLE IF NOT EXISTS user_active (user TEXT PRIMARY KEY, start INTEGER NOT NULL, end INTEGER NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS announcements (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                  "author TEXT NOT NULL, text TEXT NOT NULL, created INTEGER NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS prefs (owner TEXT PRIMARY KEY, data TEXT NOT NULL)")
@@ -708,8 +711,25 @@ def user_tz(conn, users):
     if not users:
         return {}
     q = ",".join("?" * len(users))
-    return {u: {"tz": t, "offset": o} for u, t, o in
-            conn.execute(f"SELECT user, tz, offset FROM user_tz WHERE user IN ({q})", users)}
+    out = {u: {"tz": t, "offset": o} for u, t, o in
+           conn.execute(f"SELECT user, tz, offset FROM user_tz WHERE user IN ({q})", users)}
+    for u, a, b in conn.execute(f"SELECT user, start, end FROM user_active WHERE user IN ({q})", users):
+        if u in out:
+            out[u]["active"] = [a, b]
+    return out
+
+
+def set_active(conn, me, start, end):
+    """Active hours in the person's own local time (minutes after midnight);
+    None clears them (= always fine to message)."""
+    if start is None or end is None:
+        conn.execute("DELETE FROM user_active WHERE user = ?", (me,))
+    else:
+        start, end = int(start), int(end)
+        if not (0 <= start < 1440 and 0 <= end < 1440) or start == end:
+            raise SocialFail(400, "Pick a start and an end time.")
+        conn.execute("INSERT OR REPLACE INTO user_active VALUES (?, ?, ?)", (me, start, end))
+    push_all("active-changed", {"user": me})
 
 
 def note_room_tz(conn, room, user):
@@ -740,3 +760,46 @@ def room_tz(conn, rooms):
                 out[room] = off
                 break
     return out
+
+
+# ---------- scheduled messages ----------
+
+MAX_SCHEDULED = 50
+MAX_SCHEDULE_AHEAD = 30 * 24 * 3600
+
+
+def schedule(conn, me, target, text, due):
+    text = str(text or "").replace("\r", " ").replace("\n", " ").strip()[:400]
+    due = int(due)
+    now = int(time.time())
+    if not text:
+        raise SocialFail(400, "The message is empty.")
+    if not (now + 30 <= due <= now + MAX_SCHEDULE_AHEAD):
+        raise SocialFail(400, "Pick a time between 1 minute and 30 days from now.")
+    n = conn.execute("SELECT COUNT(*) FROM scheduled WHERE user = ? AND sent = 0", (me,)).fetchone()[0]
+    if n >= MAX_SCHEDULED:
+        raise SocialFail(409, f"You already have {MAX_SCHEDULED} scheduled messages.")
+    cur = conn.execute("INSERT INTO scheduled (user, target, text, due) VALUES (?, ?, ?, ?)", (me, target, text, due))
+    push(me, "scheduled-changed", {})
+    return {"id": cur.lastrowid, "target": target, "text": text, "due": due}
+
+
+def scheduled_for(conn, me):
+    rows = conn.execute("SELECT id, target, text, due FROM scheduled WHERE user = ? AND sent = 0 ORDER BY due", (me,))
+    return [dict(zip(("id", "target", "text", "due"), r)) for r in rows]
+
+
+def cancel_scheduled(conn, me, sid):
+    conn.execute("DELETE FROM scheduled WHERE id = ? AND user = ? AND sent = 0", (int(sid), me))
+    push(me, "scheduled-changed", {})
+
+
+def due_scheduled(conn):
+    now = int(time.time())
+    rows = conn.execute("SELECT id, user, target, text FROM scheduled WHERE sent = 0 AND due <= ?", (now,))
+    return [dict(zip(("id", "user", "target", "text"), r)) for r in rows]
+
+
+def mark_scheduled_sent(conn, sid, user):
+    conn.execute("UPDATE scheduled SET sent = 1 WHERE id = ?", (sid,))
+    push(user, "scheduled-changed", {})

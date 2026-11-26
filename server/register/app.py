@@ -58,6 +58,11 @@ API (errors: 4xx/5xx {"ok": false, "error": "<human readable>"})
   POST /imv {"with","theme"};  GET /imv?with=     shared theme of a private chat
   POST /tz {"tz","offset"};  GET /tz?users=a,b;  GET /roomtz?rooms=#a,#b
        timezones (offset = minutes east of UTC); search results come nearest-first
+  POST /active {"start","end"} (local minutes, null = always);  included in /tz as "active"
+  POST /schedule {"target","text","due"};  GET /scheduled;  POST /scheduled/cancel {"id"}
+       sent at `due` by soju on the user's behalf (network quote)
+  GET  /preview?url=      link preview {title, description, image, site} (SSRF-checked)
+  GET  /preview/img?u=&token=   thumbnail proxied through the service
   GET  /prefs  /  POST /prefs {"ignore":[ids],"friendsOnly":bool}
   GET  /users/search?q= -> {"users": [ids]} (substring match on IDs)
   GET  /events?token=   Server-Sent Events: friend-request, friend-accepted,
@@ -82,6 +87,7 @@ import time
 from email.message import EmailMessage
 from urllib.parse import parse_qs, urlsplit
 
+import preview
 import social
 from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -121,6 +127,8 @@ _lock = threading.Lock()              # serialize sojuctl mutations
 _attempts = defaultdict(deque)        # ip -> timestamps
 _creates = defaultdict(deque)
 _login_fails = defaultdict(deque)     # "ip|username" -> timestamps of wrong passwords
+_previews = defaultdict(deque)        # username -> timestamps of link previews
+MAX_PREVIEWS_PER_MIN = 30
 MAX_LOGIN_FAILS_PER_HOUR = int(os.environ.get("MAX_LOGIN_FAILS_PER_HOUR", "10"))
 ADMINS = {u.strip().lower() for u in os.environ.get("ADMIN_USERS", "").split(",") if u.strip()}
 
@@ -456,6 +464,31 @@ class Handler(BaseHTTPRequestHandler):
                 after = parse_qs(url.query).get("after", ["0"])[0]
                 with db() as conn:
                     self._json(200, {"ok": True, "announcements": social.announcements_since(conn, int(after or 0))})
+            elif url.path in ("/preview", "/preview/img"):
+                q = parse_qs(url.query)
+                me = self._token_user(q.get("token", [None])[0])
+                bucket = _previews[me]
+                now = time.monotonic()
+                while bucket and now - bucket[0] > 60:
+                    bucket.popleft()
+                if len(bucket) >= MAX_PREVIEWS_PER_MIN:
+                    raise Fail(429, "Too many previews.")
+                bucket.append(now)
+                try:
+                    if url.path == "/preview":
+                        self._json(200, {"ok": True, **preview.preview(q.get("url", [""])[0])})
+                    else:
+                        ctype, data = preview.image(q.get("u", [""])[0])
+                        self.send_response(200)
+                        self.send_header("Content-Type", ctype)
+                        self.send_header("Content-Length", str(len(data)))
+                        self.send_header("Cache-Control", "private, max-age=86400")
+                        self.send_header("X-Content-Type-Options", "nosniff")
+                        self._cors()
+                        self.end_headers()
+                        self.wfile.write(data)
+                except preview.PreviewError as e:
+                    raise Fail(422, f"No preview: {e}")
             elif url.path in ("/tz", "/roomtz"):
                 self._token_user()
                 q = parse_qs(url.query)
@@ -467,6 +500,10 @@ class Handler(BaseHTTPRequestHandler):
                         rooms = [r for r in q.get("rooms", [""])[0].lower().split(",") if r.startswith(("#", "&")) and len(r) <= 50]
                         out = {"tz": social.room_tz(conn, rooms)}
                 self._json(200, {"ok": True, **out})
+            elif url.path == "/scheduled":
+                me = self._token_user()
+                with db() as conn:
+                    self._json(200, {"ok": True, "scheduled": social.scheduled_for(conn, me)})
             elif url.path in ("/saved", "/trending", "/imv"):
                 me = self._token_user()
                 with db() as conn:
@@ -541,7 +578,7 @@ class Handler(BaseHTTPRequestHandler):
               "/friends/rename-group", "/typing", "/session/end", "/prefs", "/read",
               "/profile/updated", "/session/revoke-others", "/redact", "/announce",
               "/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind", "/namecolor",
-              "/expire", "/save", "/activity", "/imv", "/tz"}
+              "/expire", "/save", "/activity", "/imv", "/tz", "/active", "/schedule", "/scheduled/cancel"}
 
     def do_POST(self):
         if self.path in self.SOCIAL:
@@ -679,6 +716,27 @@ class Handler(BaseHTTPRequestHandler):
                         social.note_activity(conn, room)
                         social.note_room_tz(conn, room, me)
                 self._json(200, {"ok": True})
+                return
+            if self.path in ("/active", "/schedule", "/scheduled/cancel"):
+                with db() as conn:
+                    try:
+                        if self.path == "/active":
+                            social.set_active(conn, me, body.get("start"), body.get("end"))
+                            out = {}
+                        elif self.path == "/schedule":
+                            target = str(body.get("target", "")).strip()
+                            if not (USERNAME_RE.match(target.lower()) or (target.startswith(("#", "&")) and len(target) <= 50
+                                                                         and not re.search(r"[\s,\x00-\x1f]", target))):
+                                raise Fail(400, "Bad target.")
+                            out = social.schedule(conn, me, target, body.get("text"), body.get("due", 0))
+                        else:
+                            social.cancel_scheduled(conn, me, body.get("id", 0))
+                            out = {}
+                    except (social.SocialFail) as f:
+                        raise Fail(f.status, f.message)
+                    except (TypeError, ValueError):
+                        raise Fail(400, "Bad request.")
+                self._json(200, {"ok": True, **out})
                 return
             if self.path == "/tz":
                 with db() as conn:
@@ -843,6 +901,12 @@ def reminder_loop():
                     social.push(r["user"], "reminder", r)
                 social.mark_delivered(conn, [r["id"] for r in due])
                 social.expire_due(conn)
+                for m in social.due_scheduled(conn):
+                    rc, out = sojuctl("user", "run", m["user"], "network", "quote", NETWORK_NAME,
+                                      f"PRIVMSG {m['target']} :{m['text']}")
+                    if rc != 0:
+                        print(f"[register] scheduled #{m['id']} failed: {out}", flush=True)
+                    social.mark_scheduled_sent(conn, m["id"], m["user"])
         except Exception as e:
             print(f"[register] reminder loop: {e!r}", flush=True)
 

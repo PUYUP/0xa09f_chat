@@ -445,6 +445,7 @@ function renderMsg(m) {
   if (m.letIn) txt += ` <button class="letin-btn" data-nick="${esc(m.letIn)}">Let them in</button>`;
   if (m.askKey) txt += ` <input class="key-input" type="password" placeholder="Room password" size="12">` +
     ` <button class="key-join" data-room="${esc(m.askKey)}">Join</button>`;
+  if (!m.buzz && !m.invite && !poll) txt = linkify(txt);
   if (!m.buzz && !m.invite) txt = highlightMentions(txt);
   if (m.others && !m.cls.includes("service") && S.current && isChannel(S.current) && mentionsMe(stripIrc(body))) {
     div.classList.add("mention-me");
@@ -465,6 +466,8 @@ function renderMsg(m) {
     if (isSaved(cur, m)) div.querySelector(".txt").insertAdjacentHTML("beforeend", ` <span class="saved-star" title="Saved">⭐</span>`);
   }
   if (poll && !deleted) div.appendChild(pollCard(+poll[1]));
+  const link = withMeta && !deleted && !poll && S.token && firstUrl(body);
+  if (link) div.appendChild(previewCard(link));
   if (withMeta && !deleted && S.token) {
     reactionChips(div, cur, m);
     // The hover toolbar is built on first hover, not for every message up front.
@@ -516,6 +519,7 @@ function switchTo(key) {
   refreshSide();
   renderTyping();
   renderPins();
+  renderScheduled();
   if (c?.kind === "pm" && !S.imv?.has(key)) loadImv(c); else applyImv();
   $("input").focus();
 }
@@ -603,6 +607,7 @@ function renderUsers() {
     if (c.kind === "room" && isMuted(c, nick)) { name.textContent += " 🔇"; name.title = "Muted"; }
     paintName(name, nick);
     name.dataset.nick = nick;
+    if (isAsleep(nick)) { name.textContent += " 😴"; name.title = "Outside their active hours"; }
     d.appendChild(name);
     d.appendChild(profileButton(nick));
     if (st.state !== "unknown") {
@@ -1204,7 +1209,10 @@ async function startSocial() {
     await migrateLocalFriends();
     loadRedactions(); loadAnnouncements(); loadStats();
     loadLastSeen(); loadDueReminders(); loadSaved();
-    shareMyTz(); S.friends.forEach(tzOf);
+    shareMyTz(); S.friends.forEach(tzOf); loadScheduled();
+    socialApi(`/tz?users=${encodeURIComponent(S.me)}`).then(({ tz }) => {
+      const a = tz[keyOf(S.me)]?.active; (S.active ||= new Map()); if (a) S.active.set(keyOf(S.me), a);
+    }).catch(() => {});
     nameColor(S.me); S.friends.forEach(nameColor);
     clearInterval(S.lastSeenTimer);
     S.lastSeenTimer = setInterval(loadLastSeen, 120000);
@@ -1281,6 +1289,11 @@ function openEvents() {
   on("expire", onExpireEvent);
   on("saved-changed", loadSaved);
   on("imv", onImvEvent);
+  on("scheduled-changed", loadScheduled);
+  on("active-changed", (d) => {
+    if (keyOf(d.user) === keyOf(S.me)) return;
+    S.tz?.delete(keyOf(d.user)); S.active?.delete(keyOf(d.user)); tzOf(d.user);
+  });
   // EventSource reconnects by itself; a dead token (service restarted) shows
   // up as a closed stream: get a new session and listen again.
   es.onerror = () => {
@@ -1465,7 +1478,7 @@ function friendRow(nick, pending) {
   d.title = pending ? `${nick} hasn't accepted your friend request yet.` : `${nick} — ${st.label}. Click to chat.`;
   const typing = !pending && S.typing.has(keyOf(nick));
   d.innerHTML = `<span class="label">${esc(nick)}</span>` +
-    `<span class="status-text">${esc(typing ? "typing…" : st.label)}</span>` +
+    `<span class="status-text">${esc(typing ? "typing…" : st.label + sleepMark(nick))}</span>` +
     (pm?.unread ? `<span class="badge">${pm.unread > 99 ? "99+" : pm.unread}</span>` : "") +
     `<span class="more" title="More">⋯</span>`;
   if (!pending && st.state !== "offline") paintName(d.querySelector(".label"), nick);
@@ -2181,7 +2194,7 @@ function openProfile(nick) {
   $("pfDot").className = `pf-dot st-${st.state}`;
   $("pfView").style.display = mine ? "none" : "";
   $("pfEdit").style.display = mine ? "" : "none";
-  if (mine) buildColorPicker();
+  if (mine) { buildColorPicker(); tzOf(S.me); syncActiveUi(); }
   $("pfNick").style.color = nameColor(nick) || "";
   $("pfAddFriend").style.display = mine || isFriend(nick) ? "none" : "";
   for (const id of ["pfvName", "pfvLocation", "pfvAbout", "pfvSince"]) $(id).textContent = "…";
@@ -2554,7 +2567,8 @@ async function doFind() {
   try {
     const { users, tz } = await socialApi(`/users/search?q=${encodeURIComponent(q)}`);
     S.tz ||= new Map();
-    for (const [u, v] of Object.entries(tz || {})) S.tz.set(u, v.offset);
+    S.active ||= new Map();
+    for (const [u, v] of Object.entries(tz || {})) { S.tz.set(u, v.offset); if (v.active) S.active.set(u, v.active); }
     S.findResults = users;                       // already nearest timezone first
     requestPresence(users);
     renderFind();
@@ -4183,7 +4197,8 @@ async function fetchTz() {
   try {
     const { tz } = await socialApi(`/tz?users=${users.map(encodeURIComponent).join(",")}`);
     if (!Object.keys(tz).length) return;
-    for (const [u, v] of Object.entries(tz)) S.tz.set(u, v.offset);
+    S.active ||= new Map();
+    for (const [u, v] of Object.entries(tz)) { S.tz.set(u, v.offset); if (v.active) S.active.set(u, v.active); else S.active.delete(u); }
     S.friendsSig = null;
     renderLists(); renderUsers(); renderFind(); refreshSide();
   } catch {}
@@ -4206,7 +4221,7 @@ function localTimeText(nick) {
   if (diff < -720) diff += 1440;
   const h = Math.round(Math.abs(diff) / 60 * 2) / 2;          // to the half hour
   const rel = diff === 0 ? "same time as you" : `${h}h ${diff > 0 ? "ahead" : "behind"}`;
-  const night = t.getHours() < 7 || t.getHours() >= 22 ? " 🌙" : "";
+  const night = isAsleep(nick) ? " 😴" : t.getHours() < 7 || t.getHours() >= 22 ? " 🌙" : "";
   return `🕑 ${hm}${night} · ${rel}`;
 }
 
@@ -4238,7 +4253,9 @@ function roomTzText(name) {
 
 /* First message to a far-away stranger: confirm before sending. */
 function needsTzConfirm(c) {
-  if (c?.kind !== "pm" || isFriend(c.name) || c.tzOk) return false;
+  if (c?.kind !== "pm" || c.tzOk) return false;
+  if (isAsleep(c.name)) return true;                // their own active hours: everyone is asked
+  if (isFriend(c.name)) return false;
   const gap = tzGap(c.name);
   return gap != null && gap > TZ_FAR;
 }
@@ -4249,10 +4266,185 @@ function askTzConfirm(c, send) {
   const hm = their.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const night = their.getHours() < 7 || their.getHours() >= 22;
   const rel = localTimeText(c.name).split(" · ").pop();
-  showComposerBar(`${night ? "🌙" : "🕑"} It's ${esc(hm)} for <b>${esc(c.name)}</b> (${esc(rel)})` +
-    (night ? " — they may be asleep." : " — far from your timezone.") +
+  const act = S.active?.get(keyOf(c.name));
+  const asleep = isAsleep(c.name);
+  const wake = act ? act[0] : 480;
+  showComposerBar((asleep
+    ? `😴 It's ${esc(hm)} for <b>${esc(c.name)}</b> — outside their active hours (${fmtMin(act[0])}–${fmtMin(act[1])}).`
+    : `${night ? "🌙" : "🕑"} It's ${esc(hm)} for <b>${esc(c.name)}</b> (${esc(rel)})` +
+      (night ? " — they may be asleep." : " — far from your timezone.")) +
+    ` <button id="tzLater" class="title-btn">Send at their ${fmtMin(wake)}</button>` +
     ` <button id="tzSend" class="title-btn">Send anyway</button>`);
+  $("tzLater").onclick = () => scheduleMessage(c, withReply(styled($("input").value.trim())), theirNext(c.name, wake));
   $("tzSend").onclick = () => { c.tzOk = true; clearComposerBar(); send(); };
+}
+
+/* ---------- links: clickable + previews ---------- */
+
+/* On already-escaped HTML: turn http(s) URLs into links (opened in the
+ * system browser). Trailing punctuation stays outside the link. */
+const URL_RE = /\bhttps?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]}']/gi;
+
+function linkify(html) {
+  return html.replace(URL_RE, (u) => `<a class="link" data-url="${u}" title="${u}">${u}</a>`);
+}
+
+const firstUrl = (text) => (stripIrc(text).match(URL_RE) || [])[0] || null;
+
+function openLink(url) {
+  if (!/^https?:\/\//i.test(url)) return;
+  invoke("plugin:opener|open_url", { url }).catch(() => window.open(url, "_blank"));
+}
+
+/* Preview card for the first link of a message (fetched by the account
+ * service, which checks every address; thumbnails come through it too). */
+function previewCard(url) {
+  S.previews ||= new Map();
+  const el = document.createElement("div");
+  el.className = "lp";
+  el.dataset.url = url;
+  const p = S.previews.get(url);
+  if (p === undefined) { loadPreview(url); el.style.display = "none"; }
+  else if (!p) el.style.display = "none";
+  else fillPreview(el, p);
+  return el;
+}
+
+async function loadPreview(url) {
+  S.previews.set(url, null);                         // one request per URL
+  try {
+    const p = await socialApi(`/preview?url=${encodeURIComponent(url)}`);
+    S.previews.set(url, p);
+    document.querySelectorAll(".lp").forEach((el) => {
+      if (el.dataset.url === url) { fillPreview(el, p); el.style.display = ""; }
+    });
+  } catch { /* no preview for this link */ }
+}
+
+function fillPreview(el, p) {
+  const img = p.image && S.token
+    ? `<img src="${ACCOUNT_URL}/preview/img?u=${encodeURIComponent(p.image)}&token=${encodeURIComponent(S.token)}" alt="" onerror="this.remove()">`
+    : "";
+  el.innerHTML = `${img}<div class="lp-body"><div class="lp-site">${esc(p.site || "")}</div>` +
+    `<a class="link lp-title" data-url="${esc(p.url)}">${esc(p.title || p.url)}</a>` +
+    (p.description ? `<div class="lp-desc">${esc(p.description)}</div>` : "") + `</div>`;
+}
+
+/* ---------- active hours ("😴 outside their active hours") ---------- */
+
+/* Someone's active hours are in their own local time, minutes after midnight. */
+function theirMinutes(nick) {
+  const o = tzOf(nick);
+  if (o == null) return null;
+  const d = new Date(Date.now() + (o - myOffset()) * 60000);
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+function isAsleep(nick) {
+  const a = S.active?.get(keyOf(nick));
+  const t = theirMinutes(nick);
+  if (!a || t == null) return false;
+  const [s, e] = a;
+  const inside = s < e ? t >= s && t < e : t >= s || t < e;     // may cross midnight
+  return !inside;
+}
+
+const fmtMin = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const sleepMark = (nick) => (isAsleep(nick) ? " 😴" : "");
+
+/* Unix time of someone's next local hh:mm (in minutes after midnight). */
+function theirNext(nick, minutes) {
+  const now = theirMinutes(nick);
+  let wait = minutes - now;
+  if (wait <= 1) wait += 1440;
+  return Math.floor(Date.now() / 1000) + wait * 60;
+}
+
+function syncActiveUi() {
+  const a = S.active?.get(keyOf(S.me));
+  $("pfActiveAlways").checked = !a;
+  $("pfActiveFrom").value = fmtMin(a ? a[0] : 480);
+  $("pfActiveTo").value = fmtMin(a ? a[1] : 1320);
+  $("pfActiveFrom").disabled = $("pfActiveTo").disabled = !a;
+}
+
+async function saveActive() {
+  const always = $("pfActiveAlways").checked;
+  const toMin = (v) => { const [h, m] = v.split(":").map(Number); return h * 60 + m; };
+  const body = always ? { start: null, end: null } : { start: toMin($("pfActiveFrom").value), end: toMin($("pfActiveTo").value) };
+  try {
+    await socialApi("/active", body);
+    S.active ||= new Map();
+    if (always) S.active.delete(keyOf(S.me)); else S.active.set(keyOf(S.me), [body.start, body.end]);
+    syncActiveUi();
+  } catch (e) { showMsg("pfMsg", e.message, "error"); }
+}
+
+/* ---------- scheduled messages ---------- */
+
+async function loadScheduled() {
+  try { S.scheduled = (await socialApi("/scheduled")).scheduled; renderScheduled(); } catch {}
+}
+
+async function scheduleMessage(c, text, due) {
+  try {
+    await socialApi("/schedule", { target: c.name, text, due });
+    $("input").value = "";
+    clearComposerBar();
+    sys(`🕒 Scheduled for ${new Date(due * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}.`, "status", c.name);
+  } catch (e) { sys(e.message, "error"); }
+}
+
+function scheduleMenu(e) {
+  const c = S.current && conv(S.current);
+  const text = $("input").value.trim();
+  if (!c || c.kind === "status") return;
+  if (!text) { sys("Type your message first, then pick when to send it.", "tip"); $("input").focus(); return; }
+  const body = withReplyPreview(styled(text));
+  const now = Math.floor(Date.now() / 1000);
+  const tomorrow8 = (() => { const t = new Date(); t.setDate(t.getDate() + 1); t.setHours(8, 0, 0, 0); return Math.floor(t / 1000); })();
+  const items = [
+    { label: "🕐 In 1 hour", run: () => scheduleMessage(c, body, now + 3600) },
+    { label: "🌅 Tomorrow 08:00 (your time)", run: () => scheduleMessage(c, body, tomorrow8) },
+  ];
+  if (c.kind === "pm" && tzOf(c.name) != null && tzGap(c.name) > 0) {
+    const due = theirNext(c.name, S.active?.get(keyOf(c.name))?.[0] ?? 480);
+    items.push({ label: `☀️ Their next morning (${new Date(due * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} your time)`,
+      run: () => scheduleMessage(c, body, due) });
+  }
+  items.push({ label: "✏️ Pick a time…", keepOpen: true, run: () => menuPrompt("When? (HH:MM, or YYYY-MM-DD HH:MM)", "", (v) => {
+    let d = null;
+    const m1 = v.match(/^\s*(\d{1,2}):(\d{2})\s*$/), m2 = v.match(/^\s*(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})\s*$/);
+    if (m1) { d = new Date(); d.setHours(+m1[1], +m1[2], 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); }
+    else if (m2) d = new Date(+m2[1], +m2[2] - 1, +m2[3], +m2[4], +m2[5]);
+    if (!d || isNaN(d)) { sys("Write the time like 21:30 or 2026-12-01 08:00", "tip"); return; }
+    scheduleMessage(c, body, Math.floor(d / 1000));
+  }) });
+  showMenu(e, items);
+}
+
+/* withReply without consuming the pending reply (the menu may be cancelled). */
+function withReplyPreview(text) {
+  if (!S.replyTo) return text;
+  return `↪ ${S.replyTo.who}: “${S.replyTo.txt.replace(/”/g, "\"")}” ${text}`;
+}
+
+/* Pending scheduled messages of the open conversation, under the log. */
+function renderScheduled() {
+  const el = $("schedBar");
+  const c = S.current && conv(S.current);
+  const list = (S.scheduled || []).filter((x) => c && keyOf(x.target) === keyOf(c.name));
+  if (!list.length) { el.style.display = "none"; return; }
+  el.innerHTML = "";
+  for (const x of list) {
+    const row = document.createElement("div");
+    row.className = "sched";
+    row.innerHTML = `🕒 <b>${esc(new Date(x.due * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }))}</b> ` +
+      `<span>${emote(formatIrc(esc(x.text)))}</span><span class="sched-x" title="Cancel">✕</span>`;
+    row.querySelector(".sched-x").onclick = () => socialApi("/scheduled/cancel", { id: x.id }).catch(() => {});
+    el.appendChild(row);
+  }
+  el.style.display = "";
 }
 
 /* ---------- actions ---------- */
@@ -4287,6 +4479,7 @@ function doDisconnect(message = "", isError = false) {
   S.pendingCreate = null; S.listProbe = null; S.createName = null;
   S.meta = new Map(); S.polls = new Map(); S.lastSeen = new Map(); clearInterval(S.lastSeenTimer);
   S.nameColors = new Map(); S.colorQueue = new Set(); S.tz = new Map(); S.tzQueue = new Set(); S.roomTz = new Map();
+  S.previews = new Map(); S.active = new Map(); S.scheduled = []; $("schedBar").style.display = "none";
   S.saved = []; S.savedKeys = new Set(); S.imv = new Map(); S.roomTyping = new Map(); S.pendingExpire = []; S.cardCache = new Map();
   for (const id of ["qsDialog", "savedDialog"]) $(id).style.display = "none";
   hideCard(); setExpire(0); applyImv();
@@ -4735,6 +4928,8 @@ $("cfClose").onclick = closeConfDialog;
 $("confForm").addEventListener("submit", (e) => { e.preventDefault(); doConference(); });
 $("confDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closeConfDialog(); });
 logEl.addEventListener("click", (e) => {
+  const a = e.target.closest("a.link");
+  if (a) { e.preventDefault(); openLink(a.dataset.url); return; }
   const b = e.target.closest(".invite-join");
   if (b) joinOrSwitch(b.dataset.room);
   const k = e.target.closest(".knock-btn");
@@ -4784,6 +4979,10 @@ $("savedDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") cl
 $("btnDark").onclick = () => setDark(!document.body.classList.contains("dark"));
 setDark(localStorage.getItem("a09f.dark") === "1");
 $("fmtExpire").onclick = (e) => { e.stopPropagation(); expireMenu(e); };
+$("fmtSchedule").onclick = (e) => { e.stopPropagation(); scheduleMenu(e); };
+$("pfActiveAlways").onchange = saveActive;
+$("pfActiveFrom").onchange = saveActive;
+$("pfActiveTo").onchange = saveActive;
 $("qsInput").addEventListener("input", () => { S.qsSel = 0; renderSwitcher(); });
 $("qsInput").addEventListener("keydown", onSwitcherKey);
 $("qsDialog").addEventListener("mousedown", (e) => { if (e.target === $("qsDialog")) closeSwitcher(); });

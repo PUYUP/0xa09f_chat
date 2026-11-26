@@ -380,6 +380,24 @@
   @keyframes msg-flash-dark { 0%, 35% { background: #6b5a20; box-shadow: 0 0 0 2px #c9a227; } 100% { background: transparent; box-shadow: none; } }
   .tz-note { color: #6d5a99; font-size: 10px; }
   .hc-time { font-size: 11px; color: #6d5a99; margin: 2px 0; }
+  /* links, previews, scheduled, active hours */
+  a.link { color: #1a5fb4; text-decoration: underline; cursor: pointer; word-break: break-all; }
+  body.dark a.link { color: #8ab4ff; }
+  .lp { display: flex; gap: 8px; margin: 4px 0 4px 64px; max-width: 460px; border: 1px solid #ddd6c4; border-left: 3px solid #8e6bd6;
+    border-radius: 4px; padding: 6px 8px; background: #fbfaf6; }
+  .lp img { width: 72px; height: 72px; object-fit: cover; border-radius: 3px; flex: none; }
+  .lp-body { min-width: 0; }
+  .lp-site { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .03em; }
+  .lp-title { font-weight: bold; text-decoration: none !important; }
+  .lp-desc { font-size: 11px; color: #555; max-height: 3.6em; overflow: hidden; }
+  body.dark .lp { background: #241e30; border-color: #4a4060; } body.dark .lp-desc { color: #bdb4cc; }
+  #schedBar { padding: 3px 10px; background: #f3f8ff; border-top: 1px solid #cfe0f5; font-size: 11px; max-height: 80px; overflow-y: auto; }
+  .sched { display: flex; gap: 6px; align-items: baseline; }
+  .sched span:not(.sched-x) { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sched-x { cursor: pointer; color: var(--dim); font-weight: bold; }
+  body.dark #schedBar { background: #1e2433; border-color: #33405a; }
+  .pf-active { display: flex; align-items: center; gap: 6px; }
+  .pf-active input[type=time] { padding: 3px 4px; }
   /* @mentions */
   .mention { color: var(--purple); font-weight: bold; }
   .mention.me { background: #ffe58a; color: #5a3d00; border-radius: 3px; padding: 0 2px; }
@@ -715,6 +733,11 @@
         <input type="text" id="pfLocation" maxlength="40" placeholder="City or country">
         <label for="pfAbout">About me</label>
         <textarea id="pfAbout" maxlength="200" rows="3" placeholder="A few words about yourself"></textarea>
+        <label>Active hours <span class="hint">(your time — outside them friends are asked before messaging you)</span></label>
+        <div class="pf-active">
+          <label class="pv-check"><input type="checkbox" id="pfActiveAlways"> Any time</label>
+          <input type="time" id="pfActiveFrom"> – <input type="time" id="pfActiveTo">
+        </div>
         <label>Name color</label>
         <div class="pf-colors"><div id="pfColors"></div><b id="pfColorPreview"></b></div>
         <div class="hint">Changes right away — everyone sees your name in this color.</div>
@@ -903,6 +926,7 @@
       <button data-emo="<3" title="heart">❤️</button>
       <button id="fmtMore" title="More smileys">➕</button>
       <button id="fmtExpire" title="Disappearing messages">⏳</button>
+      <button id="fmtSchedule" title="Send later">⏰</button>
       <button id="fmtAction" title="Action: type what you do, e.g. “waves” → * alice waves">✨ /me</button>
       <span class="fmt-sep"></span>
       <button id="fmtB" class="fmt" title="Bold"><b>B</b></button>
@@ -911,6 +935,7 @@
       <button id="fmtColor" class="fmt-color" title="Text color"></button>
       <button id="btnBuzz" class="buzz-btn" disabled>BUZZ!</button>
     </div>
+    <div id="schedBar" style="display:none"></div>
     <div id="composerBar" style="display:none"><span id="composerBarText"></span><span id="composerBarX" title="Cancel">✕</span></div>
     <div id="mentionBox"></div>
     <div id="composer">
