@@ -199,6 +199,13 @@ Semua user a09f datang dari IP soju yang sama, jadi ban/mute di app memakai
 ban berdasarkan host. Modul baru bisa dimuat tanpa restart: render ulang
 config di container lalu `kill -HUP $(cat /tmp/solanum.pid)`.
 
+Catatan Atheme: flood protection services dinaikkan ke `flood_msgs = 16` per
+`flood_time = 10` dtk (default 7) di `atheme.conf.tmpl`. Membuat room dari app
+mengirim REGISTER (dihitung beberapa) + GUARD + KEEPTOPIC + MLOCK + ENTRYMSG,
+lalu membuka Settings menambah INFO + FLAGS; dengan 7, perintah terakhir
+diabaikan diam-diam. Terapkan tanpa restart: render ulang config di container
+atheme lalu `kill -HUP 1`.
+
 Catatan Atheme: room terdaftar memakai MLOCK default `+nt-lk`, jadi password
 (+k) dan batas (+l) hanya bisa dipasang pemilik lewat `ChanServ SET #room
 MLOCK …` (app melakukannya dari ⚙️ Settings).
@@ -278,11 +285,11 @@ Cek `docker logs solanum`. Penyebab yang sudah pernah terjadi:
 Lihat [testing.md](testing.md). Ringkas:
 
 ```bash
-python3 tests/test_solanum.py          # direct ke solanum:6667
-python3 tests/test_solanum.py --tls    # direct TLS :6697
-python3 tests/test_soju.py             # via bouncer:16667 + SASL (self-setup)
-python3 tests/test_soju.py --tls       # via bouncer TLS :16697
-python3 tests/test_tls.py              # handshake TLS kedua listener
+python3 tests/server/test_solanum.py          # direct ke solanum:6667
+python3 tests/server/test_solanum.py --tls    # direct TLS :6697
+python3 tests/server/test_soju.py             # via bouncer:16667 + SASL (self-setup)
+python3 tests/server/test_soju.py --tls       # via bouncer TLS :16697
+python3 tests/server/test_tls.py              # handshake TLS kedua listener
 ```
 
 ## Security notes (dev only!)

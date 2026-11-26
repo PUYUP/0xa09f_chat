@@ -3,6 +3,12 @@
 Client desktop IRC untuk stack `server/` (Solanum + Atheme + Soju) —
 dibangun dengan Tauri (Rust backend + vanilla JS frontend).
 
+Dokumentasi:
+- [`docs/fitur.md`](docs/fitur.md) — panduan pemakaian semua fitur
+- [`docs/arsitektur.md`](docs/arsitektur.md) — cara kerja & keputusan desain
+- [`../server/docs/api.md`](../server/docs/api.md) — API service akun
+- [`../tests/README.md`](../tests/README.md) — tes (server, API, e2e di app, visual)
+
 ## Fitur (v0.1)
 
 UI mengutamakan pengguna awam (gaya messenger klasik): tidak ada detail

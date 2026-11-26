@@ -144,7 +144,7 @@ Module aktif: `modules/protocol/charybdis` (kompatibel solanum),
 ## soju/config
 
 Tidak ada secret di dalamnya — password user/network dibuat via `sojuctl`
-(**otomatis oleh test** `tests/test_soju.py`, idempotent).
+(**otomatis oleh test** `tests/server/test_soju.py`, idempotent).
 
 Directive penting:
 

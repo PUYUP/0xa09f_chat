@@ -131,6 +131,23 @@ fn save_export(app: AppHandle, name: String, contents: String) -> Result<String,
     Ok(path.to_string_lossy().into_owned())
 }
 
+/* ---------- test hooks (debug builds only; see tests/e2e) ---------- */
+
+/// The e2e runner points A09F_TEST_SCENARIO at a script; the UI runs it after
+/// loading. Release builds don't have this command at all.
+#[cfg(debug_assertions)]
+#[tauri::command]
+fn test_scenario() -> Option<String> {
+    std::env::var("A09F_TEST_SCENARIO").ok().and_then(|p| std::fs::read_to_string(p).ok())
+}
+
+/// Scenario results go to stderr, where the runner reads them.
+#[cfg(debug_assertions)]
+#[tauri::command]
+fn test_log(line: String) {
+    eprintln!("A09F-TEST {line}");
+}
+
 /// True when the OS started us at login (autostart passes AUTOSTART_ARG).
 #[tauri::command]
 fn launched_at_login() -> bool {
@@ -180,7 +197,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -190,10 +207,19 @@ pub fn run() {
         ))
         .manage(IrcState {
             stream: Mutex::new(None),
-        })
-        .invoke_handler(tauri::generate_handler![
-            connect, send, disconnect, cred_save, cred_load, cred_clear, launched_at_login, device_name, save_export
-        ])
+        });
+    // Debug builds also expose the e2e test hooks (tests/e2e/run.py).
+    #[cfg(debug_assertions)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        connect, send, disconnect, cred_save, cred_load, cred_clear, launched_at_login, device_name,
+        save_export, test_scenario, test_log
+    ]);
+    #[cfg(not(debug_assertions))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        connect, send, disconnect, cred_save, cred_load, cred_clear, launched_at_login, device_name,
+        save_export
+    ]);
+    let app = builder
         .setup(|app| {
             build_tray(app.handle())?;
             // a09f://join/<room>: hand invite links to the UI.

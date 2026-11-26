@@ -901,6 +901,8 @@ function onNumeric(num, params, trailing) {
       if (onWhoisReply(num, params, trailing)) return;
       break;
     case 716: case 718: onCallerId(num, params); return;
+    case 281: (S.acceptListing ||= []).push(...params.slice(1).join(" ").split(/[\s,]+/).filter(Boolean)); return;
+    case 282: S.accepted = new Set((S.acceptListing || []).map(keyOf)); S.acceptListing = null; applyFriendsOnly(); return;
     case 324: onChannelModes(params); return;
     case 367: case 368: case 728: case 729: onListEntry(num, params); return;
     case 710: onKnock(params); return;
@@ -1901,14 +1903,23 @@ function onChanServ(text) {
 }
 
 /* Atheme ignores clients that fire services commands too fast. */
+/* Entries are lines, or {line, onSend, until} from csAsk: onSend runs right
+ * before the line goes out, and the queue waits for `until` (its replies)
+ * before sending anything else, so replies can't be mixed up. */
 function serviceQueue(lines) {
   S.svcQueue = (S.svcQueue || []).concat(lines);
   if (S.svcTimer) return;
   const next = () => {
-    const l = S.svcQueue.shift();
-    if (!l) { S.svcTimer = null; return; }
-    send(l);
-    S.svcTimer = setTimeout(next, 1200);
+    const e = S.svcQueue.shift();
+    if (!e) { S.svcTimer = null; return; }
+    // Atheme ignores clients that flood services (flood_msgs per flood_time,
+    // REGISTER counts as several): keep a steady pace, more after REGISTER.
+    const gap = (l) => (/ :REGISTER /i.test(l) ? 3000 : 1500);
+    if (typeof e === "string") { send(e); S.svcTimer = setTimeout(next, gap(e)); return; }
+    e.onSend?.();
+    send(e.line);
+    S.svcTimer = true;
+    Promise.resolve(e.until).then(() => { S.svcTimer = setTimeout(next, gap(e.line)); });
   };
   next();
 }
@@ -2396,8 +2407,14 @@ function applyFriendsOnly() {
     if (S.callerId !== false) { send(`MODE ${S.me} -g`); S.callerId = false; }
     return;
   }
+  // The ACCEPT list lives on the server (and survives our sessions): read
+  // it first, so ex-friends left on it from earlier sessions are removed.
+  if (S.accepted == null) {
+    if (!S.acceptListing) { S.acceptListing = []; send("ACCEPT *"); }
+    return;
+  }
   const want = new Set(S.friends.map(keyOf));
-  const have = S.accepted || new Set();
+  const have = S.accepted;
   const add = [...want].filter((n) => !have.has(n));
   const drop = [...have].filter((n) => !want.has(n));
   for (let i = 0; i < add.length; i += 10) send(`ACCEPT ${add.slice(i, i + 10).join(",")}`);
@@ -3015,14 +3032,31 @@ function onKick(by, channel, nick, reason) {
 
 /* Sends one ChanServ command (through the paced queue) and resolves with the
  * NOTICE lines it answers with, up to a line matching `endRe` or a quiet gap. */
-function csAsk(command, endRe, timeout = 6000) {
+/* Ask ChanServ and collect its reply.
+ *   endRe    the line that ends the reply (single-line replies: the reply)
+ *   start    for multi-line replies: the line that starts it
+ * Lines before `start` (or, without one, lines not matching endRe) belong to
+ * earlier commands answering late, and are left to the other handlers. */
+/* soju paces what we send upstream, so after a burst (sign-in, creating a
+ * room) services replies can lag several seconds: be patient. */
+function csAsk(command, endRe, { start = null, timeout = 15000 } = {}) {
   const run = () => new Promise((resolve) => {
-    const req = { lines: [], endRe, resolve };
-    const finish = () => { clearTimeout(req.timer); clearTimeout(req.quiet); if (S.csReq === req) S.csReq = null; resolve(req.lines); };
-    req.finish = finish;
-    req.timer = setTimeout(finish, timeout);
-    S.csReq = req;
-    serviceQueue([`PRIVMSG ChanServ :${command}`]);
+    let release;
+    const replied = new Promise((r) => { release = r; });
+    const req = { lines: [], endRe, start, started: false };
+    req.finish = () => {
+      clearTimeout(req.timer); clearTimeout(req.quiet);
+      if (S.csReq === req) S.csReq = null;
+      release();                 // let the service queue go on
+      resolve(req.lines);
+    };
+    // Collect replies only from the moment our command is actually sent, and
+    // hold the queue until they're in, so no other command's reply mixes in.
+    serviceQueue([{
+      line: `PRIVMSG ChanServ :${command}`,
+      onSend: () => { S.csReq = req; req.timer = setTimeout(req.finish, timeout); },
+      until: replied,
+    }]);
   });
   S.csChain = (S.csChain || Promise.resolve()).then(run, run);
   return S.csChain;
@@ -3033,10 +3067,14 @@ function onCsReply(text) {
   const req = S.csReq;
   if (!req) return false;
   const t = text.replace(/[\x02\x1d\x1f\x0f]/g, "");
+  if (!req.started) {
+    if (req.start ? !(req.start.test(t) || req.endRe.test(t)) : !req.endRe.test(t)) return false;   // not ours
+    req.started = true;
+  }
   req.lines.push(t);
   clearTimeout(req.quiet);
   if (req.endRe.test(t)) req.finish();
-  else req.quiet = setTimeout(req.finish, 1500);
+  else req.quiet = setTimeout(req.finish, 3000);           // multi-line reply went quiet
   return true;
 }
 
@@ -3052,7 +3090,8 @@ function onEntryMsg(text) {
 
 async function loadRoomInfo(c) {
   c.infoLoaded = false;
-  const info = await csAsk(`INFO ${c.name}`, /end of info|is not registered|not registered/i);
+  const info = await csAsk(`INFO ${c.name}`, /end of info|is not registered|not registered/i,
+    { start: /^Information on /i });
   const notReg = info.some((l) => /is not registered/i.test(l));
   c.registered = !notReg && info.some((l) => /^Founder\s*:/i.test(l));
   const f = info.find((l) => /^Founder\s*:/i.test(l));
@@ -3061,7 +3100,8 @@ async function loadRoomInfo(c) {
   c.entryMsg = em ? em.replace(/^Entrymsg\s*:\s*/i, "") : "";
   c.mods = null;
   if (c.registered) {
-    const lines = await csAsk(`FLAGS ${c.name}`, /end of .* flags listing|not authorized/i);
+    const lines = await csAsk(`FLAGS ${c.name}`, /end of .* flags listing|not authorized/i,
+      { start: /^Entry\s+Nickname/i });
     c.mods = lines.map((l) => l.match(/^\d+\s+(\S+)\s+\+(\S+)/)).filter(Boolean)
       .filter((m) => /o/i.test(m[2])).map((m) => ({ nick: m[1], founder: m[2].includes("F") }));
   }
@@ -3232,7 +3272,7 @@ async function deleteRoom() {
     return;
   }
   btn.dataset.armed = ""; btn.textContent = "Deleting…";
-  const r = await csAsk(`DROP ${c.name}`, /drop \S+ \S+|has been dropped|not authorized/i);
+  const r = await csAsk(`DROP ${c.name}`, /drop \S+ [0-9a-f]+:[0-9a-f]+|has been dropped|not authorized|is not registered/i);
   const key = r.join(" ").match(/DROP\s+\S+\s+([0-9a-f:]+)/i)?.[1];
   const done = key ? await csAsk(`DROP ${c.name} ${key}`, /has been dropped|invalid|not authorized/i) : r;
   btn.textContent = "Delete this room…";
@@ -4831,7 +4871,7 @@ function doDisconnect(message = "", isError = false) {
   S.caps.clear(); S.convs.clear(); S.batches.clear(); S.away = false;
   S.presence.clear(); S.statuses.clear(); S.whois.clear(); S.friends = [];
   stopSocial(); S.friendGroups.clear(); S.incoming = []; S.outgoing = []; S.friendsSig = null;
-  S.prefs = { ignore: [], friendsOnly: false }; S.callerId = null; S.accepted = null; S.blockedTold = null;
+  S.prefs = { ignore: [], friendsOnly: false }; S.callerId = null; S.accepted = null; S.acceptListing = null; S.blockedTold = null;
   S.findResults = null; S.searching = false;
   for (const id of ["privacyDialog", "findDialog", "searchDialog", "roomDialog", "annDialog", "annBar", "createRoomDialog"]) $(id).style.display = "none";
   S.pendingCreate = null; S.listProbe = null; S.createName = null;
@@ -4850,6 +4890,8 @@ function doDisconnect(message = "", isError = false) {
   S.typing.clear(); S.typingTo = null; $("typing").textContent = ""; hideMenu();
   S.inPresence = false; S.presenceReady = false; S.announced = false;
   S.pw = null; S.link = null; S.selfAccount = null; S.claiming = null; S.svcQueue = [];
+  if (typeof S.svcTimer === "number") clearTimeout(S.svcTimer);
+  S.svcTimer = null;
   clearTimeout(S.pwChange?.timer); S.pwChange = null; S.roomList = null; S.listBuf = null;
   $("roomBrowser").style.display = "none"; $("pwDialog").style.display = "none";
   $("profileDialog").style.display = "none"; $("confDialog").style.display = "none";
@@ -5435,3 +5477,7 @@ listen("tray-signout", () => { if (S.phase !== "offline") doDisconnect("You've s
 setPhase("offline");
 $("buser").focus();
 initSignInOptions();
+
+/* Test hook: debug builds run an e2e scenario when the runner asks for one
+ * (tests/e2e/run.py). Release builds have no test_scenario command. */
+invoke("test_scenario").then((code) => { if (code) new Function(code)(); }).catch(() => {});

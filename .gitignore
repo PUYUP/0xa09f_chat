@@ -25,3 +25,7 @@ __pycache__/
 .DS_Store
 *.swp
 .devin/
+
+# test output
+tests/visual/out/
+__pycache__/

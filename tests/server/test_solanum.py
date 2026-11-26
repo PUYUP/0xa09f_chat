@@ -8,7 +8,7 @@ joins a channel and sends a message.
 Uses a unique nick per run so the test is self-contained and repeatable
 even after services.db is reset.
 
-Usage: python3 tests/test_solanum.py [--tls] [host] [port]
+Usage: python3 tests/server/test_solanum.py [--tls] [host] [port]
 """
 
 import random

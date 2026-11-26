@@ -11,7 +11,7 @@ from server/.env (SOJU_USER / SOJU_PASSWORD / SOJU_NETWORK).
 
 Prereq: `docker compose up -d` from server/ and the soju container running.
 
-Usage: python3 tests/test_soju.py [--tls] [host] [port]
+Usage: python3 tests/server/test_soju.py [--tls] [host] [port]
 """
 
 import base64
@@ -23,7 +23,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SERVER_DIR = os.path.dirname(HERE)
+SERVER_DIR = os.path.join(os.path.dirname(os.path.dirname(HERE)), "server")    # tests/server -> repo/server
 
 
 def load_env(path):

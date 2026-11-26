@@ -4,7 +4,7 @@
 Verifies the TLS listeners accept connections and present a certificate.
 Self-signed dev certs are expected — verification is disabled.
 
-Usage: python3 tests/test_tls.py [host] [solanum_port] [soju_port]
+Usage: python3 tests/server/test_tls.py [host] [solanum_port] [soju_port]
 """
 
 import socket

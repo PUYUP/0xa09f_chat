@@ -11,6 +11,11 @@ Stack IRC lengkap yang berjalan di atas Docker Compose:
 | register | Pendaftaran akun mandiri, email pemulihan & reset password (app desktop a09f) | `a09f-register` (build lokal, `server/register/`) | `16680` |
 | mailpit | Penangkap email dev: email reset password dibaca di web | `axllent/mailpit` v1.27 | `16825` (web) |
 
+Dokumen lain di folder ini: `configuration.md`, `operations.md`, `usage.md`,
+`testing.md`, dan **`api.md`** (API service akun `register`: akun, teman,
+event live, metadata pesan, room). App desktop: `desktop/README.md` dan
+`desktop/docs/`. Semua tes: `tests/README.md`.
+
 ## Arsitektur
 
 ```
@@ -81,12 +86,11 @@ server/
 │   ├── config                  # konfigurasi soju
 │   ├── motd                    # MOTD bouncer
 │   └── tls-*.pem               # cert TLS bouncer (generated, gitignored)
-├── tests/
-│   ├── test_solanum.py         # direct solanum (plain + --tls)
-│   ├── test_soju.py            # via bouncer + SASL (self-setup user/network)
-│   └── test_tls.py             # handshake TLS kedua listener
 └── docs/                       # dokumentasi ini
 ```
+
+Test suite ada di `tests/` di root repo (lihat [testing.md](testing.md)):
+`tests/server/`, `tests/api/`, dan `tests/e2e/`.
 
 Catatan: file cert/private key dan `.env` **tidak di-commit** — generate
 dengan `scripts/generate-certs.sh` dan `cp .env.example .env`.
