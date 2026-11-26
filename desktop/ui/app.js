@@ -435,6 +435,7 @@ function renderMsg(m) {
   if (poll && !deleted) div.appendChild(pollCard(+poll[1]));
   if (withMeta && !deleted && S.token) { reactionChips(div, cur, m); messageTools(div, cur, m); }
   logEl.querySelector(".seen")?.remove();
+  if (isConvMsg(m)) logEl.querySelector(".older.empty")?.remove();      // first message: drop the hint
   logEl.appendChild(div);
   logEl.scrollTop = logEl.scrollHeight;
   if (!m.others && m.cls.includes("me")) renderSeen();
@@ -679,7 +680,7 @@ function onJoin(fromNick, channel) {
     S.current = null;          // force switchTo to re-render
     switchTo(channel);
   } else if (!isService(fromNick)) {          // ChanServ & co. come and go silently
-    addMsg(channel, { who: fromNick, txt: isConference(channel) ? "joined the conference" : "joined the room", cls: "action" });
+    addMsg(channel, { who: fromNick, txt: isConference(channel) ? "joined the conference" : "joined the room", cls: "action", local: true });
   }
   refreshSide();
 }
@@ -702,13 +703,13 @@ function onPart(fromNick, channel) {
     return;
   }
   conv(key)?.members.delete(fromNick);
-  if (!isService(fromNick)) addMsg(channel, { who: fromNick, txt: isConference(channel) ? "left the conference" : "left the room", cls: "action" });
+  if (!isService(fromNick)) addMsg(channel, { who: fromNick, txt: isConference(channel) ? "left the conference" : "left the room", cls: "action", local: true });
   refreshSide();
 }
 
 function onQuit(fromNick) {
   for (const c of rooms()) {
-    if (c.members.delete(fromNick) && !isService(fromNick)) addMsg(c.name, { who: fromNick, txt: "signed out", cls: "action" });
+    if (c.members.delete(fromNick) && !isService(fromNick)) addMsg(c.name, { who: fromNick, txt: "signed out", cls: "action", local: true });
   }
   refreshSide();
 }
@@ -2500,10 +2501,13 @@ function renderFind() {
 
 const OLDER_PAGE = 100;
 
+/* A message people actually sent (not a local join/leave line or a notice). */
+const isConvMsg = (m) => isRealMsg(m) && !m.local;
+
 function loadOlder(c) {
   if (!c || c.loadingOlder || c.noMore || !has("draft/chathistory")) return;
-  const oldest = c.msgs.find((m) => m.id || m.who !== "System");
-  if (!oldest) return;
+  const oldest = c.msgs.find(isConvMsg);
+  if (!oldest) { c.noMore = true; renderLog(); return; }
   c.loadingOlder = true;
   c.olderBefore = c.msgs.length;
   S.olderFor = keyOf(c.name);
@@ -2528,6 +2532,12 @@ function olderLink(c) {
   if (!c || c.kind === "status" || !c.historyDone || !has("draft/chathistory")) return null;
   const d = document.createElement("div");
   d.className = "older";
+  if (!c.msgs.some(isConvMsg)) {
+    d.classList.add("empty");
+    d.textContent = c.kind === "pm" ? `No messages yet — say hi to ${c.name}! 👋`
+      : "No messages yet — say hi and start the conversation! 👋";
+    return d;
+  }
   if (c.noMore) { d.textContent = "— Start of conversation —"; return d; }
   d.innerHTML = `<a>${c.loadingOlder ? "Loading…" : "⬆ Load older messages"}</a>`;
   d.querySelector("a").onclick = () => { loadOlder(c); d.querySelector("a").textContent = "Loading…"; };
@@ -2835,7 +2845,7 @@ function onKick(by, channel, nick, reason) {
     return;
   }
   c.members.delete(nick);
-  addMsg(channel, { who: nick, txt: `was removed by ${by}`, cls: "action" });
+  addMsg(channel, { who: nick, txt: `was removed by ${by}`, cls: "action", local: true });
   refreshSide();
 }
 
