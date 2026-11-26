@@ -25,7 +25,7 @@ default `172.30.99.0/24`). IP statis dipakai untuk semua container:
 
 | Service   | IP            | Ports ke host (default)                    |
 |-----------|---------------|--------------------------------------------|
-| solanum   | 172.30.99.10  | `6667` plain, `6697` TLS                  |
+| solanum   | 172.30.99.10  | `6667` plain, `6697` TLS, `16668` (soju→solanum, plaintext) |
 | atheme    | 172.30.99.20  | tidak ada (internal)                       |
 | soju      | 172.30.99.30  | `16667` plain, `16697` TLS                 |
 | postgres  | 172.30.99.40  | tidak ada (internal)                       |
@@ -33,6 +33,13 @@ default `172.30.99.0/24`). IP statis dipakai untuk semua container:
 Kenapa IP statis: `connect` block solanum mencocokkan `host` terhadap IP
 peer — nama docker DNS (`atheme`) **tidak** cocok (error `Invalid host`).
 `ATHEME_HOST` di `.env` harus sama dengan `ipv4_address` atheme.
+IP soju juga dipakai solanum sebagai satu-satunya alamat yang boleh login
+sebagai user bouncer (lihat `docs/operations.md`, "Kenapa port 16668"); alamat
+itu dibaca dari docker secret `secrets/soju-host.ip`, bukan dari `.env`.
+
+Semua port di atas bind ke `${BIND_ADDR}` (default `127.0.0.1`), dengan
+override per service: `SOLANUM_BIND`, `SOJU_BIND`, `SOLANUM_SOJU_BIND`.
+Untuk host publik, biarkan plaintext di `127.0.0.1` dan hanya buka TLS.
 
 Image di-pin:
 

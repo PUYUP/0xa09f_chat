@@ -62,6 +62,10 @@ CREATE INDEX IF NOT EXISTS reminders_due ON reminders (due) WHERE NOT delivered;
 CREATE TABLE IF NOT EXISTS announcements (id BIGSERIAL PRIMARY KEY, author TEXT NOT NULL, text TEXT NOT NULL, created BIGINT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS last_seen (uname TEXT PRIMARY KEY, seen BIGINT NOT NULL);
+-- Who exists, for "find people": soju's listing is capped ("N more users
+-- omitted"), so the names are indexed here and refreshed from soju (see
+-- accounts.go). Rows are never deleted automatically (lookups are cheap).
+CREATE TABLE IF NOT EXISTS accounts (uname TEXT PRIMARY KEY, first_seen BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS name_colors (uname TEXT PRIMARY KEY, color TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS imv (pair TEXT PRIMARY KEY, theme TEXT NOT NULL, by_user TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS user_tz (uname TEXT PRIMARY KEY, tz TEXT NOT NULL, utc_offset INT NOT NULL, updated BIGINT NOT NULL);

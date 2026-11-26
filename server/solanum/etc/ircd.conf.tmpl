@@ -19,6 +19,30 @@ serverinfo {
 	nicklen = 30;
 };
 
+/* Auth blocks are order-independent: a "*@*" block always wins over the
+ * specific one below, so a catch-all that also restates the bouncer's address
+ * must allow the same flags. */
+auth {
+	user = "*@*";
+	class = "users";
+	flags = exceed_limit;
+};
+
+/* soju: every bouncer user's upstream connection comes from this one IP, so
+ * it must not count against per-IP class limits (number_per_ip = 10 would cap
+ * the whole service at 10 accounts).
+ *
+ * This block is also what stops a local client from claiming a user's nick
+ * and logging in as them with NickServ: solanum runs the IDENT check by
+ * default for every client, so 172.30.99.30 only gets in here (and only gets
+ * past need_ident) when it answers for that ident, which only the bouncer
+ * does. It names the address, never "*". */
+auth {
+	user = "*@172.30.99.30";   /* = soju: ipv4_address in docker-compose.yml */
+	class = "users";
+	flags = exceed_limit, need_ident;
+};
+
 admin {
 	name = "Lazy admin (lazya)";
 	description = "SolNet client server";
@@ -64,21 +88,17 @@ listen {
 	defer_accept = yes;
 	port = 6667;
 	sslport = 6697;
+	/* Soju's upstream connections use this port. It is not a security boundary
+	 * (auth does that: only the bouncer's address may claim a nick), it keeps
+	 * the bouncer's traffic away from the public port so throttles/prepends
+	 * for real users can be tuned there later. */
+	port = 16668;
 };
 
 /* soju: every bouncer user's upstream connection comes from this one IP, so
  * it must not count against per-IP class limits (number_per_ip = 10 would cap
- * the whole service at 10 accounts). Listed before the catch-all block. */
-auth {
-	user = "*@__SOJU_HOST__";
-	class = "users";
-	flags = exceed_limit;
-};
-
-auth {
-	user = "*@*";
-	class = "users";
-};
+ * the whole service at 10 accounts). See the auth blocks at the top of this
+ * file: solanum does not let file order decide which block applies. */
 
 privset "local_op" {
 	privs = oper:general, oper:privs, oper:testline, oper:kill, oper:operwall, oper:message,
@@ -135,8 +155,8 @@ secure {
 exempt {
 	ip = "127.0.0.1";
 	/* soju: after a solanum restart all bouncer users reconnect at once from
-	 * this IP; without this they get "Reconnecting too fast, throttled." */
-	ip = "__SOJU_HOST__";
+	 * this IP; without this they get "Reconnecting too fast, throttled". */
+	ip = "172.30.99.30";
 };
 
 channel {

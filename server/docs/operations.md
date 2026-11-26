@@ -119,11 +119,39 @@ Untuk tiap akun baru service menjalankan
 `sojuctl` lewat admin socket soju (volume `soju-db`):
 
 1. `user create -username <id> -password <pw> -nick <id> -realname <id>` (non-admin)
-2. `user run <id> network create -addr irc+insecure://solanum:6667 -name solanum -nick <id> -auto-away true`
+2. `user run <id> network create -addr irc+insecure://solanum:16668 -name solanum -nick <id> -auto-away true`
    (auto-away = away saat tidak ada perangkat tersambung → app menampilkan *Offline*)
 
 Jadi tiap akun punya nick IRC sendiri (bukan `soluser` bersama). Kalau langkah
 2 gagal, user dari langkah 1 dihapus lagi (rollback).
+
+Tanya "user ini ada?" juga lewat `sojuctl user status <id>` (admin socket,
+`BOUNCER_LOOKUP=ctl`), bukan login IRC ke soju — service ini tidak perlu
+menjangkau port tempat upstream bouncer datang (lihat *Keamanan* di bawah).
+
+Tabel port di `docs/configuration.md` sudah menyebut 6667/6697; sekarang
+tambahan **16668** (soju→solanum, plaintext, tidak pernah publik: bind
+`SOLANUM_SOJU_BIND`, default `127.0.0.1`).
+
+### Kenapa port 16668
+
+Semua koneksi upstream soju datang dari **satu IP** (`172.30.99.30`), jadi
+solanum memperlakukannya berbeda dari user biasa — dan perbedaan itu tidak
+boleh bisa ditiru proses lain:
+
+- `auth { user = "*@172.30.99.30"; flags = exceed_limit, need_ident; }` —
+  hanya alamat itu yang dianggap bouncer (`exceed_limit` = bebas
+  `number_per_ip`). `need_ident` membuatnya hanya lolos kalau benar-benar
+  menjawab ident sebagai soju.
+- Auth block solanum **tidak** ditentukan urutan di file: `*@*` selalu menang,
+  jadi blok catch-all wajib memikul flag yang sama (`exceed_limit`), kalau
+  tidak bouncer "turun kelas".
+- Alamat itu berasal dari docker secret `secrets/soju-host.ip` (di-generate
+  `scripts/soju-host-ip.sh` dari `docker-compose.yml`), **bukan** env: kalau
+  filenya hilang solanum menolak start, jadi tidak mungkin diam-diam jadi `*`.
+- Port `16668` hanya untuk soju (plaintext, bind host `127.0.0.1` by default);
+  `6667`/`6697` tetap untuk client. Port bukan batas keamanan — auth yang
+  batasnya — tapi memisahkan trafik bouncer dari trafik publik.
 
 ```bash
 curl -s http://127.0.0.1:16680/health

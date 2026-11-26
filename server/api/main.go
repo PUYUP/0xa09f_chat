@@ -32,16 +32,20 @@ type config struct {
 	sojuIRC      string
 	upstream     string
 	network      string
-	admins       map[string]bool
-	smtpHost     string
-	smtpPort     string
-	smtpSecurity string
-	smtpUser     string
-	smtpPassword string
-	mailFrom     string
-	maxAttempts  int
-	maxCreates   int
-	maxLoginFail int
+	// bouncerLookup: "ctl" (default) or "irc". "irc" logs in to soju to check
+	// whether a user exists, which needs a route to the port soju's upstream
+	// connections come from; only use it when the bouncer is trusted with that.
+	bouncerLookup string
+	admins        map[string]bool
+	smtpHost      string
+	smtpPort      string
+	smtpSecurity  string
+	smtpUser      string
+	smtpPassword  string
+	mailFrom      string
+	maxAttempts   int
+	maxCreates    int
+	maxLoginFail  int
 }
 
 func env(key, def string) string {
@@ -67,17 +71,18 @@ func loadConfig() config {
 		}
 	}
 	return config{
-		listen:       env("LISTEN", ":8080"),
-		databaseURL:  env("DATABASE_URL", "postgres://a09f@localhost/a09f?sslmode=disable"),
-		legacySQLite: env("LEGACY_SQLITE", "/data/register.db"),
-		sojuConfig:   env("SOJU_CONFIG", "/soju-config"),
-		sojuIRC:      env("SOJU_IRC", "soju:6667"),
-		upstream:     env("UPSTREAM_ADDR", "irc+insecure://solanum:6667"),
-		network:      env("NETWORK_NAME", "solanum"),
-		admins:       admins,
-		smtpHost:     os.Getenv("SMTP_HOST"),
-		smtpPort:     env("SMTP_PORT", "587"),
-		smtpSecurity: strings.ToLower(env("SMTP_SECURITY", "starttls")),
+		listen:        env("LISTEN", ":8080"),
+		databaseURL:   env("DATABASE_URL", "postgres://a09f@localhost/a09f?sslmode=disable"),
+		legacySQLite:  env("LEGACY_SQLITE", "/data/register.db"),
+		sojuConfig:    env("SOJU_CONFIG", "/soju-config"),
+		sojuIRC:       env("SOJU_IRC", "soju:6667"),
+		upstream:      env("UPSTREAM_ADDR", "irc+insecure://solanum:16668"),
+		network:       env("NETWORK_NAME", "solanum"),
+		bouncerLookup: strings.ToLower(env("BOUNCER_LOOKUP", "ctl")),
+		admins:        admins,
+		smtpHost:      os.Getenv("SMTP_HOST"),
+		smtpPort:      env("SMTP_PORT", "587"),
+		smtpSecurity:  strings.ToLower(env("SMTP_SECURITY", "starttls")),
 		smtpUser:     os.Getenv("SMTP_USER"),
 		smtpPassword: os.Getenv("SMTP_PASSWORD"),
 		mailFrom:     env("MAIL_FROM", "a09f <no-reply@a09f.invalid>"),

@@ -4,12 +4,41 @@
 # "daemon is already running".
 rm -f /tmp/solanum.pid /var/local/solanum.pid
 
-# Render ircd.conf from the template with secrets/hostnames injected via env.
-sed -e "s|__LINK_SOLANUM_SEND__|${LINK_SOLANUM_SEND:-}|g" \
-    -e "s|__LINK_SOLANUM_ACCEPT__|${LINK_SOLANUM_ACCEPT:-}|g" \
+# Server links carry their passwords in the config: without them config_load()
+# skips the connect block and services never link (or, before, they linked with
+# an empty password). Fail instead of starting a half-configured network.
+: "${LINK_SOLANUM_SEND:?set LINK_SOLANUM_SEND in .env (see .env.example)}"
+: "${LINK_SOLANUM_ACCEPT:?set LINK_SOLANUM_ACCEPT in .env (see .env.example)}"
+
+# The bouncer's own address: only it is treated as the bouncer (auth "soju" in
+# ircd.conf.tmpl). It comes from a docker secret (./secrets/soju-host.ip, see
+# scripts/soju-host-ip.sh) rather than env so the rule cannot silently render
+# as "*" - if the file is missing, stop here.
+if [ ! -s /run/secrets/soju-ip ]; then
+    echo "sol: /run/secrets/soju-ip is missing or empty" >&2
+    exit 1
+fi
+SOJU_HOST=$(tr -d ' \t\r\n' < /run/secrets/soju-ip)
+case "$SOJU_HOST" in
+*[!0-9.]* | "")
+    echo "sol: soju-host.ip must be an IPv4 address, got '$SOJU_HOST'" >&2
+    exit 1
+    ;;
+esac
+
+# Render ircd.conf from the template with secrets/hostnames injected.
+sed -e "s|__LINK_SOLANUM_SEND__|${LINK_SOLANUM_SEND}|g" \
+    -e "s|__LINK_SOLANUM_ACCEPT__|${LINK_SOLANUM_ACCEPT}|g" \
     -e "s|__ATHEME_HOST__|${ATHEME_HOST:-atheme}|g" \
-    -e "s|__SOJU_HOST__|${SOJU_HOST:-172.30.99.30}|g" \
+    -e "s|__SOJU_HOST__|${SOJU_HOST}|g" \
     /etc/solanum/ircd.conf.tmpl > /tmp/ircd.conf
+
+# An unreplaced placeholder would leave an auth rule matching nothing (or the
+# connect block with a literal password): refuse to start.
+if grep -q '__[A-Z_]*__' /tmp/ircd.conf; then
+    echo "sol: ircd.conf still has placeholders: $(grep -o '__[A-Z_]*__' /tmp/ircd.conf | sort -u | tr '\n' ' ')" >&2
+    exit 1
+fi
 
 exec solanum -foreground -logfile /dev/stdout \
     -configfile /tmp/ircd.conf \

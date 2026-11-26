@@ -34,7 +34,7 @@ func newServer(ctx context.Context, cfg config) (*server, error) {
 		return nil, err
 	}
 	s := &server{
-		cfg: cfg, db: db, bouncer: newBouncer(cfg), hub: newHub(), sess: newSessions(db), preview: newPreviewer(),
+		cfg: cfg, db: db, bouncer: newBouncer(cfg, db), hub: newHub(), sess: newSessions(db), preview: newPreviewer(),
 		attempts: newLimiter(time.Hour), creates: newLimiter(time.Hour), logins: newLimiter(time.Hour),
 		previews: newLimiter(time.Minute),
 	}

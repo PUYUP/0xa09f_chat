@@ -25,13 +25,21 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "${BIND_ADDR:-127.0.0.1}:${SOLANUM_PORT:-6667}:6667"        # IRC plaintext
-      - "${BIND_ADDR:-127.0.0.1}:${SOLANUM_TLS_PORT:-6697}:6697"    # IRC over TLS (self-signed)
+      # Plaintext is off by default (set SOLANUM_BIND to publish it, e.g. for a
+      # local test client). The bouncer reaches solanum over the docker network.
+      - "${SOLANUM_BIND:-127.0.0.1}:${SOLANUM_PORT:-6667}:6667"        # IRC plaintext
+      - "${BIND_ADDR:-127.0.0.1}:${SOLANUM_TLS_PORT:-6697}:6697"       # IRC over TLS (self-signed)
+      # Soju's upstream listener (auth "soju" in ircd.conf.tmpl allows only the
+      # bouncer's address, so a container with this port cannot pass itself off
+      # as a bouncer user).
+      - "${SOLANUM_SOJU_BIND:-127.0.0.1}:${SOLANUM_SOJU_PORT:-16668}:16668"
     volumes:
       - ./solanum/etc:/etc/solanum:ro
       - ./solanum/etc/motd:/usr/local/etc/ircd.motd:ro
       - solanum-logs:/var/log/solanum
       - solanum-state:/var/local                # bandb ban.db (/var/local/ban.db)
+    secrets:
+      - soju-ip
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6667"]
       interval: 10s
@@ -110,13 +118,15 @@ services:
       # lib/pq reads PGPASSWORD for the postgres:// connection in soju/config
       PGPASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "${BIND_ADDR:-127.0.0.1}:${SOJU_PORT:-16667}:6667"          # bouncer plaintext
-      - "${BIND_ADDR:-127.0.0.1}:${SOJU_TLS_PORT:-16697}:6697"      # bouncer TLS (self-signed)
+      - "${SOJU_BIND:-127.0.0.1}:${SOJU_PORT:-16667}:6667"          # bouncer plaintext
+      - "${SOJU_BIND:-127.0.0.1}:${SOJU_TLS_PORT:-16697}:6697"      # bouncer TLS (self-signed)
     volumes:
       - ./soju/config:/soju-config:ro
       - ./soju:/soju-tls:ro
       - soju-db:/db
       - soju-uploads:/uploads
+    secrets:
+      - soju-ip
     depends_on:
       solanum:
         condition: service_healthy
@@ -151,9 +161,14 @@ services:
     environment:
       DATABASE_URL: postgres://a09f:${A09F_DB_PASSWORD:?run scripts/init-api-db.sh}@postgres:5432/a09f?sslmode=disable
       LEGACY_SQLITE: /data/register.db        # Python service data, read once (never changed)
-      UPSTREAM_ADDR: irc+insecure://solanum:6667
+      UPSTREAM_ADDR: irc+insecure://solanum:16668   # soju-only listener (plaintext, never published)
       NETWORK_NAME: ${SOJU_NETWORK:-solanum}
       SOJU_IRC: soju:6667
+      # Does a09f user exist? Answered from BouncerServ "user status" on soju's
+      # admin socket, instead of logging into soju from this container. The
+      # service therefore gets no IRC access to solanum: one fewer path to the
+      # port that soju's upstream connections come from.
+      BOUNCER_LOOKUP: ctl
       ADMIN_USERS: ${ADMIN_USERS:-}           # comma-separated IDs allowed to send announcements
       # Password-reset email. Defaults deliver to the local Mailpit catcher;
       # point these at a real SMTP server in production.
@@ -210,3 +225,9 @@ volumes:
   atheme-data:
   solanum-logs:
   solanum-state:
+
+secrets:
+  # The bouncer's fixed address (see networks.ircnet.ipam): solanum only lets
+  # this source IP claim users' nicks (auth "soju" in ircd.conf.tmpl).
+  soju-ip:
+    file: ./secrets/soju-host.ip

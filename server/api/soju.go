@@ -12,26 +12,41 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // bouncer talks to soju: `sojuctl` over soju's admin unix socket (mounted
 // from the soju-db volume) for accounts and acting for a user, and a real
 // SASL login on soju's IRC port to check passwords.
 //
+// Accounts are looked up through the admin socket only (BOUNCER_LOOKUP=ctl):
+// this service opens no IRC connection to solanum, the port every bouncer
+// user's upstream comes from, so it cannot end up in a position to claim one
+// of their nicks.
+//
 // Every a09f account is a soju user with one upstream network (NETWORK_NAME)
 // to solanum, created with auto-away: soju marks it away while no device is
 // connected, which the app shows as Offline.
 type bouncer struct {
 	sojuctl  []string
-	upstream string // e.g. irc+insecure://solanum:6667
+	upstream string // e.g. irc+insecure://solanum:16668
 	network  string // soju network name of every user
 	ircAddr  string // soju's IRC listener inside the docker network
+	db       *pgxpool.Pool // accounts index (searchAccounts/syncAccounts)
+
+	// ctlLookup answers "does this user exist?" from BouncerServ (the admin
+	// socket) instead of logging into soju. Default true: doing it over IRC
+	// would need this container to reach the port soju's upstreams come from.
+	ctlLookup bool
 
 	mu       sync.Mutex // serializes account mutations
 	cacheMu  sync.Mutex
 	exists   map[string]existsHit
 	accounts []string
 	listedAt time.Time
+	syncedAt time.Time // last time new users were copied into the accounts table
 }
 
 type existsHit struct {
@@ -39,11 +54,13 @@ type existsHit struct {
 	at time.Time
 }
 
-func newBouncer(cfg config) *bouncer {
+func newBouncer(cfg config, db *pgxpool.Pool) *bouncer {
 	return &bouncer{
-		sojuctl:  []string{"sojuctl", "-config", cfg.sojuConfig},
-		upstream: cfg.upstream, network: cfg.network, ircAddr: cfg.sojuIRC,
-		exists: map[string]existsHit{},
+		sojuctl:   []string{"sojuctl", "-config", cfg.sojuConfig},
+		upstream:  cfg.upstream, network: cfg.network, ircAddr: cfg.sojuIRC,
+		exists:    map[string]existsHit{},
+		ctlLookup: cfg.bouncerLookup != "irc",
+		db:        db,
 	}
 }
 
@@ -106,8 +123,32 @@ func (b *bouncer) checkAuth(ctx context.Context, user, password string) (bool, e
 }
 
 func (b *bouncer) userExists(ctx context.Context, user string) bool {
+	if !validID(user) {
+		return false
+	}
+	if b.ctlLookup {
+		return b.userInCtl(ctx, user)
+	}
 	code, _ := b.ctl(ctx, "user", "status", user)
 	return code == 0
+}
+
+// userInCtl asks BouncerServ whether the user exists. The reply is only the
+// answer to that one line, so it names the user when they do exist ("<name>:
+// ...") and the admin socket prints an error (exit code 1) when they don't.
+// Never match on the error text: a user could be called something like
+// "no such user".
+func (b *bouncer) userInCtl(ctx context.Context, user string) bool {
+	code, out := b.ctl(ctx, "user", "status", user)
+	if code != 0 {
+		return false
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if name, _, ok := strings.Cut(l, ":"); ok && strings.EqualFold(strings.TrimSpace(name), user) {
+			return true
+		}
+	}
+	return false
 }
 
 // register creates the soju user and its upstream network (rolled back if
@@ -194,23 +235,84 @@ func (b *bouncer) allAccounts(ctx context.Context) []string {
 	}
 	b.cacheMu.Unlock()
 	code, out := b.ctl(ctx, "user", "status")
-	if code != 0 {
-		b.cacheMu.Lock()
-		defer b.cacheMu.Unlock()
-		return b.accounts
-	}
 	var list []string
-	for _, l := range strings.Split(out, "\n") {
-		if name, _, ok := strings.Cut(l, ":"); ok {
-			if u := strings.TrimSpace(name); validID(u) {
-				list = append(list, u)
-			}
+	if code != 0 {
+		list = b.accounts // keep the last good list
+	} else {
+		list = parseAccounts(out)
+		if len(list) < 2 && len(b.accounts) >= 2 {
+			list = b.accounts
 		}
 	}
 	b.cacheMu.Lock()
 	b.accounts, b.listedAt = list, time.Now()
 	b.cacheMu.Unlock()
 	return list
+}
+
+// parseAccounts reads BouncerServ's "user status" (one "<name>: …" per line).
+// Ops prefixes a sampled list with a notice, so only lines shaped like an entry
+// count. The list is capped ("(N more users omitted)"): past that, searching
+// has to go through searchAccounts.
+func parseAccounts(out string) []string {
+	var list []string
+	for _, l := range strings.Split(out, "\n") {
+		name, rest, ok := strings.Cut(l, ":")
+		if !ok || !strings.HasSuffix(strings.TrimSpace(rest), "networks") {
+			continue
+		}
+		if u := strings.TrimSpace(name); validID(u) {
+			list = append(list, u)
+		}
+	}
+	return list
+}
+
+// searchAccounts returns the users whose name contains needle: "find people"
+// needs a substring match. soju's own listing is capped ("N more users
+// omitted"), so names are indexed in Postgres (syncAccounts keeps it fresh);
+// asking soju with "user status <needle>" is no option either, it only matches
+// whole names.
+func (b *bouncer) searchAccounts(ctx context.Context, db *pgxpool.Pool, needle string, limit int) []string {
+	pat := "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(needle) + "%"
+	pre := strings.TrimSuffix(pat, "%") + "%"
+	rows, err := db.Query(ctx, `SELECT uname FROM accounts WHERE uname LIKE $1
+		ORDER BY (uname LIKE $2) DESC, length(uname), uname LIMIT $3`, pat, pre, limit)
+	if err != nil {
+		return nil
+	}
+	out, _ := collect(rows, func(r pgx.Rows) (string, error) { var u string; return u, r.Scan(&u) })
+	return out
+}
+
+// syncAccounts copies newer soju users into the accounts table. soju's listing
+// is random-sampled and capped ("N more users omitted"), so one call only shows
+// a slice of everyone; asking again (at most once a minute) converges over a
+// few rounds. One sojuctl call per round, never one per name.
+//
+// Rows are not pruned: a name missing from this round's sample is not gone, and
+// a stale row only costs a "no such user" when someone writes to them.
+func (b *bouncer) syncAccounts(ctx context.Context, db *pgxpool.Pool) error {
+	b.cacheMu.Lock()
+	fresh := time.Since(b.syncedAt) < time.Minute
+	b.cacheMu.Unlock()
+	if fresh {
+		return nil
+	}
+	_, out := b.ctl(ctx, "user", "status")
+	list := parseAccounts(out)
+	if len(list) == 0 {
+		return nil // soju down or nothing listed: try again later
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO accounts (uname, first_seen)
+		SELECT u, $2 FROM unnest($1::text[]) AS u WHERE u <> '' ON CONFLICT DO NOTHING`,
+		list, now()); err != nil {
+		return err
+	}
+	b.cacheMu.Lock()
+	b.syncedAt = time.Now()
+	b.cacheMu.Unlock()
+	return nil
 }
 
 // sendAs sends one IRC line from the user's upstream connection (soju

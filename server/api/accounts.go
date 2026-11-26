@@ -149,6 +149,8 @@ func (s *server) createAccount(ctx context.Context, user, password string) error
 		log.Printf("register %s: %v", user, err)
 		return fail(500, "Couldn't create the account right now. Please try again later.")
 	}
+	// Index it for "find people" right away (soju's listing is capped).
+	s.db.Exec(ctx, `INSERT INTO accounts (uname, first_seen) VALUES ($1, $2) ON CONFLICT DO NOTHING`, user, now())
 	log.Printf("created %s", user)
 	return nil
 }

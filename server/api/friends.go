@@ -302,12 +302,17 @@ func (s *server) searchUsers(q *req) (any, error) {
 	if len([]rune(needle)) < 2 {
 		return nil, fail(400, "Type at least 2 letters.")
 	}
-	var hits []string
-	for _, u := range s.bouncer.allAccounts(ctx) {
-		if strings.Contains(u, needle) && u != q.me {
-			hits = append(hits, u)
+	// Names come from the accounts index (see bouncer.searchAccounts): soju's
+	// own listing is capped, so it cannot answer "contains" for everyone.
+	s.bouncer.syncAccounts(ctx, s.bouncer.db)
+	hits := s.bouncer.searchAccounts(ctx, s.bouncer.db, needle, 60)
+	kept := hits[:0]
+	for _, u := range hits {
+		if u != q.me {
+			kept = append(kept, u)
 		}
 	}
+	hits = kept
 	sort.SliceStable(hits, func(i, j int) bool {
 		a, b := hits[i], hits[j]
 		pa, pb := strings.HasPrefix(a, needle), strings.HasPrefix(b, needle)

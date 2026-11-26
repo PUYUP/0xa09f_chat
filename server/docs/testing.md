@@ -57,7 +57,7 @@ Self-contained setup (idempotent, via `docker exec soju sojuctl`):
 1. `user status pointilis` → kalau belum ada, `user create`; kalau ada,
    `user update -password` (sinkron dengan `.env` `SOJU_PASSWORD`).
 2. `network status` → kalau network `SOJU_NETWORK` belum ada,
-   `network create -addr irc+insecure://solanum:6667`.
+   `network create -addr irc+insecure://solanum:16668`.
 
 Kredensial dibaca dari `server/.env` (`SOJU_USER`, `SOJU_PASSWORD`,
 `SOJU_NETWORK`) dengan fallback default.
