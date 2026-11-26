@@ -207,6 +207,10 @@ function addMsg(target, m, { history = false } = {}) {
   // Keep "newest first" ordering when the open chat (or my own message) moves it up.
   if (!history && c.kind !== "status" && isConvMsg(m) && (key === S.current || !m.others)) renderLists();
   if (!history && m.others && c.kind === "pm" && S.typing.has(keyOf(c.name))) onTyping(c.name, false);
+  if (!history && m.others && c.kind === "room" && S.roomTyping?.get(keyOf(c.name))?.has(keyOf(m.who))) {
+    onRoomTyping({ room: c.name, from: m.who, active: false });
+  }
+  if (!history && !m.others && c.kind !== "status" && S.pendingExpire?.length) maybeRegisterExpiry(c, m);
 }
 
 /* App-generated messages: the sender label says what kind of message it is. */
@@ -433,6 +437,12 @@ function renderMsg(m) {
     `<span class="who">${esc(m.who)}:</span> <span class="txt">${quote}${txt}</span>`;
   if (!m.cls.includes("service") && !m.cls.includes("error") && !m.cls.includes("tip") && !m.cls.includes("status")) {
     paintName(div.querySelector(".who"), m.who);
+    div.querySelector(".who").dataset.nick = m.who;
+  }
+  if (withMeta && !deleted) {
+    const due = metaFor(keyOf(cur.name)).expiring.get(msgKeyStr(msgKeyParts(cur, m)));
+    if (due) div.querySelector(".txt").insertAdjacentHTML("beforeend", ` <span class="expiry" data-due="${due}" title="Disappears ${esc(new Date(due * 1000).toLocaleString())}">${expiryLabel(due)}</span>`);
+    if (isSaved(cur, m)) div.querySelector(".txt").insertAdjacentHTML("beforeend", ` <span class="saved-star" title="Saved">⭐</span>`);
   }
   if (poll && !deleted) div.appendChild(pollCard(+poll[1]));
   if (withMeta && !deleted && S.token) { reactionChips(div, cur, m); messageTools(div, cur, m); }
@@ -465,6 +475,7 @@ function switchTo(key) {
   refreshSide();
   renderTyping();
   renderPins();
+  if (c?.kind === "pm" && !S.imv?.has(key)) loadImv(c); else applyImv();
   $("input").focus();
 }
 
@@ -549,6 +560,7 @@ function renderUsers() {
     }
     if (c.kind === "room" && isMuted(c, nick)) { name.textContent += " 🔇"; name.title = "Muted"; }
     paintName(name, nick);
+    name.dataset.nick = nick;
     d.appendChild(name);
     d.appendChild(profileButton(nick));
     if (st.state !== "unknown") {
@@ -613,6 +625,7 @@ function refreshSide() {
   } else if (c?.kind === "pm") {
     title = `Private chat with ${esc(c.name)}` +
       ` <button id="btnPmProfile" class="title-btn" title="See ${esc(c.name)}'s profile">👤 Profile</button>` +
+      ` <button id="btnPmTheme" class="title-btn" title="Chat theme (both of you see it)">🎨 Theme</button>` +
       ` <button id="btnPmIgnore" class="title-btn">${isIgnored(c.name) ? "✅ Unignore" : "🚫 Ignore"}</button>`;
   }
   $("chatTitle").innerHTML = title;
@@ -622,6 +635,7 @@ function refreshSide() {
   if ($("btnRoomSettings")) $("btnRoomSettings").onclick = () => openRoomDialog(c);
   if ($("btnPmProfile")) $("btnPmProfile").onclick = () => openProfile(c.name);
   if ($("btnPmIgnore")) $("btnPmIgnore").onclick = () => ignoreUser(c.name, !isIgnored(c.name));
+  if ($("btnPmTheme")) $("btnPmTheme").onclick = (e) => { e.stopPropagation(); imvMenu(e, c); };
   if (c && c.kind !== "status") {
     $("chatTitle").insertAdjacentHTML("beforeend", ` <button id="btnSearchConv" class="title-btn" title="Search messages">🔍 Search</button>`);
     $("btnSearchConv").onclick = openSearch;
@@ -1146,7 +1160,7 @@ async function startSocial() {
     await loadPrefs();
     await migrateLocalFriends();
     loadRedactions(); loadAnnouncements(); loadStats();
-    loadLastSeen(); loadDueReminders();
+    loadLastSeen(); loadDueReminders(); loadSaved();
     nameColor(S.me); S.friends.forEach(nameColor);
     clearInterval(S.lastSeenTimer);
     S.lastSeenTimer = setInterval(loadLastSeen, 120000);
@@ -1219,7 +1233,10 @@ function openEvents() {
     forgetSavedPassword();
     doDisconnect("Your password was changed, so you were signed out here. Please sign in with the new password.", true);
   });
-  on("typing", (d) => onTyping(d.from, d.active));
+  on("typing", (d) => (d.room ? onRoomTyping(d) : onTyping(d.from, d.active)));
+  on("expire", onExpireEvent);
+  on("saved-changed", loadSaved);
+  on("imv", onImvEvent);
   // EventSource reconnects by itself; a dead token (service restarted) shows
   // up as a closed stream: get a new session and listen again.
   es.onerror = () => {
@@ -1407,6 +1424,7 @@ function friendRow(nick, pending) {
     (pm?.unread ? `<span class="badge">${pm.unread > 99 ? "99+" : pm.unread}</span>` : "") +
     `<span class="more" title="More">⋯</span>`;
   if (!pending && st.state !== "offline") paintName(d.querySelector(".label"), nick);
+  d.querySelector(".label").dataset.nick = nick;
   d.querySelector(".more").onclick = (e) => { e.stopPropagation(); friendMenu(e, nick, pending); };
   d.oncontextmenu = (e) => { e.preventDefault(); friendMenu(e, nick, pending); };
   d.onclick = () => openPm(nick);
@@ -1507,7 +1525,7 @@ const TYPING_SHOW_FOR = 6000;       // hide the indicator after this long withou
 
 function onComposerInput() {
   const c = S.current && conv(S.current);
-  if (c?.kind !== "pm" || !S.token) return;
+  if (!canShareTyping(c) || !S.token) return;
   const typing = $("input").value.trim().length > 0;
   const now = Date.now();
   if (typing && (S.typingTo !== c.name || now - S.typingSent > TYPING_SEND_EVERY)) {
@@ -1541,7 +1559,7 @@ function onTyping(from, active) {
 function renderTyping() {
   const c = S.current && conv(S.current);
   const who = c?.kind === "pm" && S.typing.has(keyOf(c.name)) ? c.name : null;
-  $("typing").textContent = who ? `${who} is typing…` : "";
+  $("typing").textContent = who ? `${who} is typing…` : c?.kind === "room" ? roomTypingText(c) : "";
 }
 
 /* ---------- alerts: sounds, desktop notifications, BUZZ! ---------- */
@@ -1574,7 +1592,7 @@ const Sound = {
     osc.start(t); osc.stop(t + dur + 0.02);
   },
   play(name) {
-    if (this.muted) return;
+    if (this.muted || isQuiet()) return;
     try { this.ensure(); } catch { return; }
     switch (name) {
       case "message":                                   // soft two-note ping
@@ -1601,7 +1619,8 @@ function setMuted(m) {
   localStorage.setItem("a09f.muted", m ? "1" : "0");
   $("btnSound").firstElementChild.textContent = m ? "🔇" : "🔊";
   $("btnSound").lastElementChild.textContent = m ? "Muted" : "Sound";
-  $("btnSound").title = m ? "Turn sounds on" : "Turn sounds off";
+  $("btnSound").title = "Sounds & Do Not Disturb";
+  syncSoundButton();
 }
 
 /* Desktop notifications (tauri-plugin-notification). */
@@ -1615,7 +1634,7 @@ async function ensureNotifyPermission() {
 
 /* Only when the window isn't in front, or the message is for another chat. */
 function notify(title, body, convKey) {
-  if (!S.notifyOk) return;
+  if (!S.notifyOk || isQuiet()) return;
   if (S.focused && (convKey == null || convKey === S.current)) return;
   invoke("plugin:notification|notify", { options: { title, body: body.slice(0, 200) } }).catch(() => {});
 }
@@ -1934,6 +1953,7 @@ function pwFail(message) {
 /* ---------- room browser ---------- */
 
 function openRoomBrowser() {
+  loadTrending();
   $("roomBrowser").style.display = "";
   $("rbSearch").value = "";
   refreshRoomList();
@@ -1958,7 +1978,13 @@ function renderRoomBrowser() {
     .filter((r) => !isPresenceRoom(r.name))
     .filter((r) => !q || r.name.toLowerCase().includes(q) || r.topic.toLowerCase().includes(q))
     .sort((a, b) => b.users - a.users || a.name.localeCompare(b.name));
-  el.innerHTML = `<div class="rb-row rb-head"><span>Room</span><span>People</span><span>Topic</span><span></span></div>`;
+  const today = new Map((S.trending || []).map((t) => [keyOf(t.room), t.msgs]));
+  const visible = new Set((S.roomList || []).map((r) => keyOf(r.name)));
+  const hot = (S.trending || []).filter((t) => visible.has(keyOf(t.room)) && !isPresenceRoom(t.room));
+  el.innerHTML = hot.length ? `<div class="rb-trending">🔥 <b>Trending today:</b> ${hot.map((t) =>
+    `<span class="rb-hot" data-room="${esc(t.room)}">${esc(roomName(t.room))} <i>${t.msgs}</i></span>`).join("")}</div>` : "";
+  el.querySelectorAll(".rb-hot").forEach((h) => { h.onclick = () => { joinOrSwitch(h.dataset.room); closeRoomBrowser(); }; });
+  el.insertAdjacentHTML("beforeend", `<div class="rb-row rb-head"><span>Room</span><span>People</span><span>Topic</span><span></span></div>`);
   if (!list.length) {
     el.insertAdjacentHTML("beforeend", `<div class="rb-empty">${q ? "No rooms match your search." : "No rooms yet — start one below!"}</div>`);
     return;
@@ -1968,7 +1994,8 @@ function renderRoomBrowser() {
     row.className = "rb-row";
     const joined = conv(keyOf(r.name))?.kind === "room";
     row.innerHTML = `<span class="rname" title="${esc(r.name)}">${esc(roomName(r.name))}</span>` +
-      `<span class="rcount">${r.users} ${r.users === 1 ? "person" : "people"}</span>` +
+      `<span class="rcount">${r.users} ${r.users === 1 ? "person" : "people"}` +
+      (today.get(keyOf(r.name)) ? `<br><small>🔥 ${today.get(keyOf(r.name))} today</small>` : "") + `</span>` +
       `<span class="rtopic" title="${esc(r.topic)}">${emote(esc(r.topic)) || "<i>No topic</i>"}</span>` +
       (joined ? `<span class="joined" title="Open this room">✓ Joined</span>` : `<button>Join</button>`);
     const go = () => { joinOrSwitch(r.name); closeRoomBrowser(); };
@@ -3270,7 +3297,7 @@ const isRealMsg = (m) => m.time && !m.buzz && !m.invite && !m.knock && !m.letIn 
 
 function metaFor(convKey) {
   S.meta ||= new Map();
-  if (!S.meta.has(convKey)) S.meta.set(convKey, { reactions: new Map(), edits: new Map(), pins: [], loaded: false });
+  if (!S.meta.has(convKey)) S.meta.set(convKey, { reactions: new Map(), edits: new Map(), expiring: new Map(), pins: [], loaded: false });
   return S.meta.get(convKey);
 }
 
@@ -3283,6 +3310,8 @@ async function loadMeta(c) {
     meta.reactions.clear(); meta.edits.clear();
     for (const r of d.reactions) addReaction(meta, r, true);
     for (const e of d.edits) meta.edits.set(msgKeyStr(e), e.text);
+    meta.expiring.clear();
+    for (const x of d.expiring || []) meta.expiring.set(msgKeyStr(x), x.due);
     meta.pins = d.pins || [];
     meta.loaded = true;
     if (S.current === key) { renderLog(); renderPins(); }
@@ -3347,6 +3376,7 @@ function messageTools(div, c, m) {
   };
   add("😀", "React", (e) => reactMenu(e, c, m));
   add("↩", "Reply", () => startReply(m));
+  add(isSaved(c, m) ? "★" : "⭐", isSaved(c, m) ? "Remove from Saved" : "Save this message", () => toggleSave(c, m));
   if (mine) add("✏️", "Edit", () => startEdit(c, m));
   if (c.kind === "room" && amOp(c)) add("📌", "Pin to the top of the room", () => pinMessage(c, m, true));
   if (mine) add("🗑", "Delete for everyone", (e, b) => {
@@ -3623,6 +3653,355 @@ function buildColorPicker() {
   syncColorPicker();
 }
 
+/* ---------- disappearing messages ---------- */
+
+/* ⏳ in the format bar: what you send next disappears for everyone after the
+ * chosen time. The app registers it once the server echoes the message back
+ * (that's when its time is known); the account service deletes it on time. */
+const EXPIRE_CHOICES = [[0, "Off"], [60, "1 minute"], [3600, "1 hour"], [86400, "1 day"]];
+
+function expireMenu(e) {
+  showMenu(e, EXPIRE_CHOICES.map(([secs, label]) => ({
+    label: (S.expireAfter === secs ? "✓ " : "   ") + (secs ? `Disappear after ${label}` : "Don't disappear"),
+    run: () => setExpire(secs),
+  })));
+}
+
+function setExpire(secs) {
+  S.expireAfter = secs;
+  const label = EXPIRE_CHOICES.find(([s]) => s === secs)?.[1];
+  $("fmtExpire").classList.toggle("on", !!secs);
+  $("fmtExpire").textContent = secs ? `⏳ ${{ 60: "1m", 3600: "1h", 86400: "1d" }[secs]}` : "⏳";
+  $("fmtExpire").title = secs ? `Messages disappear after ${label} (click to change)` : "Disappearing messages";
+}
+
+/* Our own message came back from the server: register it if it should go. */
+function maybeRegisterExpiry(c, m) {
+  const p = S.pendingExpire?.find((x) => x.conv === keyOf(c.name) && x.txt === m.txt);
+  if (!p) return;
+  S.pendingExpire = S.pendingExpire.filter((x) => x !== p);
+  socialApi("/expire", { ...msgKeyParts(c, m), after: p.after }).catch(() => {});
+}
+
+function onExpireEvent(e) {
+  const ck = metaConv(e.target, e.sender);
+  metaFor(ck).expiring.set(msgKeyStr(e), e.due);
+  if (S.current === ck) renderLog();
+}
+
+function expiryLabel(due) {
+  const left = due - Math.floor(Date.now() / 1000);
+  if (left <= 0) return "⏳ now";
+  if (left < 60) return `⏳ ${left}s`;
+  if (left < 3600) return `⏳ ${Math.ceil(left / 60)}m`;
+  if (left < 86400) return `⏳ ${Math.ceil(left / 3600)}h`;
+  return `⏳ ${Math.ceil(left / 86400)}d`;
+}
+
+setInterval(() => {
+  document.querySelectorAll("#log .expiry").forEach((el) => { el.textContent = expiryLabel(+el.dataset.due); });
+}, 5000);
+
+/* ---------- dark mode ---------- */
+
+function setDark(on) {
+  document.body.classList.toggle("dark", on);
+  localStorage.setItem("a09f.dark", on ? "1" : "0");
+  $("btnDark").textContent = on ? "☀️" : "🌙";
+  $("btnDark").title = on ? "Switch to light mode" : "Switch to dark mode";
+}
+
+/* ---------- quick switcher (Ctrl/Cmd+K) ---------- */
+
+function openSwitcher() {
+  if (S.phase !== "online") return;
+  $("qsDialog").style.display = "";
+  $("qsInput").value = "";
+  S.qsSel = 0;
+  renderSwitcher();
+  $("qsInput").focus();
+}
+function closeSwitcher() { $("qsDialog").style.display = "none"; }
+
+function switcherItems(q) {
+  q = q.trim().toLowerCase();
+  const items = [];
+  for (const c of rooms()) items.push({ kind: "room", label: roomLabel(c.name), sub: c.topic || "Chat room", go: () => switchTo(c.name), unread: c.unread });
+  const seen = new Set();
+  for (const c of pms()) { seen.add(keyOf(c.name)); items.push({ kind: "pm", label: c.name, sub: statusOf(c.name).label, go: () => openPm(c.name), unread: c.unread }); }
+  for (const f of S.friends) if (!seen.has(keyOf(f))) items.push({ kind: "friend", label: f, sub: statusOf(f).label, go: () => openPm(f), unread: 0 });
+  const score = (it) => {
+    const l = it.label.toLowerCase();
+    if (!q) return 1 + (it.unread ? 1 : 0);
+    if (l.startsWith(q)) return 3;
+    if (l.includes(q)) return 2;
+    let i = 0; for (const ch of l) if (ch === q[i]) i++;           // letters in order ("lby" -> lobby)
+    return i === q.length ? 1 : 0;
+  };
+  const out = items.map((it) => ({ ...it, s: score(it) })).filter((it) => it.s > 0)
+    .sort((a, b) => b.s - a.s || (b.unread || 0) - (a.unread || 0) || a.label.localeCompare(b.label)).slice(0, 12);
+  if (q && /^[#&]?[^\s,]{2,}$/.test(q) && !rooms().some((c) => keyOf(c.name) === keyOf(normRoom(q)))) {
+    out.push({ kind: "join", label: `Join or create ${normRoom(q)}`, sub: "", go: () => joinOrCreate(q) });
+  }
+  return out;
+}
+
+function renderSwitcher() {
+  const items = switcherItems($("qsInput").value);
+  S.qsItems = items;
+  S.qsSel = Math.min(S.qsSel, Math.max(0, items.length - 1));
+  const el = $("qsList");
+  el.innerHTML = items.length ? "" : `<div class="empty-hint">Nothing found.</div>`;
+  const icon = { room: "💬", pm: "👤", friend: "👥", join: "➕" };
+  items.forEach((it, i) => {
+    const row = document.createElement("div");
+    row.className = "qs-row" + (i === S.qsSel ? " sel" : "");
+    row.innerHTML = `<span>${icon[it.kind]}</span><b>${esc(it.label)}</b><span class="qs-sub">${esc(it.sub || "")}</span>` +
+      (it.unread ? `<span class="badge">${it.unread}</span>` : "");
+    row.onclick = () => { closeSwitcher(); it.go(); };
+    el.appendChild(row);
+  });
+}
+
+function onSwitcherKey(e) {
+  const n = S.qsItems?.length || 0;
+  if (e.key === "ArrowDown") { S.qsSel = (S.qsSel + 1) % Math.max(n, 1); renderSwitcher(); e.preventDefault(); }
+  else if (e.key === "ArrowUp") { S.qsSel = (S.qsSel + n - 1) % Math.max(n, 1); renderSwitcher(); e.preventDefault(); }
+  else if (e.key === "Enter") { const it = S.qsItems?.[S.qsSel]; closeSwitcher(); it?.go(); e.preventDefault(); }
+  else if (e.key === "Escape") closeSwitcher();
+}
+
+/* ---------- saved messages ---------- */
+
+async function loadSaved() {
+  try {
+    const { saved } = await socialApi("/saved");
+    S.saved = saved;
+    S.savedKeys = new Set(saved.map(msgKeyStr));
+    renderLog(); renderSaved();
+  } catch {}
+}
+
+function isSaved(c, m) { return S.savedKeys?.has(msgKeyStr(msgKeyParts(c, m))); }
+
+function toggleSave(c, m) {
+  const on = !isSaved(c, m);
+  socialApi("/save", { ...msgKeyParts(c, m), conv: c.name, text: stripIrc(m.txt).slice(0, 500), on })
+    .then(() => sys(on ? "⭐ Saved. Find it under ⭐ Saved." : "Removed from ⭐ Saved.", "status"))
+    .catch((e) => sys(e.message, "error"));
+}
+
+function openSaved() { $("savedDialog").style.display = ""; renderSaved(); loadSaved(); }
+function closeSaved() { $("savedDialog").style.display = "none"; }
+
+function renderSaved() {
+  if ($("savedDialog").style.display === "none") return;
+  const el = $("svList");
+  const list = S.saved || [];
+  el.innerHTML = list.length ? "" : `<div class="empty-hint">Nothing saved yet. Hover a message and click ⭐ to keep it here.</div>`;
+  for (const s of list) {
+    const row = document.createElement("div");
+    row.className = "sr-row";
+    const where = isChannel(s.conv) ? roomLabel(s.conv) : `Chat with ${s.conv}`;
+    row.innerHTML = `<div class="sr-meta">${esc(new Date(s.time).toLocaleString())} · ${esc(where)}` +
+      `<span class="sv-x" title="Remove">✕</span></div><div><b>${esc(s.sender)}:</b> ${emote(esc(s.text))}</div>`;
+    row.querySelector(".sv-x").onclick = (e) => {
+      e.stopPropagation();
+      socialApi("/save", { ...s, on: false }).catch(() => {});
+    };
+    row.onclick = () => { closeSaved(); if (isChannel(s.conv)) joinOrSwitch(s.conv); else openPm(s.conv); };
+    el.appendChild(row);
+  }
+}
+
+/* ---------- Do Not Disturb / quiet hours ---------- */
+
+function dnd() {
+  try { return { until: 0, quiet: false, from: "22:00", to: "07:00", ...JSON.parse(localStorage.getItem("a09f.dnd")) }; }
+  catch { return { until: 0, quiet: false, from: "22:00", to: "07:00" }; }
+}
+function setDnd(patch) { localStorage.setItem("a09f.dnd", JSON.stringify({ ...dnd(), ...patch })); syncSoundButton(); }
+
+const minutesOf = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
+
+/* Quiet now? Sounds and desktop notifications stay off; unread counts still work. */
+function isQuiet() {
+  const d = dnd();
+  if (Date.now() < d.until) return true;
+  if (!d.quiet) return false;
+  const now = new Date(), t = now.getHours() * 60 + now.getMinutes();
+  const a = minutesOf(d.from), b = minutesOf(d.to);
+  return a <= b ? t >= a && t < b : t >= a || t < b;       // window may cross midnight
+}
+
+function syncSoundButton() {
+  const quiet = isQuiet();
+  const ico = $("btnSound").querySelector(".ico");
+  ico.textContent = quiet ? "🌙" : Sound.muted ? "🔇" : "🔊";
+  $("btnSound").querySelector("span:last-child").textContent = quiet ? "Quiet" : "Sound";
+}
+
+function soundMenu(e) {
+  const d = dnd();
+  const until = Date.now() < d.until ? ` (until ${new Date(d.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})` : "";
+  const tomorrow8 = () => { const t = new Date(); t.setDate(t.getDate() + (t.getHours() >= 8 ? 1 : 0)); t.setHours(8, 0, 0, 0); return t.getTime(); };
+  showMenu(e, [
+    { label: Sound.muted ? "🔊 Turn sounds on" : "🔇 Turn sounds off", run: () => setMuted(!Sound.muted) },
+    "-",
+    ...(Date.now() < d.until ? [{ label: `🔔 End Do Not Disturb${until}`, run: () => setDnd({ until: 0 }) }] : [
+      { label: "🌙 Do Not Disturb for 1 hour", run: () => setDnd({ until: Date.now() + 3600e3 }) },
+      { label: "🌙 Do Not Disturb until tomorrow 8:00", run: () => setDnd({ until: tomorrow8() }) },
+    ]),
+    "-",
+    { label: `${d.quiet ? "✓" : "   "} Quiet hours ${d.from}–${d.to}`, run: () => setDnd({ quiet: !d.quiet }) },
+    { label: "   Change quiet hours…", keepOpen: true, run: () => menuPrompt("Quiet hours (e.g. 22:00-07:00)", `${d.from}-${d.to}`, (v) => {
+      const m = v.match(/^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$/);
+      if (!m || +m[1] > 23 || +m[3] > 23 || +m[2] > 59 || +m[4] > 59) { sys("Write quiet hours like 22:00-07:00", "tip"); return; }
+      const f = (h, mi) => `${String(+h).padStart(2, "0")}:${mi}`;
+      setDnd({ quiet: true, from: f(m[1], m[2]), to: f(m[3], m[4]) });
+    }) },
+  ]);
+}
+setInterval(syncSoundButton, 60000);
+
+/* ---------- typing in rooms ---------- */
+
+/* Room typing goes to every open app (the service doesn't know who's in a
+ * room), so it's never sent for hidden rooms or conferences. */
+const canShareTyping = (c) => c?.kind === "pm" || (c?.kind === "room" && !isConference(c.name) && !c.modes?.has("s"));
+
+function onRoomTyping(d) {
+  const c = conv(keyOf(d.room));
+  if (!c || keyOf(d.from) === keyOf(S.me) || isIgnored(d.from)) return;
+  S.roomTyping ||= new Map();
+  const m = S.roomTyping.get(keyOf(c.name)) || new Map();
+  clearTimeout(m.get(keyOf(d.from)));
+  if (d.active) m.set(keyOf(d.from), setTimeout(() => onRoomTyping({ ...d, active: false }), TYPING_SHOW_FOR));
+  else m.delete(keyOf(d.from));
+  S.roomTyping.set(keyOf(c.name), m);
+  renderTyping();
+}
+
+function roomTypingText(c) {
+  const names = [...(S.roomTyping?.get(keyOf(c.name))?.keys() || [])];
+  if (!names.length) return "";
+  if (names.length === 1) return `${names[0]} is typing…`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`;
+  return "Several people are typing…";
+}
+
+/* ---------- trending rooms ---------- */
+
+async function loadTrending() {
+  try { S.trending = (await socialApi("/trending")).trending; renderRoomBrowser(); } catch {}
+}
+
+function noteRoomActivity(c) {
+  if (c?.kind !== "room" || isConference(c.name) || c.modes?.has("s") || !S.token) return;
+  socialApi("/activity", { room: keyOf(c.name) }).catch(() => {});
+}
+
+/* ---------- hover profile card ---------- */
+
+function cardInfo(nick, cb) {
+  S.cardCache ||= new Map();
+  const hit = S.cardCache.get(keyOf(nick));
+  if (hit && Date.now() - hit.at < 300000) { cb(hit.info); return; }
+  if (S.infoReq) { cb(null); return; }                 // don't step on the Profile dialog's request
+  requestInfo(nick, (info) => { S.cardCache.set(keyOf(nick), { at: Date.now(), info }); cb(info); });
+}
+
+function showCard(el, nick) {
+  if (!nick || isService(nick)) return;
+  const card = $("hoverCard");
+  const st = statusOf(nick);
+  const me = keyOf(nick) === keyOf(S.me);
+  card.dataset.nick = nick;
+  card.innerHTML = `<div class="hc-head"><span class="pf-dot st-${st.state}"></span><b class="hc-nick">${esc(nick)}</b></div>` +
+    `<div class="hc-status">${esc(st.state === "unknown" ? "" : st.label)}</div><div class="hc-info">…</div>` +
+    `<div class="hc-btns">${me ? "" : `<button class="hc-msg">💬 Message</button>`}<button class="hc-prof">👤 Profile</button>` +
+    (me || isFriend(nick) || isPendingFriend(nick) ? "" : `<button class="hc-add">➕</button>`) + `</div>`;
+  card.querySelector(".hc-nick").style.color = nameColor(nick) || "";
+  card.querySelector(".hc-msg")?.addEventListener("click", () => { hideCard(); openPm(nick); });
+  card.querySelector(".hc-prof").onclick = () => { hideCard(); openProfile(nick); };
+  card.querySelector(".hc-add")?.addEventListener("click", () => { hideCard(); addFriend(nick); });
+  const r = el.getBoundingClientRect();
+  card.style.display = "block";
+  const cr = card.getBoundingClientRect();
+  card.style.left = Math.min(r.left, innerWidth - cr.width - 8) + "px";
+  card.style.top = (r.bottom + 6 + cr.height > innerHeight ? r.top - cr.height - 6 : r.bottom + 6) + "px";
+  requestPresence([nick]);
+  cardInfo(nick, (info) => {
+    if (card.dataset.nick !== nick || card.style.display === "none") return;
+    const p = info?.props || {};
+    const bits = [p.name, p.location && `📍 ${p.location}`].filter(Boolean).map(esc);
+    card.querySelector(".hc-info").innerHTML = bits.length ? bits.join("<br>") : `<i>${info ? "No profile details" : ""}</i>`;
+  });
+}
+
+function hideCard() { $("hoverCard").style.display = "none"; }
+
+document.addEventListener("mouseover", (e) => {
+  const t = e.target.closest?.("[data-nick]");
+  if (e.target.closest?.("#hoverCard")) { clearTimeout(S.cardHide); return; }
+  clearTimeout(S.cardShow);
+  if (!t) { clearTimeout(S.cardHide); S.cardHide = setTimeout(hideCard, 300); return; }
+  S.cardShow = setTimeout(() => showCard(t, t.dataset.nick), 550);
+});
+
+/* ---------- IMVironments: themes for private chats ---------- */
+
+const IMV_THEMES = [
+  ["none", "No theme", "⬜"], ["beach", "Beach", "🏖️"], ["night", "Starry night", "🌌"], ["rain", "Rainy day", "🌧️"],
+  ["love", "Love", "💕"], ["space", "Outer space", "🚀"], ["forest", "Forest", "🌲"], ["snow", "Snowfall", "❄️"],
+  ["sunset", "Sunset", "🌅"],
+];
+
+async function loadImv(c) {
+  if (c?.kind !== "pm" || !S.token) return;
+  S.imv ||= new Map();
+  try {
+    const r = await socialApi(`/imv?with=${encodeURIComponent(c.name)}`);
+    S.imv.set(keyOf(c.name), r.theme);
+    applyImv();
+  } catch {}
+}
+
+function applyImv() {
+  const c = S.current && conv(S.current);
+  const theme = c?.kind === "pm" ? (S.imv?.get(keyOf(c.name)) || "none") : "none";
+  const layer = $("imvLayer");
+  layer.className = theme === "none" ? "" : `imv imv-${theme}`;
+  logEl.classList.toggle("themed", theme !== "none");
+  positionImv();
+}
+
+function positionImv() {
+  const layer = $("imvLayer");
+  layer.style.top = logEl.offsetTop + "px";
+  layer.style.height = logEl.offsetHeight + "px";
+}
+new ResizeObserver(positionImv).observe(document.getElementById("log"));
+
+function imvMenu(e, c) {
+  const cur = S.imv?.get(keyOf(c.name)) || "none";
+  showMenu(e, IMV_THEMES.map(([id, label, icon]) => ({
+    label: `${cur === id ? "✓" : "  "} ${icon} ${label}`,
+    run: () => socialApi("/imv", { with: c.name, theme: id }).catch((err) => sys(err.message, "error")),
+  })));
+}
+
+function onImvEvent(d) {
+  const other = keyOf(d.a) === keyOf(S.me) ? d.b : d.a;
+  (S.imv ||= new Map()).set(keyOf(other), d.theme);
+  const label = IMV_THEMES.find(([id]) => id === d.theme);
+  const who = keyOf(d.by) === keyOf(S.me) ? "You" : d.by;
+  if (conv(keyOf(other))) {
+    sys(d.theme === "none" ? `${who} removed the chat theme.` : `${who} changed the chat theme to ${label[2]} ${label[1]}.`, "system", other);
+  }
+  if (S.current === keyOf(other)) applyImv();
+}
+
 /* ---------- actions ---------- */
 
 async function doSignIn() {
@@ -3655,6 +4034,9 @@ function doDisconnect(message = "", isError = false) {
   S.pendingCreate = null; S.listProbe = null; S.createName = null;
   S.meta = new Map(); S.polls = new Map(); S.lastSeen = new Map(); clearInterval(S.lastSeenTimer);
   S.nameColors = new Map(); S.colorQueue = new Set();
+  S.saved = []; S.savedKeys = new Set(); S.imv = new Map(); S.roomTyping = new Map(); S.pendingExpire = []; S.cardCache = new Map();
+  for (const id of ["qsDialog", "savedDialog"]) $(id).style.display = "none";
+  hideCard(); setExpire(0); applyImv();
   S.replyTo = null; S.editing = null; $("composerBar").style.display = "none"; $("pinBar").style.display = "none";
   S.redactions.clear(); S.admin = false; S.announcement = null; $("btnAnnounce").style.display = "none"; setOnlineCount(0);
   S.csReq = null; S.csChain = null; S.roomDialogFor = null;
@@ -3833,7 +4215,10 @@ function sendChat() {
   const c = S.current && conv(S.current);
   if (!c || c.kind === "status") { sys("Join a room first, then say hi!", "tip"); return; }
   stopTyping();
-  sendTo(c.name, withReply(styled(text)));
+  const body = withReply(styled(text));
+  if (S.expireAfter) (S.pendingExpire ||= []).push({ conv: keyOf(c.name), txt: body, after: S.expireAfter });
+  sendTo(c.name, body);
+  noteRoomActivity(c);
 }
 
 async function doCreateAccount() {
@@ -4135,6 +4520,18 @@ $("friendAddGroup").onchange = () => {
 };
 $("input").addEventListener("input", onComposerInput);
 $("btnPrivacy").onclick = openPrivacy;
+$("btnSaved").onclick = openSaved;
+$("svClose").onclick = closeSaved;
+$("savedDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closeSaved(); });
+$("btnDark").onclick = () => setDark(!document.body.classList.contains("dark"));
+setDark(localStorage.getItem("a09f.dark") === "1");
+$("fmtExpire").onclick = (e) => { e.stopPropagation(); expireMenu(e); };
+$("qsInput").addEventListener("input", () => { S.qsSel = 0; renderSwitcher(); });
+$("qsInput").addEventListener("keydown", onSwitcherKey);
+$("qsDialog").addEventListener("mousedown", (e) => { if (e.target === $("qsDialog")) closeSwitcher(); });
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openSwitcher(); }
+});
 $("btnAnnounce").onclick = openAnnounce;
 $("anClose").onclick = closeAnnounce;
 $("anSend").onclick = sendAnnouncement;
@@ -4194,7 +4591,7 @@ document.querySelectorAll("#fmtbar [data-emo]").forEach((b) => {
 });
 $("btnEmote").onclick = () => insertEmote(":)");
 $("btnBuzz").onclick = sendBuzz;
-$("btnSound").onclick = () => setMuted(!Sound.muted);
+$("btnSound").onclick = (e) => { e.stopPropagation(); soundMenu(e); };
 setMuted(Sound.muted);
 
 $("optRemember").onchange = onRememberToggle;

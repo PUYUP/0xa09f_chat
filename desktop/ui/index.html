@@ -265,6 +265,113 @@
   #pfColors .swatch.none { background: #fff; color: #999; font-size: 10px; text-align: center; line-height: 18px; }
   #pfColors .swatch.on { outline: 2px solid var(--purple); outline-offset: 1px; }
   #pfColorPreview { font-size: 13px; }
+  /* header buttons, expiry, saved, hover card, quick switcher */
+  .hdr-btn { margin-left: auto; background: transparent; border: 1px solid rgba(255,255,255,.35); color: #fff; border-radius: 4px; padding: 1px 6px; cursor: pointer; }
+  .hdr-btn + .header-status { margin-left: 8px; }
+  #fmtbar #fmtExpire.on { border-color: #b57a00; background: #fff1c9; color: #8a5a00; font-size: 11px; }
+  .expiry { font-size: 10px; color: #8a5a00; background: #fff4d6; border-radius: 8px; padding: 0 5px; }
+  .saved-star { font-size: 10px; }
+  .sv-x { float: right; cursor: pointer; color: var(--dim); font-weight: bold; }
+  #hoverCard { display: none; position: fixed; z-index: 60; width: 220px; background: #fff; border: 1px solid #c9c1ad;
+    border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.2); padding: 8px 10px; font-size: 12px; }
+  .hc-head { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+  .hc-status { color: var(--dim); font-size: 11px; margin: 2px 0 4px 20px; }
+  .hc-info { margin: 4px 0 6px; color: #444; }
+  .hc-btns { display: flex; gap: 4px; }
+  .hc-btns button { flex: 1; padding: 2px 4px; font-size: 11px; }
+  [data-nick] { cursor: pointer; }
+  .qs-overlay { position: fixed; inset: 0; z-index: 70; background: rgba(30,10,50,.25); display: flex; justify-content: center; padding-top: 90px; }
+  .qs-box { width: min(520px, 90%); background: #fff; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.35); overflow: hidden; align-self: flex-start; }
+  #qsInput { width: 100%; box-sizing: border-box; border: none !important; border-bottom: 1px solid #e3dcef !important; padding: 12px 14px !important; font-size: 15px; outline: none; }
+  #qsList { max-height: 360px; overflow-y: auto; padding: 4px 0; }
+  .qs-row { display: flex; align-items: center; gap: 8px; padding: 6px 14px; cursor: pointer; }
+  .qs-row.sel, .qs-row:hover { background: #efe6fb; }
+  .qs-sub { color: var(--dim); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rb-trending { padding: 6px 10px; background: #fff8e6; border-bottom: 1px solid #f0e0b0; font-size: 11px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .rb-hot { background: #fff; border: 1px solid #f0c860; border-radius: 10px; padding: 0 8px; cursor: pointer; }
+  .rb-hot i { color: #b56a00; font-style: normal; font-weight: bold; }
+  .rb-row small { color: #b56a00; }
+
+  /* IMVironments: animated backgrounds behind a private chat */
+  #center { overflow: hidden; }
+  #log { position: relative; z-index: 1; }
+  #log.themed { background: transparent; }
+  #log.themed .msg { background: rgba(255,255,255,.82); border-radius: 6px; margin: 3px 8px; padding: 2px 8px; }
+  #log.themed .older, #log.themed .seen { background: rgba(255,255,255,.7); border-radius: 6px; margin: 2px 8px; }
+  #imvLayer { position: absolute; left: 0; right: 0; z-index: 0; pointer-events: none; overflow: hidden; display: none; }
+  #imvLayer.imv { display: block; }
+  #imvLayer::before, #imvLayer::after { content: ""; position: absolute; inset: 0; }
+  #imvLayer.imv-beach { background: linear-gradient(#7fd3ff 0%, #bfe9ff 45%, #3fb6d9 46%, #1e8fc0 70%, #f3d9a4 71%, #e9c785 100%); }
+  #imvLayer.imv-beach::before { background: radial-gradient(circle at 82% 16%, #fff7b0 0 34px, rgba(255,240,150,.5) 35px 52px, transparent 53px); }
+  #imvLayer.imv-beach::after { top: 44%; height: 30%; background: repeating-linear-gradient(90deg, rgba(255,255,255,.35) 0 18px, transparent 18px 60px);
+    animation: imv-waves 6s linear infinite; }
+  @keyframes imv-waves { to { background-position: 120px 0; } }
+  #imvLayer.imv-night { background: linear-gradient(#060b2b, #1b2a6b 70%, #2f3f8f); }
+  #imvLayer.imv-night::before, #imvLayer.imv-space::before { background-image: radial-gradient(1.5px 1.5px at 20px 30px, #fff, transparent), radial-gradient(1px 1px at 120px 80px, #fff, transparent),
+    radial-gradient(1.5px 1.5px at 200px 150px, #ffe, transparent), radial-gradient(1px 1px at 300px 40px, #fff, transparent),
+    radial-gradient(2px 2px at 380px 200px, #fff, transparent), radial-gradient(1px 1px at 60px 220px, #fff, transparent);
+    background-size: 420px 260px; animation: imv-twinkle 3s ease-in-out infinite alternate; }
+  #imvLayer.imv-night::after { background: radial-gradient(circle at 85% 18%, #fffbe0 0 26px, rgba(255,250,210,.25) 27px 44px, transparent 45px); }
+  @keyframes imv-twinkle { from { opacity: .45; } to { opacity: 1; } }
+  #imvLayer.imv-space { background: radial-gradient(ellipse at 30% 70%, #4b1a6b, #12002a 60%, #000); }
+  #imvLayer.imv-space::before { animation: imv-drift 40s linear infinite, imv-twinkle 3s ease-in-out infinite alternate; }
+  #imvLayer.imv-space::after { background: radial-gradient(circle at 75% 30%, #d98cff 0 18px, rgba(200,120,255,.25) 19px 30px, transparent 31px),
+    radial-gradient(circle at 20% 25%, #8fd3ff 0 8px, transparent 9px); }
+  @keyframes imv-drift { to { background-position: -420px 260px; } }
+  #imvLayer.imv-rain { background: linear-gradient(#5c6b7a, #8b9aa8); }
+  #imvLayer.imv-rain::before { background: repeating-linear-gradient(100deg, rgba(255,255,255,.28) 0 1px, transparent 1px 22px);
+    background-size: 100% 120px; animation: imv-rain .6s linear infinite; }
+  @keyframes imv-rain { to { background-position: -20px 120px; } }
+  #imvLayer.imv-snow { background: linear-gradient(#9fb6d1, #dce8f5); }
+  #imvLayer.imv-snow::before { background-image: radial-gradient(3px 3px at 30px 40px, #fff, transparent), radial-gradient(2px 2px at 140px 90px, #fff, transparent),
+    radial-gradient(3px 3px at 240px 20px, #fff, transparent), radial-gradient(2px 2px at 330px 140px, #fff, transparent),
+    radial-gradient(3px 3px at 90px 170px, #fff, transparent);
+    background-size: 380px 200px; animation: imv-snow 8s linear infinite; }
+  @keyframes imv-snow { to { background-position: 40px 200px; } }
+  #imvLayer.imv-love { background: linear-gradient(135deg, #ffd1e3, #ff9cc2); }
+  #imvLayer.imv-love::before { content: "❤  💕     ❤      💗   ❤     💕"; color: rgba(255,60,120,.35); font-size: 22px; letter-spacing: 18px;
+    white-space: pre-wrap; line-height: 70px; padding: 10px; animation: imv-float 9s ease-in-out infinite alternate; }
+  @keyframes imv-float { to { transform: translateY(-30px); } }
+  #imvLayer.imv-forest { background: linear-gradient(#cfe9c9, #7fb46d 55%, #3e6b34); }
+  #imvLayer.imv-forest::before { background: repeating-linear-gradient(115deg, rgba(255,255,220,.28) 0 30px, transparent 30px 110px);
+    animation: imv-twinkle 5s ease-in-out infinite alternate; }
+  #imvLayer.imv-forest::after { top: 55%; background: radial-gradient(ellipse at 10% 100%, #2c5124 0 30%, transparent 31%),
+    radial-gradient(ellipse at 45% 100%, #2c5124 0 25%, transparent 26%), radial-gradient(ellipse at 85% 100%, #2c5124 0 35%, transparent 36%); }
+  #imvLayer.imv-sunset { background: linear-gradient(#2e1a5c, #a43f7a 40%, #ff8a3d 70%, #ffd27a); }
+  #imvLayer.imv-sunset::before { background: radial-gradient(circle at 50% 78%, #ffe9a0 0 40px, rgba(255,220,130,.35) 41px 70px, transparent 71px);
+    animation: imv-float 12s ease-in-out infinite alternate; }
+
+  /* ---------- dark mode ---------- */
+  body.dark { --ink: #e6e1ef; --dim: #9a93a8; --line: #3a3348; --lilac: #2c2540; --lilac-2: #3b3254;
+    --other: #7db4ff; --me: #ff8a80; --service: #d9b45a; background: #17131f; color: var(--ink); }
+  body.dark #toolbar, body.dark #fmtbar, body.dark #composer { background: #221c2e; border-color: #3a3348; }
+  body.dark button.tool { color: var(--ink); }
+  body.dark .pane, body.dark #log, body.dark .list, body.dark .side-box, body.dark #signin .signin-box,
+  body.dark .modal .pane, body.dark #ctxMenu, body.dark #hoverCard, body.dark .qs-box, body.dark #mentionBox { background: #1f1a29; color: var(--ink); border-color: #3a3348; }
+  body.dark #signin { background: #17131f; }
+  body.dark input[type=text], body.dark input[type=password], body.dark input[type=email], body.dark input[type=number],
+  body.dark textarea, body.dark select { background: #2a2338; color: var(--ink); border-color: #4a4060; }
+  body.dark button { background: #2e2740; color: var(--ink); border-color: #4a4060; }
+  body.dark .group, body.dark .fgroup { background: #2a2338; color: #c9b8ec; border-color: #3a3348; }
+  body.dark .chan:hover, body.dark .pm:hover, body.dark .user:not(.self):hover, body.dark .friend:hover,
+  body.dark .qs-row.sel, body.dark .qs-row:hover, body.dark .sr-row:hover, body.dark .rb-row:hover { background: #3a2f52; }
+  body.dark .msg.mention-me { background: #3d3418; }
+  body.dark .quote { background: #2a2338; color: #bdb4cc; border-color: #5a4a80; }
+  body.dark .rchip { background: #2a2338; border-color: #4a4060; }
+  body.dark .rchip.mine { background: #3b2f5c; border-color: #9a7ddc; }
+  body.dark .mtools { background: #2a2338; border-color: #4a4060; }
+  body.dark #ctxMenu .item:hover { background: #6a4bb0; }
+  body.dark .poll { background: #241e30; border-color: #4a4060; }
+  body.dark .poll-opt { border-color: #4a4060; } body.dark .poll-bar { background: #3e2f63; }
+  body.dark #annBar { background: #3d3418; border-color: #6b5a20; }
+  body.dark #pinBar, body.dark #composerBar, body.dark .pf-head, body.dark .rb-tools, body.dark .rb-foot, body.dark #friendAdd { background: #241e30; border-color: #3a3348; }
+  body.dark #typing { background: #1f1a29; }
+  body.dark .freq { background: #3a3218; border-color: #6b5a20; }
+  body.dark #log.themed { background: transparent; }
+  body.dark #log.themed .msg { background: rgba(31,26,41,.85); }
+  body.dark button.tool, body.dark #fmtbar button { background: transparent; border-color: transparent; }
+  body.dark button.tool:hover, body.dark #fmtbar button:hover:not(:disabled) { background: #3a2f52; border-color: #6a4bb0; }
+  body.dark .rb-trending { background: #2f2818; border-color: #5a4a20; } body.dark .rb-hot { background: #241e30; }
   /* @mentions */
   .mention { color: var(--purple); font-weight: bold; }
   .mention.me { background: #ffe58a; color: #5a3d00; border-radius: 3px; padding: 0 2px; }
@@ -434,6 +541,7 @@
   <span id="dot" title="Offline"></span>
   <span id="who"></span>
   <span id="onlineCount" title="People with a09f open right now"></span>
+  <button id="btnDark" class="hdr-btn" title="Switch to dark mode">🌙</button>
   <div class="status-box header-status" title="Your status — what your friends see">
     <select id="statusSel">
       <option value="available">🟢 Available</option>
@@ -511,6 +619,13 @@
 </div>
 
 <div id="ctxMenu"></div>
+<div id="hoverCard"></div>
+<div id="qsDialog" class="qs-overlay" style="display:none">
+  <div class="qs-box">
+    <input type="text" id="qsInput" placeholder="Jump to a room, friend or chat…  (↑↓ Enter)">
+    <div id="qsList"></div>
+  </div>
+</div>
 
 <div id="toolbar">
   <button class="tool" id="btnAddFriend" title="Add a friend"><span class="ico">👥</span><span>Add Friend</span></button>
@@ -518,6 +633,7 @@
   <button class="tool" id="btnConference" title="Start a private group chat with friends"><span class="ico">🗣️</span><span>Conference</span></button>
   <button class="tool" id="btnProfile" title="Edit your profile"><span class="ico">👤</span><span>Profile</span></button>
   <button class="tool" id="btnAnnounce" style="display:none" title="Send an announcement to everyone"><span class="ico">📢</span><span>Announce</span></button>
+  <button class="tool" id="btnSaved" title="Messages you saved"><span class="ico">⭐</span><span>Saved</span></button>
   <button class="tool" id="btnPrivacy" title="Who can message you, people you ignore"><span class="ico">🔒</span><span>Privacy</span></button>
   <button class="tool" id="btnPassword" title="Change your password"><span class="ico">🔑</span><span>Password</span></button>
   <span style="flex:1"></span>
@@ -658,6 +774,12 @@
       </div>
     </div>
   </div>
+  <div id="savedDialog" class="modal" style="display:none">
+    <div class="pane">
+      <div class="pane-title">⭐ Saved Messages <span class="x" id="svClose" title="Close">✕</span></div>
+      <div id="svList" class="fd-list"></div>
+    </div>
+  </div>
   <div id="annDialog" class="modal" style="display:none">
     <div class="pane pf-pane">
       <div class="pane-title">📢 Announcement to everyone <span class="x" id="anClose" title="Close">✕</span></div>
@@ -761,6 +883,7 @@
       <span id="annClose" class="ann-x" title="Dismiss">✕</span>
     </div>
     <div id="pinBar" style="display:none"></div>
+    <div id="imvLayer"></div>
     <div id="log"></div>
     <div id="typing"></div>
     <div id="fmtbar">
@@ -771,6 +894,7 @@
       <button data-emo=":P" title="tongue">😛</button>
       <button data-emo="<3" title="heart">❤️</button>
       <button id="fmtMore" title="More smileys">➕</button>
+      <button id="fmtExpire" title="Disappearing messages">⏳</button>
       <button id="fmtAction" title="Action: type what you do, e.g. “waves” → * alice waves">✨ /me</button>
       <span class="fmt-sep"></span>
       <button id="fmtB" class="fmt" title="Bold"><b>B</b></button>

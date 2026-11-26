@@ -174,6 +174,28 @@ server/protokol di layar.
   putih, atau default). Langsung berlaku di chat, Friends, dan Members semua
   orang (`/namecolor`, event live `namecolor`; warna diambil per batch lewat
   `/namecolors`)
+- **Pesan menghilang** (⏳ di bar format: 1 menit / 1 jam / 1 hari): app
+  mendaftarkan pesan ke service akun begitu server mengembalikannya
+  (`/expire`); loop server mengubahnya jadi pesan terhapus tepat waktu.
+  Label ⏳ hitung mundur tampil di semua app a09f
+- **Mode gelap** (🌙/☀️ di header, diingat per komputer)
+- **Quick switcher**: Ctrl/Cmd+K → ketik sebagian nama room/teman/chat
+  (huruf berurutan juga cocok: "lby" → lobby), ↑↓ Enter; bisa juga
+  "Join or create #nama"
+- **⭐ Saved**: ⭐ di toolbar pesan untuk menyimpan, daftar di tombol ⭐ Saved
+  (`/save`, `/saved`; sinkron antar perangkat)
+- **Do Not Disturb**: klik tombol Sound → bisukan suara, DND 1 jam / sampai
+  besok 08:00, jam tenang (default 22:00–07:00, bisa diubah). Saat tenang
+  tidak ada suara/notifikasi; badge belum dibaca tetap jalan. Disimpan lokal
+- **Typing di room**: "bob and diana are typing…" (tidak dikirim di room
+  hidden/conference karena event room disiarkan ke semua app)
+- **Trending** di 🔍 Rooms: jumlah pesan per room hari ini (app melapor
+  `/activity` saat mengirim; room hidden/conference tidak dihitung)
+- **Kartu profil hover**: arahkan kursor ke nama (chat, Friends, Members) →
+  status, nama/lokasi dari profil, tombol Message/Profile/➕
+- **Tema percakapan (IMVironment)**: 🎨 Theme di judul private chat →
+  Beach, Starry night, Rainy day, Love, Outer space, Forest, Snowfall,
+  Sunset (animasi CSS, tanpa gambar); tampil di kedua sisi, live (`/imv`)
 - **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
   mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
   **Only my friends can send me private messages** = user mode `+g` solanum +

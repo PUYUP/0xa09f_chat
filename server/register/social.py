@@ -59,6 +59,14 @@ def init_schema(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, "
                  "text TEXT NOT NULL, due INTEGER NOT NULL, delivered INTEGER NOT NULL DEFAULT 0)")
     conn.execute("CREATE TABLE IF NOT EXISTS name_colors (user TEXT PRIMARY KEY, color TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS expiring (sender TEXT NOT NULL, target TEXT NOT NULL, time INTEGER NOT NULL, "
+                 "hash TEXT NOT NULL, due INTEGER NOT NULL, PRIMARY KEY (sender, target, time, hash))")
+    conn.execute("CREATE TABLE IF NOT EXISTS saved (user TEXT NOT NULL, sender TEXT NOT NULL, target TEXT NOT NULL, "
+                 "time INTEGER NOT NULL, hash TEXT NOT NULL, conv TEXT NOT NULL, text TEXT NOT NULL, created INTEGER NOT NULL, "
+                 "PRIMARY KEY (user, sender, target, time, hash))")
+    conn.execute("CREATE TABLE IF NOT EXISTS room_activity (room TEXT NOT NULL, day TEXT NOT NULL, msgs INTEGER NOT NULL, "
+                 "PRIMARY KEY (room, day))")
+    conn.execute("CREATE TABLE IF NOT EXISTS imv (pair TEXT PRIMARY KEY, theme TEXT NOT NULL, by_user TEXT NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS announcements (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                  "author TEXT NOT NULL, text TEXT NOT NULL, created INTEGER NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS prefs (owner TEXT PRIMARY KEY, data TEXT NOT NULL)")
@@ -577,3 +585,91 @@ def name_colors(conn, users):
         return {}
     q = ",".join("?" * len(users))
     return {u: c for u, c in conn.execute(f"SELECT user, color FROM name_colors WHERE user IN ({q})", users)}
+
+
+# ---------- disappearing messages ----------
+
+MAX_EXPIRE = 7 * 24 * 3600
+
+
+def set_expiry(conn, me, key, after_secs):
+    after_secs = int(after_secs)
+    if key[0] != me or not (10 <= after_secs <= MAX_EXPIRE):
+        raise SocialFail(400, "Bad request.")
+    due = int(key[2] // 1000) + after_secs
+    conn.execute("INSERT OR REPLACE INTO expiring VALUES (?, ?, ?, ?, ?)", (*key, due))
+    tell(msg_audience(key[1], key[0]), me, "expire",
+         {"sender": key[0], "target": key[1], "time": key[2], "hash": key[3], "due": due})
+
+
+def expiries_for(conn, me, conv):
+    where, args = conv_filter(me, conv)
+    rows = conn.execute(f"SELECT sender, target, time, hash, due FROM expiring WHERE {where}", args)
+    return [dict(zip(("sender", "target", "time", "hash", "due"), r)) for r in rows]
+
+
+def expire_due(conn):
+    """Turn due disappearing messages into deletions and tell people."""
+    now = int(time.time())
+    rows = list(conn.execute("SELECT sender, target, time, hash FROM expiring WHERE due <= ?", (now,)))
+    for sender, target, t, h in rows:
+        redact(conn, sender, target, t, h)
+        conn.execute("DELETE FROM expiring WHERE sender=? AND target=? AND time=? AND hash=?", (sender, target, t, h))
+        tell(msg_audience(target, sender), sender, "redact", {"sender": sender, "target": target, "time": t, "hash": h})
+    return len(rows)
+
+
+# ---------- saved messages ----------
+
+def save_message(conn, me, key, conv, text, on):
+    if on:
+        conn.execute("INSERT OR REPLACE INTO saved VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                     (me, *key, str(conv)[:60], str(text or "")[:500], int(time.time())))
+    else:
+        conn.execute("DELETE FROM saved WHERE user=? AND sender=? AND target=? AND time=? AND hash=?", (me, *key))
+    push(me, "saved-changed", {})
+
+
+def saved_list(conn, me):
+    rows = conn.execute("SELECT sender, target, time, hash, conv, text FROM saved WHERE user = ? ORDER BY created DESC LIMIT 300", (me,))
+    return [dict(zip(("sender", "target", "time", "hash", "conv", "text"), r)) for r in rows]
+
+
+# ---------- room activity (trending) ----------
+
+def note_activity(conn, room):
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    conn.execute("INSERT INTO room_activity VALUES (?, ?, 1) ON CONFLICT(room, day) DO UPDATE SET msgs = msgs + 1",
+                 (room, day))
+
+
+def trending(conn, limit=8):
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    rows = conn.execute("SELECT room, msgs FROM room_activity WHERE day = ? ORDER BY msgs DESC LIMIT ?", (day, limit))
+    return [{"room": r, "msgs": n} for r, n in rows]
+
+
+# ---------- IMVironments (themes for private chats) ----------
+
+IMV_THEMES = {"none", "beach", "night", "rain", "love", "space", "forest", "snow", "sunset"}
+
+
+def pair_key(a, b):
+    return "|".join(sorted([a, b]))
+
+
+def set_imv(conn, me, other, theme):
+    if theme not in IMV_THEMES:
+        raise SocialFail(400, "That theme isn't available.")
+    pk = pair_key(me, other)
+    if theme == "none":
+        conn.execute("DELETE FROM imv WHERE pair = ?", (pk,))
+    else:
+        conn.execute("INSERT OR REPLACE INTO imv VALUES (?, ?, ?)", (pk, theme, me))
+    for u in (me, other):
+        push(u, "imv", {"a": me, "b": other, "theme": theme, "by": me})
+
+
+def get_imv(conn, me, other):
+    row = conn.execute("SELECT theme, by_user FROM imv WHERE pair = ?", (pair_key(me, other),)).fetchone()
+    return {"theme": row[0] if row else "none", "by": row[1] if row else None}

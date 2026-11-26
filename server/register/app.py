@@ -51,6 +51,10 @@ API (errors: 4xx/5xx {"ok": false, "error": "<human readable>"})
   GET  /lastseen?users=a,b
   POST /remind {"text","minutes"};  GET /reminders;  GET /reminders/due
   POST /namecolor {"color"|null};  GET /namecolors?users=a,b
+  POST /expire {"target","time","hash","after"}   my message disappears `after` s after it was sent
+  POST /save {"sender","target","time","hash","conv","text","on"};  GET /saved
+  POST /activity {"room"};  GET /trending          messages per room today
+  POST /imv {"with","theme"};  GET /imv?with=     shared theme of a private chat
   GET  /prefs  /  POST /prefs {"ignore":[ids],"friendsOnly":bool}
   GET  /users/search?q= -> {"users": [ids]} (substring match on IDs)
   GET  /events?token=   Server-Sent Events: friend-request, friend-accepted,
@@ -449,6 +453,19 @@ class Handler(BaseHTTPRequestHandler):
                 after = parse_qs(url.query).get("after", ["0"])[0]
                 with db() as conn:
                     self._json(200, {"ok": True, "announcements": social.announcements_since(conn, int(after or 0))})
+            elif url.path in ("/saved", "/trending", "/imv"):
+                me = self._token_user()
+                with db() as conn:
+                    if url.path == "/saved":
+                        out = {"saved": social.saved_list(conn, me)}
+                    elif url.path == "/trending":
+                        out = {"trending": social.trending(conn)}
+                    else:
+                        other = parse_qs(url.query).get("with", [""])[0].lower()
+                        if not USERNAME_RE.match(other):
+                            raise Fail(400, "Bad request.")
+                        out = social.get_imv(conn, me, other)
+                self._json(200, {"ok": True, **out})
             elif url.path == "/namecolors":
                 self._token_user()
                 users = [u for u in parse_qs(url.query).get("users", [""])[0].lower().split(",") if USERNAME_RE.match(u)]
@@ -462,6 +479,7 @@ class Handler(BaseHTTPRequestHandler):
                         if url.path == "/msgmeta":
                             cv = q.get("conv", [""])[0].strip().lower()
                             out = {"reactions": social.reactions_for(conn, me, cv), "edits": social.edits_for(conn, me, cv),
+                                   "expiring": social.expiries_for(conn, me, cv),
                                    "pins": social.pins_for(conn, cv) if cv.startswith(("#", "&")) else []}
                         elif url.path == "/poll":
                             out = social.poll_state(conn, me, int(q.get("id", ["0"])[0] or 0))
@@ -498,7 +516,8 @@ class Handler(BaseHTTPRequestHandler):
     SOCIAL = {"/friends/request", "/friends/respond", "/friends/remove", "/friends/move",
               "/friends/rename-group", "/typing", "/session/end", "/prefs", "/read",
               "/profile/updated", "/session/revoke-others", "/redact", "/announce",
-              "/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind", "/namecolor"}
+              "/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind", "/namecolor",
+              "/expire", "/save", "/activity", "/imv"}
 
     def do_POST(self):
         if self.path in self.SOCIAL:
@@ -629,7 +648,25 @@ class Handler(BaseHTTPRequestHandler):
                         raise Fail(f.status, f.message)
                 self._json(200, {"ok": True})
                 return
-            if self.path in ("/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind"):
+            if self.path == "/activity":
+                room = nick("room")
+                if room.startswith(("#", "&")) and len(room) <= 50 and not room.startswith("#conf-"):
+                    with db() as conn:
+                        social.note_activity(conn, room)
+                self._json(200, {"ok": True})
+                return
+            if self.path == "/imv":
+                other = nick("with")
+                if not USERNAME_RE.match(other) or other == me:
+                    raise Fail(400, "Bad request.")
+                with db() as conn:
+                    try:
+                        social.set_imv(conn, me, other, str(body.get("theme", "")))
+                    except social.SocialFail as f:
+                        raise Fail(f.status, f.message)
+                self._json(200, {"ok": True})
+                return
+            if self.path in ("/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind", "/expire", "/save"):
                 self._json(200, {"ok": True, **self._extras(me, body)})
                 return
             if self.path == "/announce":
@@ -656,7 +693,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/typing":
                 to = nick("to")
-                if USERNAME_RE.match(to) and to != me:
+                if to.startswith(("#", "&")) and len(to) <= 50:      # a room: apps keep what they're in
+                    social.push_all("typing", {"from": me, "active": bool(body.get("active")), "room": to})
+                elif USERNAME_RE.match(to) and to != me:
                     social.push(to, "typing", {"from": me, "active": bool(body.get("active"))})
                 self._json(200, {"ok": True})
                 return
@@ -740,6 +779,12 @@ class Handler(BaseHTTPRequestHandler):
                     return {}
                 if self.path == "/remind":
                     return social.add_reminder(conn, me, body.get("text"), body.get("minutes"))
+                if self.path == "/expire":
+                    social.set_expiry(conn, me, msg_key(me), body.get("after") or 0)
+                    return {}
+                if self.path == "/save":
+                    social.save_message(conn, me, msg_key(), body.get("conv", ""), body.get("text"), bool(body.get("on")))
+                    return {}
             except social.SocialFail as f:
                 raise Fail(f.status, f.message)
         return {}
@@ -764,6 +809,7 @@ def reminder_loop():
                 for r in due:
                     social.push(r["user"], "reminder", r)
                 social.mark_delivered(conn, [r["id"] for r in due])
+                social.expire_due(conn)
         except Exception as e:
             print(f"[register] reminder loop: {e!r}", flush=True)
 
