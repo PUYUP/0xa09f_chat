@@ -24,6 +24,7 @@ MAX_REQUEST_MSG = 140
 DEFAULT_GROUP = "Friends"
 
 _sessions = {}                  # token -> (username, expires)
+_session_info = {}              # token -> {"device", "created", "last"}
 _listeners = {}                 # username -> set(queue.Queue)
 _mu = threading.Lock()
 
@@ -74,6 +75,19 @@ def init_schema(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS scheduled (id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, "
                  "target TEXT NOT NULL, text TEXT NOT NULL, due INTEGER NOT NULL, sent INTEGER NOT NULL DEFAULT 0)")
     conn.execute("CREATE TABLE IF NOT EXISTS user_active (user TEXT PRIMARY KEY, start INTEGER NOT NULL, end INTEGER NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, room TEXT NOT NULL, "
+                 "creator TEXT NOT NULL, title TEXT NOT NULL, start INTEGER NOT NULL, created INTEGER NOT NULL, "
+                 "notified INTEGER NOT NULL DEFAULT 0)")
+    conn.execute("CREATE TABLE IF NOT EXISTS rsvps (event INTEGER NOT NULL, user TEXT NOT NULL, status TEXT NOT NULL, "
+                 "PRIMARY KEY (event, user))")
+    conn.execute("CREATE TABLE IF NOT EXISTS room_info (room TEXT PRIMARY KEY, category TEXT NOT NULL, lang TEXT NOT NULL, "
+                 "set_by TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS user_rooms (user TEXT NOT NULL, room TEXT NOT NULL, day TEXT NOT NULL, "
+                 "msgs INTEGER NOT NULL, PRIMARY KEY (user, room, day))")
+    conn.execute("CREATE TABLE IF NOT EXISTS room_reads (room TEXT NOT NULL, user TEXT NOT NULL, time INTEGER NOT NULL, "
+                 "PRIMARY KEY (room, user))")
+    conn.execute("CREATE TABLE IF NOT EXISTS notes (owner TEXT NOT NULL, about TEXT NOT NULL, text TEXT NOT NULL, "
+                 "PRIMARY KEY (owner, about))")
     conn.execute("CREATE TABLE IF NOT EXISTS announcements (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                  "author TEXT NOT NULL, text TEXT NOT NULL, created INTEGER NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS prefs (owner TEXT PRIMARY KEY, data TEXT NOT NULL)")
@@ -84,15 +98,21 @@ def init_schema(conn):
 
 # ---------- sessions ----------
 
-def new_session(username):
+def new_session(username, device=""):
     token = secrets.token_urlsafe(32)
     with _mu:
         now = time.time()
         for t, (_, exp) in list(_sessions.items()):     # drop expired ones
             if exp < now:
                 del _sessions[t]
+                _session_info.pop(t, None)
         _sessions[token] = (username, now + SESSION_TTL)
+        _session_info[token] = {"device": " ".join(str(device or "").split())[:80] or "Unknown device",
+                                "created": int(now), "last": int(now)}
     return token
+
+
+SESSION_IDLE = 2 * 24 * 3600     # a device unused for 2 days is signed out
 
 
 def session_user(token):
@@ -100,7 +120,37 @@ def session_user(token):
         s = _sessions.get(token or "")
         if not s or s[1] < time.time():
             return None
+        info = _session_info.get(token)
+        if info and time.time() - info["last"] > SESSION_IDLE:
+            del _sessions[token]
+            _session_info.pop(token, None)
+            return None
+        if info:
+            info["last"] = int(time.time())
         return s[0]
+
+
+def sessions_for(username, current_token):
+    """This account's signed-in devices (newest activity first)."""
+    with _mu:
+        now = time.time()
+        out = [{"sid": sid_of(t), "current": t == current_token, **_session_info.get(t, {})}
+               for t, (u, exp) in _sessions.items()
+               if u == username and exp > now and now - _session_info.get(t, {}).get("last", now) <= SESSION_IDLE]
+    out.sort(key=lambda d: -d.get("last", 0))
+    return out
+
+
+def revoke_sid(username, sid):
+    """Sign one device out: its token stops working and that app signs out."""
+    with _mu:
+        hit = [t for t, (u, _) in _sessions.items() if u == username and sid_of(t) == sid]
+        for t in hit:
+            del _sessions[t]
+            _session_info.pop(t, None)
+    if hit:
+        push(username, "signed-out", {"only": sid, "reason": "revoked"})
+    return bool(hit)
 
 
 def end_session(token):
@@ -803,3 +853,176 @@ def due_scheduled(conn):
 def mark_scheduled_sent(conn, sid, user):
     conn.execute("UPDATE scheduled SET sent = 1 WHERE id = ?", (sid,))
     push(user, "scheduled-changed", {})
+
+
+# ---------- room events (with RSVP) ----------
+
+RSVP = {"going", "maybe", "no"}
+
+
+def create_event(conn, me, room, title, start):
+    title = " ".join(str(title or "").split())[:120]
+    start = int(start)
+    now = int(time.time())
+    if not title:
+        raise SocialFail(400, "Give the event a name.")
+    if not (now + 60 <= start <= now + 365 * 86400):
+        raise SocialFail(400, "Pick a time in the future (up to a year ahead).")
+    n = conn.execute("SELECT COUNT(*) FROM events WHERE room = ? AND start > ?", (room, now)).fetchone()[0]
+    if n >= 20:
+        raise SocialFail(409, "This room already has 20 upcoming events.")
+    cur = conn.execute("INSERT INTO events (room, creator, title, start, created) VALUES (?, ?, ?, ?, ?)",
+                       (room, me, title, start, now))
+    conn.execute("INSERT OR REPLACE INTO rsvps VALUES (?, ?, 'going')", (cur.lastrowid, me))
+    push_all("event", {"id": cur.lastrowid, "room": room})
+    return cur.lastrowid
+
+
+def event_state(conn, me, eid):
+    row = conn.execute("SELECT id, room, creator, title, start FROM events WHERE id = ?", (int(eid),)).fetchone()
+    if not row:
+        raise SocialFail(404, "That event isn't there any more.")
+    people = {"going": [], "maybe": [], "no": []}
+    mine = None
+    for user, st in conn.execute("SELECT user, status FROM rsvps WHERE event = ?", (row[0],)):
+        people.setdefault(st, []).append(user)
+        if user == me:
+            mine = st
+    return {"id": row[0], "room": row[1], "creator": row[2], "title": row[3], "start": row[4], "people": people, "mine": mine}
+
+
+def room_events(conn, me, room):
+    rows = conn.execute("SELECT id FROM events WHERE room = ? AND start > ? ORDER BY start LIMIT 20",
+                        (room, int(time.time()) - 3 * 3600))
+    return [event_state(conn, me, r[0]) for r in rows]
+
+
+def rsvp(conn, me, eid, status):
+    ev = event_state(conn, me, eid)
+    if status is None:
+        conn.execute("DELETE FROM rsvps WHERE event = ? AND user = ?", (ev["id"], me))
+    elif status in RSVP:
+        conn.execute("INSERT OR REPLACE INTO rsvps VALUES (?, ?, ?)", (ev["id"], me, status))
+    else:
+        raise SocialFail(400, "Bad answer.")
+    push_all("event", {"id": ev["id"], "room": ev["room"]})
+
+
+def delete_event(conn, me, eid):
+    ev = event_state(conn, me, eid)
+    if ev["creator"] != me:
+        raise SocialFail(403, "Only the person who created the event can cancel it.")
+    conn.execute("DELETE FROM events WHERE id = ?", (ev["id"],))
+    conn.execute("DELETE FROM rsvps WHERE event = ?", (ev["id"],))
+    push_all("event", {"id": ev["id"], "room": ev["room"], "deleted": True})
+
+
+def events_starting(conn, within=15 * 60):
+    """Events starting in the next `within` seconds that nobody was told about yet."""
+    now = int(time.time())
+    rows = list(conn.execute("SELECT id, room, title, start FROM events WHERE notified = 0 AND start <= ? AND start > ?",
+                             (now + within, now - 60)))
+    out = []
+    for eid, room, title, start in rows:
+        users = [u for (u,) in conn.execute("SELECT user FROM rsvps WHERE event = ? AND status IN ('going', 'maybe')", (eid,))]
+        conn.execute("UPDATE events SET notified = 1 WHERE id = ?", (eid,))
+        out.append({"id": eid, "room": room, "title": title, "start": start, "users": users})
+    return out
+
+
+# ---------- room category & language ----------
+
+CATEGORIES = {"general", "games", "music", "tech", "sports", "study", "movies", "hangout", "other"}
+LANGS = {"", "id", "en", "ms", "jv", "su", "ja", "ko", "zh", "es", "fr", "de", "ar", "other"}
+
+
+def set_room_info(conn, me, room, category, lang):
+    category = str(category or "general").lower()
+    lang = str(lang or "").lower()
+    if category not in CATEGORIES or lang not in LANGS:
+        raise SocialFail(400, "Unknown category or language.")
+    conn.execute("INSERT OR REPLACE INTO room_info VALUES (?, ?, ?, ?)", (room, category, lang, me))
+    push_all("roominfo", {"room": room})
+
+
+def room_info(conn, rooms):
+    rooms = list(rooms)[:300]
+    if not rooms:
+        return {}
+    q = ",".join("?" * len(rooms))
+    return {r: {"category": c, "lang": l} for r, c, l in
+            conn.execute(f"SELECT room, category, lang FROM room_info WHERE room IN ({q})", rooms)}
+
+
+# ---------- friend suggestions ----------
+
+def note_user_room(conn, user, room):
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    conn.execute("INSERT INTO user_rooms VALUES (?, ?, ?, 1) ON CONFLICT(user, room, day) DO UPDATE SET msgs = msgs + 1",
+                 (user, room, day))
+
+
+def suggestions(conn, me, ignore=(), limit=8):
+    """People you may know: friends of friends, people active in your rooms
+    (last 14 days), and a nudge for a nearby timezone."""
+    friends = {f for (f,) in conn.execute("SELECT friend FROM friends WHERE owner = ?", (me,))}
+    pending = {t for (t,) in conn.execute("SELECT to_user FROM friend_requests WHERE from_user = ?", (me,))}
+    pending |= {f for (f,) in conn.execute("SELECT from_user FROM friend_requests WHERE to_user = ?", (me,))}
+    skip = friends | pending | set(ignore) | {me}
+    score, why = {}, {}
+
+    def add(u, pts, reason):
+        if u in skip:
+            return
+        score[u] = score.get(u, 0) + pts
+        why.setdefault(u, [])
+        if reason not in why[u]:
+            why[u].append(reason)
+
+    mutual = {}
+    for f in friends:
+        for (ff,) in conn.execute("SELECT friend FROM friends WHERE owner = ?", (f,)):
+            mutual.setdefault(ff, []).append(f)
+    for u, via in mutual.items():
+        add(u, 3 * len(via), f"{len(via)} mutual friend{'s' if len(via) > 1 else ''}" if len(via) > 1 else f"friends with {via[0]}")
+    since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 14 * 86400))
+    my_rooms = {r for (r,) in conn.execute("SELECT DISTINCT room FROM user_rooms WHERE user = ? AND day >= ?", (me, since))}
+    for room in my_rooms:
+        for (u,) in conn.execute("SELECT DISTINCT user FROM user_rooms WHERE room = ? AND day >= ?", (room, since)):
+            add(u, 2, f"active in {room}")
+    mine = conn.execute("SELECT offset FROM user_tz WHERE user = ?", (me,)).fetchone()
+    if mine and score:
+        for u in list(score):
+            o = conn.execute("SELECT offset FROM user_tz WHERE user = ?", (u,)).fetchone()
+            if o and tz_distance(mine[0], o[0]) <= 120:
+                score[u] += 1
+                why[u].append("nearby timezone")
+    ranked = sorted(score, key=lambda u: (-score[u], u))[:limit]
+    return [{"nick": u, "reasons": why[u][:3]} for u in ranked]
+
+
+# ---------- "seen by" in rooms ----------
+
+def room_read(conn, me, room, t):
+    conn.execute("INSERT INTO room_reads VALUES (?, ?, ?) ON CONFLICT(room, user) DO UPDATE SET time = MAX(time, excluded.time)",
+                 (room, me, int(t)))
+    push_all("room-read", {"room": room, "user": me, "time": int(t)})
+
+
+def room_reads(conn, room):
+    return {u: t for u, t in conn.execute("SELECT user, time FROM room_reads WHERE room = ?", (room,))}
+
+
+# ---------- private notes about people ----------
+
+def set_note(conn, me, about, text):
+    text = str(text or "").strip()[:1000]
+    if text:
+        conn.execute("INSERT OR REPLACE INTO notes VALUES (?, ?, ?)", (me, about, text))
+    else:
+        conn.execute("DELETE FROM notes WHERE owner = ? AND about = ?", (me, about))
+    push(me, "notes-changed", {})
+
+
+def notes(conn, me):
+    return {a: t for a, t in conn.execute("SELECT about, text FROM notes WHERE owner = ?", (me,))}

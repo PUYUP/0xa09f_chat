@@ -19,5 +19,6 @@ serde_json = "1"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"          # open links from messages in the system browser
+tauri-plugin-deep-link = "2"       # a09f://join/<room> invite links
 # "Remember my password": stored in the OS keychain, never in a file.
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }

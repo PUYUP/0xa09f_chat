@@ -253,6 +253,7 @@ function markRead(c) {
   c.unread = 0; c.mentions = 0;
   // "Seen" for the other person, once per new message of theirs we've now seen.
   const theirs = c.kind === "pm" ? c.msgs.reduce((t, m) => (m.others ? Math.max(t, m.time) : t), 0) : 0;
+  if (c.kind === "room" && S.focused) sendRoomRead(c, latest);
   if (theirs && S.token && theirs > (c.seenSent || 0) && S.focused) {
     c.seenSent = latest;
     socialApi("/read", { to: c.name, time: latest }).catch(() => {});
@@ -308,6 +309,13 @@ function fetchPrivateChats() {
 }
 
 function onHistoryBatch(target, lines) {
+  if (S.exporting && keyOf(target) === S.exporting.key) {            // exportConversation() is paging
+    const ls = lines.filter((l) => (l.cmd === "PRIVMSG" || l.cmd === "NOTICE") && !isPlumbing(l.prefix, nickOf(l.prefix)));
+    S.exporting.lines = ls.concat(S.exporting.lines);
+    S.exporting.count = lines.filter((l) => l.cmd === "PRIVMSG" || l.cmd === "NOTICE").length;
+    S.exporting.pageDone = true;
+    return;
+  }
   if (isPresenceRoom(target)) {
     for (const l of lines) if (l.cmd === "PRIVMSG") onStatusLine(nickOf(l.prefix), l);
     announceMyStatus();
@@ -466,7 +474,18 @@ function renderMsg(m) {
     if (isSaved(cur, m)) div.querySelector(".txt").insertAdjacentHTML("beforeend", ` <span class="saved-star" title="Saved">⭐</span>`);
   }
   if (poll && !deleted) div.appendChild(pollCard(+poll[1]));
-  const link = withMeta && !deleted && !poll && S.token && firstUrl(body);
+  const evm = !m.buzz && !deleted && m.txt.match(EVENT_RE);
+  if (evm) { div.querySelector(".txt").textContent = "planned an event:"; div.appendChild(eventCard(+evm[1])); }
+  if (m.reveal) {
+    const b = document.createElement("button");
+    b.className = "title-btn"; b.textContent = "Show in folder";
+    b.onclick = () => invoke("plugin:opener|reveal_item_in_dir", { path: m.reveal }).catch(() => {});
+    div.querySelector(".txt").appendChild(b);
+  }
+  const invite = !deleted && (inviteRoom((stripIrc(body).match(/a09f:\/\/join\/\S+/) || [])[0]) || inviteRoom(firstUrl(body)));
+  const link = withMeta && !deleted && !poll && !evm && !invite && S.token && firstUrl(body);
+  if (invite) div.querySelector(".txt").insertAdjacentHTML("beforeend",
+    ` <button class="invite-join" data-room="${esc(invite)}">💬 Join ${esc(roomName(invite))}</button>`);
   if (link) div.appendChild(previewCard(link));
   if (withMeta && !deleted && S.token) {
     reactionChips(div, cur, m);
@@ -520,6 +539,7 @@ function switchTo(key) {
   renderTyping();
   renderPins();
   renderScheduled();
+  if (c?.kind === "room") loadRoomReads(c);
   if (c?.kind === "pm" && !S.imv?.has(key)) loadImv(c); else applyImv();
   $("input").focus();
 }
@@ -668,6 +688,8 @@ function refreshSide() {
     if (amOp(c)) title += ` <button id="btnTopic" class="title-btn" title="Change this room's topic">✏️ Topic</button>`;
     if (!c.modes?.has("i") || amOp(c)) title += ` <button id="btnInvite" class="title-btn" title="Invite friends to this room">➕ Invite</button>`;
     if (amOp(c)) title += ` <button id="btnRoomSettings" class="title-btn" title="Room settings and moderation">⚙️ Settings</button>`;
+    title += ` <button id="btnEvents" class="title-btn" title="Events in this room">📅 Events</button>`;
+    if (!c.modes?.has("i") && !c.modes?.has("s")) title += ` <button id="btnInviteLink" class="title-btn" title="Copy an invite link">🔗 Link</button>`;
     title += ` <button id="btnLeave" class="title-btn" title="Leave this room">🚪 Leave</button>`;
   } else if (c?.kind === "pm") {
     const lt = localTimeText(c.name);
@@ -681,12 +703,16 @@ function refreshSide() {
   if ($("btnLeave")) $("btnLeave").onclick = () => leaveRoom(c);
   if ($("btnInvite")) $("btnInvite").onclick = () => openConfDialog(c);
   if ($("btnRoomSettings")) $("btnRoomSettings").onclick = () => openRoomDialog(c);
+  if ($("btnEvents")) $("btnEvents").onclick = () => openRoomEvents(c);
+  if ($("btnInviteLink")) $("btnInviteLink").onclick = () => copyInvite(c);
   if ($("btnPmProfile")) $("btnPmProfile").onclick = () => openProfile(c.name);
   if ($("btnPmIgnore")) $("btnPmIgnore").onclick = () => ignoreUser(c.name, !isIgnored(c.name));
   if ($("btnPmTheme")) $("btnPmTheme").onclick = (e) => { e.stopPropagation(); imvMenu(e, c); };
   if (c && c.kind !== "status") {
-    $("chatTitle").insertAdjacentHTML("beforeend", ` <button id="btnSearchConv" class="title-btn" title="Search messages">🔍 Search</button>`);
+    $("chatTitle").insertAdjacentHTML("beforeend", ` <button id="btnSearchConv" class="title-btn" title="Search messages">🔍 Search</button>` +
+      ` <button id="btnExport" class="title-btn" title="Save this whole conversation as JSON (Downloads)">⬇ Export</button>`);
     $("btnSearchConv").onclick = openSearch;
+    $("btnExport").onclick = () => exportConversation(c);
   }
   layoutTitle();
   $("input").placeholder = c?.kind === "pm" ? `Message ${c.name}…` : "Type your message here…";
@@ -1191,7 +1217,8 @@ async function socialApi(path, body = null, retry = true) {
 }
 
 async function openSession() {
-  const { ok, data } = await accountApi("/session", { username: S.account, password: S.pw });
+  S.deviceName ||= await invoke("device_name").catch(() => "a09f desktop");
+  const { ok, data } = await accountApi("/session", { username: S.account, password: S.pw, device: S.deviceName });
   if (!ok) throw new Error(data.error || "Couldn't reach your friends list.");
   S.token = data.token;
   S.sid = data.sid;
@@ -1209,7 +1236,8 @@ async function startSocial() {
     await migrateLocalFriends();
     loadRedactions(); loadAnnouncements(); loadStats();
     loadLastSeen(); loadDueReminders(); loadSaved();
-    shareMyTz(); S.friends.forEach(tzOf); loadScheduled();
+    shareMyTz(); S.friends.forEach(tzOf); loadScheduled(); loadNotes();
+    if (S.pendingDeepLink) { joinOrCreate(S.pendingDeepLink); S.pendingDeepLink = null; }
     socialApi(`/tz?users=${encodeURIComponent(S.me)}`).then(({ tz }) => {
       const a = tz[keyOf(S.me)]?.active; (S.active ||= new Map()); if (a) S.active.set(keyOf(S.me), a);
     }).catch(() => {});
@@ -1281,15 +1309,22 @@ function openEvents() {
   on("reminder", showReminder);
   on("namecolor", onNameColor);
   on("signed-out", (d) => {
-    if (d.except === S.sid || S.phase !== "online") return;
+    if (S.phase !== "online") return;
+    if (d.only ? d.only !== S.sid : d.except === S.sid) return;
     forgetSavedPassword();
-    doDisconnect("Your password was changed, so you were signed out here. Please sign in with the new password.", true);
+    doDisconnect(d.reason === "revoked" ? "This device was signed out from another device."
+      : "Your password was changed, so you were signed out here. Please sign in with the new password.", true);
   });
   on("typing", (d) => (d.room ? onRoomTyping(d) : onTyping(d.from, d.active)));
   on("expire", onExpireEvent);
   on("saved-changed", loadSaved);
   on("imv", onImvEvent);
   on("scheduled-changed", loadScheduled);
+  on("event", onEventChanged);
+  on("event-soon", onEventSoon);
+  on("roominfo", (d) => { S.roomInfo?.delete(keyOf(d.room)); });
+  on("room-read", onRoomRead);
+  on("notes-changed", loadNotes);
   on("active-changed", (d) => {
     if (keyOf(d.user) === keyOf(S.me)) return;
     S.tz?.delete(keyOf(d.user)); S.active?.delete(keyOf(d.user)); tzOf(d.user);
@@ -1934,6 +1969,7 @@ function openPwDialog() {
   pwMsg("");
   $("pwCur").focus();
   loadRecoveryEmail();
+  loadDevices();
 }
 function closePwDialog() { if (!S.pwChange) $("pwDialog").style.display = "none"; }
 function pwMsg(text, kind = "") { showMsg("pwMsg", text, kind); }
@@ -2035,12 +2071,15 @@ function renderRoomBrowser() {
   const list = (S.roomList || [])
     .filter((r) => !isPresenceRoom(r.name))
     .filter((r) => !q || r.name.toLowerCase().includes(q) || r.topic.toLowerCase().includes(q))
+    .filter((r) => !$("rbCat").value || S.roomInfo?.get(keyOf(r.name))?.category === $("rbCat").value)
+    .filter((r) => !$("rbLang").value || S.roomInfo?.get(keyOf(r.name))?.lang === $("rbLang").value)
     .sort((a, b) => {
       const da = S.roomTz?.get(keyOf(a.name)), db = S.roomTz?.get(keyOf(b.name));
       const ka = da == null ? 360 : tzDistance(da, myOffset()), kb = db == null ? 360 : tzDistance(db, myOffset());
       return (ka - kb) || b.users - a.users || a.name.localeCompare(b.name);     // nearest first
     });
   loadRoomTz(list.map((r) => r.name));
+  loadRoomInfo2((S.roomList || []).map((r) => r.name));
   const today = new Map((S.trending || []).map((t) => [keyOf(t.room), t.msgs]));
   const visible = new Set((S.roomList || []).map((r) => keyOf(r.name)));
   const hot = (S.trending || []).filter((t) => visible.has(keyOf(t.room)) && !isPresenceRoom(t.room));
@@ -2056,7 +2095,9 @@ function renderRoomBrowser() {
     const row = document.createElement("div");
     row.className = "rb-row";
     const joined = conv(keyOf(r.name))?.kind === "room";
-    row.innerHTML = `<span class="rname" title="${esc(r.name)}">${esc(roomName(r.name))}</span>` +
+    const ri = S.roomInfo?.get(keyOf(r.name));
+    row.innerHTML = `<span class="rname" title="${esc(r.name)}">${esc(roomName(r.name))}` +
+      (ri ? `<br><small class="rb-tags">${esc(catLabel(ri.category))}${ri.lang ? " · " + esc(langLabel(ri.lang)) : ""}</small>` : "") + `</span>` +
       `<span class="rcount">${r.users} ${r.users === 1 ? "person" : "people"}` +
       (today.get(keyOf(r.name)) ? `<br><small>🔥 ${today.get(keyOf(r.name))} today</small>` : "") +
       (roomTzText(r.name) ? `<br><small class="tz-note">${roomTzText(r.name)}</small>` : "") + `</span>` +
@@ -2197,6 +2238,7 @@ function openProfile(nick) {
   if (mine) { buildColorPicker(); tzOf(S.me); syncActiveUi(); }
   $("pfNick").style.color = nameColor(nick) || "";
   $("pfAddFriend").style.display = mine || isFriend(nick) ? "none" : "";
+  $("pfNote").value = S.notes?.get(keyOf(nick)) || "";
   for (const id of ["pfvName", "pfvLocation", "pfvAbout", "pfvSince"]) $(id).textContent = "…";
   for (const id of Object.values(PROFILE_FIELDS)) { $(id).value = ""; $(id).disabled = true; }
   $("pfSave").disabled = true;
@@ -2556,6 +2598,7 @@ function openFind() {
   $("fdQuery").value = "";
   $("fdResults").innerHTML = `<div class="empty-hint">Type part of an a09f ID to search.</div>`;
   $("fdQuery").focus();
+  loadSuggestions();
 }
 function closeFind() { $("findDialog").style.display = "none"; }
 
@@ -2725,12 +2768,19 @@ function onSeen(from, time) {
 function renderSeen() {
   logEl.querySelector(".seen")?.remove();
   const c = S.current && conv(S.current);
-  if (c?.kind !== "pm" || !c.seenAt) return;
-  const last = c.msgs.filter((m) => m.others || m.cls.includes("me")).at(-1);
-  if (!last || last.others || last.time > c.seenAt) return;
+  const last = c && c.msgs.filter((m) => m.others || m.cls.includes("me")).at(-1);
+  if (!last || last.others) return;
   const d = document.createElement("div");
   d.className = "seen";
-  d.textContent = `✓ Seen ${fmtTime(c.seenAt)}`;
+  if (c.kind === "room") {                                  // "Seen by bob, diana"
+    const who = roomSeenBy(c, last);
+    if (!who.length) return;
+    d.textContent = who.length <= 3 ? `👁 Seen by ${who.join(", ")}` : `👁 Seen by ${who.length}`;
+    d.title = who.join(", ");
+  } else {
+    if (c?.kind !== "pm" || !c.seenAt || last.time > c.seenAt) return;
+    d.textContent = `✓ Seen ${fmtTime(c.seenAt)}`;
+  }
   const stick = nearBottom();
   logEl.appendChild(d);
   if (!S.bulkRender && stick) logEl.scrollTop = logEl.scrollHeight;
@@ -3022,6 +3072,7 @@ async function loadRoomInfo(c) {
 const amFounder = (c) => c.registered && c.founders?.some((f) => keyOf(f) === keyOf(S.me));
 
 function openRoomDialog(c) {
+  loadRoomInfo2([c.name]);
   S.roomDialogFor = keyOf(c.name);
   roomState(c);
   $("rdTitle").textContent = `${roomName(c.name)} — Room Settings`;
@@ -3083,6 +3134,9 @@ function renderRoomDialog() {
   fill($("rdBans"), people(c.bans), "Unban", (n) => unbanUser(c, n));
   fill($("rdMutes"), people(c.quiets), "Unmute", (n) => muteUser(c, n, false));
   $("rdOwner").style.display = amFounder(c) ? "" : "none";
+  const ri = S.roomInfo?.get(keyOf(c.name));
+  if (document.activeElement !== $("rdCategory")) $("rdCategory").value = ri?.category || "general";
+  if (document.activeElement !== $("rdLang")) $("rdLang").value = ri?.lang || "";
   // Owner vs moderator decides how settings are saved: wait for ChanServ.
   $("rdSave").disabled = !c.infoLoaded;
   $("rdSave").textContent = c.infoLoaded ? "Save Settings" : "Loading…";
@@ -3816,6 +3870,8 @@ function openSwitcher() {
 function closeSwitcher() { $("qsDialog").style.display = "none"; }
 
 function switcherItems(q) {
+  const inv = inviteRoom(q);
+  if (inv) return [{ kind: "join", label: `Join ${inv} (invite link)`, sub: "", go: () => joinOrCreate(inv) }];
   q = q.trim().toLowerCase();
   const items = [];
   for (const c of rooms()) items.push({ kind: "room", label: roomLabel(c.name), sub: c.topic || "Chat room", go: () => switchTo(c.name), unread: c.unread });
@@ -4012,6 +4068,7 @@ function showCard(el, nick) {
   card.innerHTML = `<div class="hc-head"><span class="pf-dot st-${st.state}"></span><b class="hc-nick">${esc(nick)}</b></div>` +
     `<div class="hc-status">${esc(st.state === "unknown" ? "" : st.label)}</div>` +
     (localTimeText(nick) ? `<div class="hc-time">${esc(localTimeText(nick))}</div>` : "") + `<div class="hc-info">…</div>` +
+    (S.notes?.get(keyOf(nick)) ? `<div class="hc-note">📝 ${esc(S.notes.get(keyOf(nick)).slice(0, 80))}</div>` : "") +
     `<div class="hc-btns">${me ? "" : `<button class="hc-msg">💬 Message</button>`}<button class="hc-prof">👤 Profile</button>` +
     (me || isFriend(nick) || isPendingFriend(nick) ? "" : `<button class="hc-add">➕</button>`) + `</div>`;
   card.querySelector(".hc-nick").style.color = nameColor(nick) || "";
@@ -4447,6 +4504,307 @@ function renderScheduled() {
   el.style.display = "";
 }
 
+/* ---------- room events (local times, RSVP) ---------- */
+
+const EVENT_RE = /\[event:(\d+)\]/;
+const fmtWhen = (unix) => new Date(unix * 1000).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+function relWhen(unix) {
+  const d = unix - Math.floor(Date.now() / 1000);
+  if (d < -3600) return "ended";
+  if (d < 0) return "happening now";
+  if (d < 3600) return `in ${Math.max(1, Math.round(d / 60))} min`;
+  if (d < 86400) return `in ${Math.round(d / 3600)}h`;
+  return `in ${Math.round(d / 86400)} days`;
+}
+
+async function loadEvent(id) {
+  S.evCache ||= new Map();
+  try {
+    S.evCache.set(id, await socialApi(`/event?id=${id}`));
+  } catch { S.evCache.set(id, { gone: true }); }
+  document.querySelectorAll(`.evc[data-ev="${id}"]`).forEach((el) => fillEventCard(el, id));
+}
+
+function eventCard(id) {
+  const el = document.createElement("div");
+  el.className = "evc";
+  el.dataset.ev = id;
+  if (S.evCache?.has(id)) fillEventCard(el, id); else { el.textContent = "📅 Loading event…"; loadEvent(id); }
+  return el;
+}
+
+function fillEventCard(el, id) {
+  const ev = S.evCache.get(id);
+  if (!ev || ev.gone) { el.innerHTML = "📅 <i>This event was cancelled.</i>"; return; }
+  const n = (k) => ev.people[k]?.length || 0;
+  el.innerHTML = `<div class="evc-title">📅 ${esc(ev.title)}</div>` +
+    `<div class="evc-when">${esc(fmtWhen(ev.start))} <span class="tz-note">your time · ${esc(relWhen(ev.start))}</span></div>` +
+    `<div class="evc-rsvp">` +
+    [["going", "✅ Going"], ["maybe", "🤔 Maybe"], ["no", "❌ Can't"]].map(([k, l]) =>
+      `<button data-st="${k}" class="${ev.mine === k ? "on" : ""}" title="${esc((ev.people[k] || []).join(", ") || "Nobody yet")}">${l} ${n(k)}</button>`).join("") +
+    (keyOf(ev.creator) === keyOf(S.me) ? `<a class="evc-x">Cancel event</a>` : "") + `</div>`;
+  el.querySelectorAll("button[data-st]").forEach((b) => {
+    b.onclick = () => socialApi("/event/rsvp", { id, status: ev.mine === b.dataset.st ? null : b.dataset.st }).catch((e) => sys(e.message, "error"));
+  });
+  el.querySelector(".evc-x")?.addEventListener("click", () => socialApi("/event/delete", { id }).catch((e) => sys(e.message, "error")));
+}
+
+function onEventChanged(d) {
+  if (d.deleted) S.evCache?.set(d.id, { gone: true }); else if (S.evCache?.has(d.id)) { loadEvent(d.id); }
+  document.querySelectorAll(`.evc[data-ev="${d.id}"]`).forEach((el) => fillEventCard(el, d.id));
+  if ($("eventsDialog").style.display !== "none" && keyOf(S.evCacheRoom || "") === keyOf(d.room)) loadRoomEvents();
+}
+
+function openRoomEvents(c) {
+  S.evCacheRoom = c.name;
+  $("evTitle").textContent = `📅 Events in ${roomName(c.name)}`;
+  $("evName").value = "";
+  const d = new Date(Date.now() + 86400000); d.setMinutes(0, 0, 0);
+  $("evWhen").value = new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  showMsg("evMsg", "");
+  $("eventsDialog").style.display = "";
+  loadRoomEvents();
+}
+function closeRoomEvents() { $("eventsDialog").style.display = "none"; }
+
+async function loadRoomEvents() {
+  const el = $("evList");
+  try {
+    const { events } = await socialApi(`/roomevents?room=${encodeURIComponent(S.evCacheRoom)}`);
+    S.evCache ||= new Map();
+    el.innerHTML = events.length ? "" : `<div class="empty-hint">No upcoming events. Plan one below!</div>`;
+    for (const ev of events) { S.evCache.set(ev.id, ev); el.appendChild(eventCard(ev.id)); }
+  } catch (e) { el.innerHTML = `<div class="empty-hint">${esc(e.message)}</div>`; }
+}
+
+async function createEvent() {
+  const title = $("evName").value.trim();
+  const when = $("evWhen").value;                    // local time (datetime-local)
+  if (!title || !when) { showMsg("evMsg", "Give it a name and a time.", "error"); return; }
+  const start = Math.floor(new Date(when).getTime() / 1000);
+  try {
+    const { id } = await socialApi("/event/create", { room: S.evCacheRoom, title, start });
+    sendTo(S.evCacheRoom, `📅 Event: ${title} — ${new Date(start * 1000).toISOString().replace(".000", "")} (RSVP in a09f) [event:${id}]`);
+    $("evName").value = "";
+    showMsg("evMsg", "Event created and announced in the room.", "ok");
+    loadRoomEvents();
+  } catch (e) { showMsg("evMsg", e.message, "error"); }
+}
+
+function onEventSoon(ev) {
+  sys(`📅 “${ev.title}” starts ${relWhen(ev.start)} in ${roomName(ev.room)}.`, "tip");
+  Sound.play("buzz");
+  notify(`📅 ${ev.title}`, `Starts ${relWhen(ev.start)} in ${roomName(ev.room)}`, keyOf(ev.room));
+}
+
+/* ---------- room category & language ---------- */
+
+const ROOM_CATEGORIES = [["general", "💬 General"], ["games", "🎮 Games"], ["music", "🎵 Music"], ["tech", "💻 Tech"],
+  ["sports", "⚽ Sports"], ["study", "📚 Study"], ["movies", "🎬 Movies"], ["hangout", "☕ Hangout"], ["other", "✨ Other"]];
+const ROOM_LANGS = [["", "Any language"], ["id", "🇮🇩 Indonesian"], ["en", "🇬🇧 English"], ["ms", "🇲🇾 Malay"], ["jv", "Javanese"],
+  ["su", "Sundanese"], ["ja", "🇯🇵 Japanese"], ["ko", "🇰🇷 Korean"], ["zh", "🇨🇳 Chinese"], ["es", "🇪🇸 Spanish"],
+  ["fr", "🇫🇷 French"], ["de", "🇩🇪 German"], ["ar", "🇸🇦 Arabic"], ["other", "Other"]];
+const catLabel = (k) => ROOM_CATEGORIES.find(([v]) => v === k)?.[1] || "";
+const langLabel = (k) => ROOM_LANGS.find(([v]) => v === k)?.[1] || "";
+
+function fillSelect(sel, items, first) {
+  sel.innerHTML = "";
+  if (first) sel.add(new Option(first[1], first[0]));
+  for (const [v, l] of items) sel.add(new Option(l, v));
+}
+
+async function loadRoomInfo2(names) {
+  S.roomInfo ||= new Map();
+  const want = names.map(keyOf).filter((n) => !S.roomInfo.has(n));
+  if (!want.length || !S.token) return;
+  for (const n of want) S.roomInfo.set(n, null);
+  try {
+    const { info } = await socialApi(`/roominfo?rooms=${want.map(encodeURIComponent).join(",")}`);
+    for (const [r, v] of Object.entries(info)) S.roomInfo.set(r, v);
+    renderRoomBrowser();
+    renderRoomDialog?.();
+  } catch {}
+}
+
+async function saveRoomCategory() {
+  const c = S.roomDialogFor && conv(S.roomDialogFor);
+  if (!c) return;
+  try {
+    await socialApi("/roominfo", { room: keyOf(c.name), category: $("rdCategory").value, lang: $("rdLang").value });
+    (S.roomInfo ||= new Map()).set(keyOf(c.name), { category: $("rdCategory").value, lang: $("rdLang").value });
+    showMsg("rdMsg", "Category and language saved.", "ok");
+  } catch (e) { showMsg("rdMsg", e.message, "error"); }
+}
+
+/* ---------- friend suggestions ---------- */
+
+async function loadSuggestions() {
+  const el = $("fdResults");
+  try {
+    const { suggestions } = await socialApi("/suggestions");
+    if ($("fdQuery").value.trim()) return;                  // they started searching meanwhile
+    el.innerHTML = suggestions.length ? `<div class="fd-sugg-h">✨ People you may know</div>`
+      : `<div class="empty-hint">Type part of an a09f ID to search.</div>`;
+    for (const sgg of suggestions) {
+      tzOf(sgg.nick);
+      const row = document.createElement("div");
+      row.className = `fd-row st-${statusOf(sgg.nick).state}`;
+      const lt = localTimeText(sgg.nick);
+      row.innerHTML = `<span class="st"></span><b data-nick="${esc(sgg.nick)}">${esc(sgg.nick)}</b>` +
+        `<span class="status-text">${esc(sgg.reasons.join(" · "))}${lt ? `<br><small class="tz-note">${esc(lt)}</small>` : ""}</span>` +
+        `<button class="fd-prof">Profile</button><button class="fd-add">➕ Add Friend</button>`;
+      row.querySelector(".fd-prof").onclick = () => openProfile(sgg.nick);
+      row.querySelector(".fd-add").onclick = async () => { await addFriend(sgg.nick); row.remove(); };
+      el.appendChild(row);
+    }
+  } catch {}
+}
+
+/* ---------- invite links ---------- */
+
+const inviteUrl = (room) => `${ACCOUNT_URL}/join/${encodeURIComponent(roomName(room))}`;
+const INVITE_LINK_RE = new RegExp(`^(?:a09f://join/|${ACCOUNT_URL.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}/join/)([^\\s/?#]+)$`, "i");
+
+/* An invite link (a09f://join/x or the web page) -> "#x", else null. */
+function inviteRoom(text) {
+  const m = (text || "").trim().match(INVITE_LINK_RE);
+  return m ? "#" + decodeURIComponent(m[1]).replace(/^#/, "") : null;
+}
+
+async function copyInvite(c) {
+  const link = inviteUrl(c.name);
+  try { await navigator.clipboard.writeText(link); sys(`🔗 Invite link copied: ${link}`, "system", c.name); }
+  catch { sys(`🔗 Invite link: ${link}`, "system", c.name); }
+}
+
+/* ---------- "Seen by" in rooms ---------- */
+
+function sendRoomRead(c, latest) {
+  if (!canShareTyping(c) || c.kind !== "room" || !S.token || latest <= (c.roomReadSent || 0)) return;
+  c.roomReadSent = latest;
+  socialApi("/roomread", { room: keyOf(c.name), time: latest }).catch(() => {});
+}
+
+async function loadRoomReads(c) {
+  if (c?.kind !== "room" || !canShareTyping(c) || !S.token) return;
+  try {
+    const { reads } = await socialApi(`/roomreads?room=${encodeURIComponent(keyOf(c.name))}`);
+    (S.roomReads ||= new Map()).set(keyOf(c.name), new Map(Object.entries(reads)));
+    if (S.current === keyOf(c.name)) renderSeen();
+  } catch {}
+}
+
+function onRoomRead(d) {
+  if (keyOf(d.user) === keyOf(S.me)) return;
+  const m = (S.roomReads ||= new Map()).get(keyOf(d.room)) || new Map();
+  m.set(keyOf(d.user), Math.max(m.get(keyOf(d.user)) || 0, d.time));
+  S.roomReads.set(keyOf(d.room), m);
+  if (S.current === keyOf(d.room)) renderSeen();
+}
+
+/* People in the room (not me) who read up to my last message. */
+function roomSeenBy(c, last) {
+  const reads = S.roomReads?.get(keyOf(c.name));
+  if (!reads) return [];
+  return [...reads].filter(([u, t]) => t >= last.time && u !== keyOf(S.me) && !isIgnored(u)).map(([u]) => u).sort();
+}
+
+/* ---------- private notes about people ---------- */
+
+async function loadNotes() {
+  try { S.notes = new Map(Object.entries((await socialApi("/notes")).notes)); } catch {}
+}
+
+function saveNote(nick, text) {
+  clearTimeout(S.noteTimer);
+  S.noteTimer = setTimeout(() => {
+    (S.notes ||= new Map());
+    if (text.trim()) S.notes.set(keyOf(nick), text.trim()); else S.notes.delete(keyOf(nick));
+    socialApi("/note", { about: keyOf(nick), text }).then(() => showMsg("pfMsg", "Note saved — only you can see it.", "ok"))
+      .catch((e) => showMsg("pfMsg", e.message, "error"));
+  }, 600);
+}
+
+/* ---------- export a conversation (JSON) ---------- */
+
+const EXPORT_PAGE = 1000, EXPORT_MAX = 50000;
+
+/* All of a conversation's history from soju (paged, not drawn), with edits,
+ * deletions and reactions, saved to Downloads as JSON. */
+async function exportConversation(c) {
+  if (!has("draft/chathistory") || S.exporting) return;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const ex = { key: keyOf(c.name), lines: [], pageDone: false, count: 0 };
+  S.exporting = ex;
+  let before = "*";
+  try {
+    for (let total = 0; total < EXPORT_MAX;) {
+      $("typing").textContent = `Exporting… ${ex.lines.length} messages`;
+      ex.pageDone = false; ex.count = 0;
+      send(`CHATHISTORY BEFORE ${c.name} ${before === "*" ? "timestamp=" + new Date(Date.now() + 60000).toISOString() : before} ${EXPORT_PAGE}`);
+      for (let t = 0; t < 300 && !ex.pageDone; t++) await wait(50);
+      if (!ex.pageDone || !ex.count) break;
+      total += ex.count;
+      const oldest = ex.lines[0];
+      before = `timestamp=${oldest.tags.time}`;
+      if (ex.count < EXPORT_PAGE) break;
+    }
+  } finally { S.exporting = null; renderTyping(); }
+  let meta = { reactions: [], edits: [] };
+  try { meta = await socialApi(`/msgmeta?conv=${encodeURIComponent(c.name)}`); } catch {}
+  const edits = new Map(meta.edits.map((e) => [msgKeyStr(e), e.text]));
+  const reacts = new Map();
+  for (const r of meta.reactions) {
+    const k = msgKeyStr(r), o = reacts.get(k) || {};
+    (o[r.emoji] ||= []).push(r.user);
+    reacts.set(k, o);
+  }
+  const messages = ex.lines.map((l) => {
+    const from = nickOf(l.prefix);
+    const m = msgFrom(l, from);
+    const k = msgKeyOf(c, m);
+    const out = { time: new Date(m.time).toISOString(), from, text: stripIrc(m.txt) };
+    if (m.cls.includes("action")) out.action = true;
+    if (edits.has(k)) out.edited_text = stripIrc(edits.get(k));
+    if (S.redactions?.has(k)) { out.deleted = true; delete out.text; }
+    if (reacts.has(k)) out.reactions = reacts.get(k);
+    return out;
+  });
+  const doc = {
+    app: "a09f", exported_by: S.me, exported_at: new Date().toISOString(), timezone: MY_TZ,
+    conversation: { name: c.name, type: c.kind === "room" ? "room" : "private" }, count: messages.length, messages,
+  };
+  const name = `a09f-${roomName(c.name)}-${new Date().toISOString().slice(0, 10)}`;
+  try {
+    const path = await invoke("save_export", { name, contents: JSON.stringify(doc, null, 2) });
+    addMsg(c.name, { who: "System", txt: `⬇ Exported ${messages.length} messages to ${path}`, cls: "service", reveal: path });
+  } catch (e) { sys(`Couldn't save the export: ${e}`, "error"); }
+}
+
+/* ---------- signed-in devices ---------- */
+
+async function loadDevices() {
+  const el = $("devList");
+  el.innerHTML = `<div class="empty-hint">Loading…</div>`;
+  try {
+    const { sessions } = await socialApi("/sessions");
+    el.innerHTML = "";
+    for (const d of sessions) {
+      const row = document.createElement("div");
+      row.className = "pv-row dev-row";
+      row.innerHTML = `<span>💻 <b>${esc(d.device || "Unknown device")}</b>${d.current ? " <i>(this device)</i>" : ""}` +
+        `<br><small>Active ${esc(agoText(d.last))} · signed in ${esc(new Date(d.created * 1000).toLocaleString())}</small></span>` +
+        (d.current ? "" : `<button>Sign out</button>`);
+      row.querySelector("button")?.addEventListener("click", async () => {
+        try { await socialApi("/session/revoke", { sid: d.sid }); loadDevices(); }
+        catch (e) { showMsg("pwMsg", e.message, "error"); }
+      });
+      el.appendChild(row);
+    }
+  } catch (e) { el.innerHTML = `<div class="empty-hint">${esc(e.message)}</div>`; }
+}
+
 /* ---------- actions ---------- */
 
 async function doSignIn() {
@@ -4480,6 +4838,8 @@ function doDisconnect(message = "", isError = false) {
   S.meta = new Map(); S.polls = new Map(); S.lastSeen = new Map(); clearInterval(S.lastSeenTimer);
   S.nameColors = new Map(); S.colorQueue = new Set(); S.tz = new Map(); S.tzQueue = new Set(); S.roomTz = new Map();
   S.previews = new Map(); S.active = new Map(); S.scheduled = []; $("schedBar").style.display = "none";
+  S.evCache = new Map(); S.roomInfo = new Map(); S.roomReads = new Map(); S.notes = new Map(); S.exporting = null;
+  $("eventsDialog").style.display = "none";
   S.saved = []; S.savedKeys = new Set(); S.imv = new Map(); S.roomTyping = new Map(); S.pendingExpire = []; S.cardCache = new Map();
   for (const id of ["qsDialog", "savedDialog"]) $(id).style.display = "none";
   hideCard(); setExpire(0); applyImv();
@@ -4526,7 +4886,7 @@ function joinOrSwitch(name) {
  * joined straight away; a new one first gets the Create Room dialog, and
  * the room only comes into being when the person confirms. */
 async function joinOrCreate(name) {
-  name = normRoom(name);
+  name = normRoom(inviteRoom(name) || name);
   if (!name) return;
   if (conv(keyOf(name))?.kind === "room") { switchTo(name); return; }
   if (isConference(name) || !/^[#&][^\s,\x07]{1,49}$/.test(name)) { joinRoom(name); return; }
@@ -4980,6 +5340,22 @@ $("btnDark").onclick = () => setDark(!document.body.classList.contains("dark"));
 setDark(localStorage.getItem("a09f.dark") === "1");
 $("fmtExpire").onclick = (e) => { e.stopPropagation(); expireMenu(e); };
 $("fmtSchedule").onclick = (e) => { e.stopPropagation(); scheduleMenu(e); };
+listen("deep-link", (e) => {
+  const room = inviteRoom(String(e.payload || ""));
+  if (!room) return;
+  if (S.phase === "online" && S.burstDone) joinOrCreate(room); else S.pendingDeepLink = room;
+}).catch(() => {});
+$("evClose").onclick = closeRoomEvents;
+$("evCreate").onclick = createEvent;
+$("eventsDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closeRoomEvents(); });
+$("rdCatSave").onclick = saveRoomCategory;
+fillSelect($("rdCategory"), ROOM_CATEGORIES);
+fillSelect($("rdLang"), ROOM_LANGS);
+fillSelect($("rbCat"), ROOM_CATEGORIES, ["", "All categories"]);
+fillSelect($("rbLang"), ROOM_LANGS.slice(1), ["", "All languages"]);
+$("rbCat").onchange = renderRoomBrowser;
+$("rbLang").onchange = renderRoomBrowser;
+$("pfNote").addEventListener("input", () => S.profileNick && saveNote(S.profileNick, $("pfNote").value));
 $("pfActiveAlways").onchange = saveActive;
 $("pfActiveFrom").onchange = saveActive;
 $("pfActiveTo").onchange = saveActive;

@@ -63,6 +63,11 @@ API (errors: 4xx/5xx {"ok": false, "error": "<human readable>"})
        sent at `due` by soju on the user's behalf (network quote)
   GET  /preview?url=      link preview {title, description, image, site} (SSRF-checked)
   GET  /preview/img?u=&token=   thumbnail proxied through the service
+  Rooms/people: GET /roomevents?room=, GET /event?id=, POST /event/create|rsvp|delete;
+       GET /roominfo?rooms=, POST /roominfo {"room","category","lang"}; GET /suggestions;
+       GET /roomreads?room=, POST /roomread {"room","time"}; GET /notes, POST /note {"about","text"}
+  Devices: POST /session takes "device"; GET /sessions; POST /session/revoke {"sid"}
+  GET  /join/<room>     public invite page ("Open in a09f" -> a09f://join/<room>)
   GET  /prefs  /  POST /prefs {"ignore":[ids],"friendsOnly":bool}
   GET  /users/search?q= -> {"users": [ids]} (substring match on IDs)
   GET  /events?token=   Server-Sent Events: friend-request, friend-accepted,
@@ -500,6 +505,35 @@ class Handler(BaseHTTPRequestHandler):
                         rooms = [r for r in q.get("rooms", [""])[0].lower().split(",") if r.startswith(("#", "&")) and len(r) <= 50]
                         out = {"tz": social.room_tz(conn, rooms)}
                 self._json(200, {"ok": True, **out})
+            elif url.path.startswith("/join/"):
+                self._join_page(url.path[len("/join/"):])
+            elif url.path in ("/roomevents", "/event", "/roominfo", "/suggestions", "/roomreads", "/notes", "/sessions"):
+                q = parse_qs(url.query)
+                me = self._token_user()
+                arg = lambda k: q.get(k, [""])[0]
+                with db() as conn:
+                    try:
+                        if url.path == "/roomevents":
+                            out = {"events": social.room_events(conn, me, arg("room").lower())}
+                        elif url.path == "/event":
+                            out = social.event_state(conn, me, int(arg("id") or 0))
+                        elif url.path == "/roominfo":
+                            rooms = [r for r in arg("rooms").lower().split(",") if r.startswith(("#", "&")) and len(r) <= 50]
+                            out = {"info": social.room_info(conn, rooms)}
+                        elif url.path == "/suggestions":
+                            out = {"suggestions": social.suggestions(conn, me, social.get_prefs(conn, me).get("ignore", []))}
+                        elif url.path == "/roomreads":
+                            out = {"reads": social.room_reads(conn, arg("room").lower())}
+                        elif url.path == "/notes":
+                            out = {"notes": social.notes(conn, me)}
+                        else:
+                            auth = self.headers.get("Authorization", "")
+                            out = {"sessions": social.sessions_for(me, auth[7:])}
+                    except social.SocialFail as f:
+                        raise Fail(f.status, f.message)
+                    except ValueError:
+                        raise Fail(400, "Bad request.")
+                self._json(200, {"ok": True, **out})
             elif url.path == "/scheduled":
                 me = self._token_user()
                 with db() as conn:
@@ -578,7 +612,8 @@ class Handler(BaseHTTPRequestHandler):
               "/friends/rename-group", "/typing", "/session/end", "/prefs", "/read",
               "/profile/updated", "/session/revoke-others", "/redact", "/announce",
               "/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind", "/namecolor",
-              "/expire", "/save", "/activity", "/imv", "/tz", "/active", "/schedule", "/scheduled/cancel"}
+              "/expire", "/save", "/activity", "/imv", "/tz", "/active", "/schedule", "/scheduled/cancel",
+              "/event/create", "/event/rsvp", "/event/delete", "/roominfo", "/roomread", "/note", "/session/revoke"}
 
     def do_POST(self):
         if self.path in self.SOCIAL:
@@ -653,7 +688,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _session(self, ip, username, body):
         self._password_ok(ip, username, str(body.get("password", "")))
-        token = social.new_session(username)
+        token = social.new_session(username, body.get("device", ""))
         self._json(200, {"ok": True, "token": token, "sid": social.sid_of(token), "admin": username in ADMINS})
 
     def _read_body(self):
@@ -715,7 +750,43 @@ class Handler(BaseHTTPRequestHandler):
                     with db() as conn:
                         social.note_activity(conn, room)
                         social.note_room_tz(conn, room, me)
+                        social.note_user_room(conn, me, room)
                 self._json(200, {"ok": True})
+                return
+            if self.path in ("/event/create", "/event/rsvp", "/event/delete", "/roominfo", "/roomread", "/note", "/session/revoke"):
+                room = str(body.get("room", "")).strip().lower()
+                room_ok = room.startswith(("#", "&")) and len(room) <= 50 and not re.search(r"[\s,\x00-\x1f]", room)
+                with db() as conn:
+                    try:
+                        out = {}
+                        if self.path == "/event/create":
+                            if not room_ok:
+                                raise Fail(400, "Bad room.")
+                            out = {"id": social.create_event(conn, me, room, body.get("title"), body.get("start", 0))}
+                        elif self.path == "/event/rsvp":
+                            st = body.get("status")
+                            social.rsvp(conn, me, int(body.get("id") or 0), None if st is None else str(st))
+                        elif self.path == "/event/delete":
+                            social.delete_event(conn, me, int(body.get("id") or 0))
+                        elif self.path == "/roominfo":
+                            if not room_ok:
+                                raise Fail(400, "Bad room.")
+                            social.set_room_info(conn, me, room, body.get("category"), body.get("lang"))
+                        elif self.path == "/roomread":
+                            if room_ok and not room.startswith("#conf-"):
+                                social.room_read(conn, me, room, int(body.get("time") or 0))
+                        elif self.path == "/note":
+                            about = nick("about")
+                            if not USERNAME_RE.match(about):
+                                raise Fail(400, "Bad request.")
+                            social.set_note(conn, me, about, body.get("text"))
+                        else:
+                            out = {"revoked": social.revoke_sid(me, str(body.get("sid", "")))}
+                    except social.SocialFail as f:
+                        raise Fail(f.status, f.message)
+                    except (TypeError, ValueError):
+                        raise Fail(400, "Bad request.")
+                self._json(200, {"ok": True, **out})
                 return
             if self.path in ("/active", "/schedule", "/scheduled/cancel"):
                 with db() as conn:
@@ -880,6 +951,34 @@ class Handler(BaseHTTPRequestHandler):
                 raise Fail(f.status, f.message)
         return {}
 
+    def _join_page(self, raw):
+        """Public invite page: works in any browser, opens the app if installed."""
+        from urllib.parse import unquote
+        import html as _h
+        room = unquote(raw).strip().lstrip("#")
+        if not re.match(r"^[^\s,#&\x00-\x1f/<>\"'\\]{1,49}$", room):
+            self._json(404, {"ok": False, "error": "not found"})
+            return
+        esc = _h.escape(room)
+        app_url = f"a09f://join/{esc}"
+        page = f"""<!doctype html><html><head><meta charset="utf-8"><title>Join #{esc} on a09f</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{{font-family:Verdana,sans-serif;background:#f3edfb;display:flex;justify-content:center;padding-top:12vh;margin:0}}
+.card{{background:#fff;border:1px solid #c9b8ec;border-radius:10px;padding:28px 36px;text-align:center;max-width:380px}}
+h1{{color:#5b2a8c;margin:0 0 6px}}a.btn{{display:inline-block;margin-top:18px;background:#6a3aa2;color:#fff;padding:10px 22px;
+border-radius:6px;text-decoration:none;font-weight:bold}}p{{color:#555;font-size:13px}}code{{background:#f6f2fb;padding:2px 6px}}</style>
+</head><body><div class="card"><h1>a09f</h1><p>You're invited to the chat room</p><h2>#{esc}</h2>
+<a class="btn" href="{app_url}">Open in a09f</a>
+<p>Don't have the app open? Start a09f and type <code>{esc}</code> in the Join box,<br>or press Ctrl/Cmd+K and paste this link.</p>
+</div></body></html>"""
+        data = page.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+        self.end_headers()
+        self.wfile.write(data)
+
     def log_message(self, fmt, *args):
         # Request line only (no bodies/passwords); never print the SSE token,
         # and skip the chatty typing pings unless they fail.
@@ -901,6 +1000,9 @@ def reminder_loop():
                     social.push(r["user"], "reminder", r)
                 social.mark_delivered(conn, [r["id"] for r in due])
                 social.expire_due(conn)
+                for ev in social.events_starting(conn):
+                    for u in ev["users"]:
+                        social.push(u, "event-soon", ev)
                 for m in social.due_scheduled(conn):
                     rc, out = sojuctl("user", "run", m["user"], "network", "quote", NETWORK_NAME,
                                       f"PRIVMSG {m['target']} :{m['text']}")

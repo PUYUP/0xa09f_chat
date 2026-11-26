@@ -22,6 +22,11 @@
       "csp": null
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": { "schemes": ["a09f"] }
+    }
+  },
   "bundle": {
     "active": true,
     "icon": []

@@ -89,6 +89,48 @@ fn cred_clear(account: String) {
     }
 }
 
+/// "macOS · my-laptop": shown in the account's list of signed-in devices.
+#[tauri::command]
+fn device_name() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    };
+    // macOS: the friendly "Computer Name" (plain `hostname` can be an IP there).
+    let named = if cfg!(target_os = "macos") {
+        std::process::Command::new("scutil").args(["--get", "ComputerName"]).output().ok()
+    } else {
+        None
+    };
+    let host = named
+        .filter(|o| o.status.success())
+        .or_else(|| std::process::Command::new("hostname").output().ok())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|h| h.trim().trim_end_matches(".local").to_string())
+        .filter(|h| !h.is_empty());
+    match host {
+        Some(h) => format!("{os} · {h}"),
+        None => os.to_string(),
+    }
+}
+
+/// Write a conversation export to the Downloads folder and return its path.
+/// The app only chooses the base name (sanitized here), never the folder.
+#[tauri::command]
+fn save_export(app: AppHandle, name: String, contents: String) -> Result<String, String> {
+    let dir = app.path().download_dir().map_err(|e| e.to_string())?;
+    let safe: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .take(80)
+        .collect();
+    let path = dir.join(format!("{safe}.json"));
+    std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// True when the OS started us at login (autostart passes AUTOSTART_ARG).
 #[tauri::command]
 fn launched_at_login() -> bool {
@@ -141,6 +183,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![AUTOSTART_ARG]),
@@ -149,10 +192,21 @@ pub fn run() {
             stream: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
-            connect, send, disconnect, cred_save, cred_load, cred_clear, launched_at_login
+            connect, send, disconnect, cred_save, cred_load, cred_clear, launched_at_login, device_name, save_export
         ])
         .setup(|app| {
             build_tray(app.handle())?;
+            // a09f://join/<room>: hand invite links to the UI.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        show_main(&handle);
+                        let _ = handle.emit("deep-link", url.to_string());
+                    }
+                });
+            }
             // Started at login: stay in the tray (auto sign-in still runs).
             if launched_at_login() {
                 if let Some(w) = app.get_webview_window("main") {

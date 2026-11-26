@@ -398,6 +398,26 @@
   body.dark #schedBar { background: #1e2433; border-color: #33405a; }
   .pf-active { display: flex; align-items: center; gap: 6px; }
   .pf-active input[type=time] { padding: 3px 4px; }
+  /* events, room tags, suggestions, notes, devices */
+  .evc { margin: 4px 0 4px 64px; max-width: 420px; border: 1px solid #d6d0bd; border-left: 3px solid #e0a030; border-radius: 6px; padding: 6px 8px; background: #fffdf6; }
+  #evList .evc { margin: 6px 10px; max-width: none; }
+  .evc-title { font-weight: bold; }
+  .evc-when { font-size: 11px; margin: 2px 0 5px; }
+  .evc-rsvp { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .evc-rsvp button { font-size: 11px; padding: 1px 8px; }
+  .evc-rsvp button.on { border-color: var(--purple); background: #efe6fb; font-weight: bold; }
+  .evc-x { margin-left: auto; font-size: 10px; color: var(--error); cursor: pointer; text-decoration: underline; }
+  body.dark .evc { background: #241e30; border-color: #4a4060; }
+  .modal .ev-pane { width: min(560px, 94%); }
+  .ev-new { border-top: 1px solid var(--lilac-2); }
+  .ev-new input[type=text] { flex: 1; }
+  .rb-tools select { max-width: 140px; }
+  .rb-tags { color: #6d5a99; font-weight: normal; font-size: 10px; }
+  .fd-sugg-h { padding: 6px 10px; font-weight: bold; color: var(--purple-d); background: #faf8fd; border-bottom: 1px solid #f0ebf7; }
+  #pfNote { font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid #c9c1ad; border-radius: 3px; resize: vertical; width: 100%; box-sizing: border-box; background: #fffef5; }
+  .pf-note-l { display: block; margin-top: 8px; font-weight: bold; color: var(--purple-d); font-size: 11px; }
+  .hc-note { font-size: 11px; color: #7a6a2a; background: #fffbe6; border-radius: 3px; padding: 2px 4px; margin-bottom: 4px; }
+  .dev-row small { color: var(--dim); }
   /* @mentions */
   .mention { color: var(--purple); font-weight: bold; }
   .mention.me { background: #ffe58a; color: #5a3d00; border-radius: 3px; padding: 0 2px; }
@@ -675,6 +695,7 @@
       <div class="pane-title">Browse Chat Rooms <span class="x" id="rbClose" title="Close">✕</span></div>
       <div class="rb-tools">
         <input type="text" id="rbSearch" placeholder="Search rooms by name or topic…">
+        <select id="rbCat"></select><select id="rbLang"></select>
         <button id="rbRefresh">Refresh</button>
       </div>
       <div id="rbList"></div>
@@ -706,6 +727,10 @@
         </div>
         <div class="hint">Lets you reset your password if you forget it. Only you can see it.</div>
         <div id="pwEmailMsg" class="form-msg"></div>
+        <div class="pw-sep"></div>
+        <label>Signed-in devices</label>
+        <div id="devList" class="cf-list"></div>
+        <div class="hint">Signing a device out ends its session. To lock someone out for good, also change your password.</div>
       </div>
     </form>
   </div>
@@ -721,6 +746,8 @@
         <div class="pf-row"><span>Location</span><span id="pfvLocation"></span></div>
         <div class="pf-row pf-about"><span>About</span><span id="pfvAbout"></span></div>
         <div class="pf-row"><span>Member since</span><span id="pfvSince"></span></div>
+        <label class="pf-note-l">📝 Private note <span class="hint">(only you can see this)</span></label>
+        <textarea id="pfNote" rows="2" maxlength="1000" placeholder="e.g. met at the seminar, likes coffee"></textarea>
         <div class="pf-actions">
           <button type="button" id="pfMessage">💬 Send Message</button>
           <button type="button" id="pfAddFriend">➕ Add Friend</button>
@@ -759,6 +786,9 @@
           <div class="rd-row"><span>Password</span><input type="text" id="rdKey" maxlength="23" placeholder="none"></div>
           <div class="rd-row"><span>Max people</span><input type="number" id="rdLimit" min="0" max="9999" placeholder="no limit"></div>
           <button id="rdSave" class="rd-btn">Save Settings</button>
+          <div class="rd-h">Category &amp; language</div>
+          <div class="hint">Helps people find the room in 🔍 Rooms.</div>
+          <div class="rd-row"><select id="rdCategory"></select><select id="rdLang"></select><button id="rdCatSave">Save</button></div>
           <div id="rdWelcomeBox">
             <div class="rd-h">Welcome message</div>
             <div class="hint">Shown to everyone who joins.</div>
@@ -809,6 +839,18 @@
     <div class="pane">
       <div class="pane-title">⭐ Saved Messages <span class="x" id="svClose" title="Close">✕</span></div>
       <div id="svList" class="fd-list"></div>
+    </div>
+  </div>
+  <div id="eventsDialog" class="modal" style="display:none">
+    <div class="pane pf-pane ev-pane">
+      <div class="pane-title"><span id="evTitle">📅 Events</span> <span class="x" id="evClose" title="Close">✕</span></div>
+      <div id="evList" class="fd-list"></div>
+      <div class="pw-body ev-new">
+        <label>Plan an event <span class="hint">(times are in your timezone; everyone sees their own)</span></label>
+        <div class="rd-row"><input type="text" id="evName" maxlength="120" placeholder="e.g. Movie night 🎬">
+          <input type="datetime-local" id="evWhen"><button id="evCreate">Create</button></div>
+        <div id="evMsg" class="form-msg"></div>
+      </div>
     </div>
   </div>
   <div id="annDialog" class="modal" style="display:none">

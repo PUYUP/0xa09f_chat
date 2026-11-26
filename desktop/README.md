@@ -229,6 +229,31 @@ server/protokol di layar.
   port web, semua alamat hasil DNS harus publik dan koneksi ke IP yang sudah
   dicek, redirect dicek ulang, batas ukuran/waktu); gambar lewat proxy
   service sehingga IP user tidak sampai ke situs lain
+- **Event di room** (📅 Events di judul room): judul + waktu (waktu lokal
+  pembuat), diumumkan di room sebagai kartu dengan RSVP ✅ Going / 🤔 Maybe /
+  ❌ Can't; setiap orang melihat jam dalam zona waktunya sendiri. Yang Going/
+  Maybe mendapat pengingat 15 menit sebelum mulai. Pembuat bisa membatalkan
+- **Kategori & bahasa room** (⚙️ Settings): filter Category/Language di
+  🔍 Rooms, label di tiap baris
+- **Saran teman** di Find People (saat kotak pencarian kosong): teman dari
+  teman, orang yang aktif di room yang sama 14 hari terakhir, bonus zona waktu
+  dekat
+- **Link undangan** (🔗 Link di judul room publik): link web
+  `http://…:16680/join/<room>` (halaman "Open in a09f" → `a09f://join/<room>`).
+  Di dalam app, link undangan di chat jadi tombol "💬 Join …"; bisa ditempel
+  di kotak Join atau Cmd/Ctrl+K. Membuka `a09f://` dari luar app
+  (`tauri-plugin-deep-link`) bekerja di build yang terpasang, tidak di
+  `tauri dev`
+- **"👁 Seen by"** di bawah pesan terakhirmu di room (room publik saja)
+- **Catatan pribadi** tentang seseorang di dialog profilnya (hanya kamu yang
+  lihat), tampil juga di kartu hover
+- **⬇ Export** percakapan ke `~/Downloads/a09f-<nama>-<tanggal>.json`
+  (seluruh history dari soju, termasuk edit, hapus, dan reaksi); folder dipilih
+  Rust, bukan JavaScript
+- **Perangkat yang login** (🔑 Password → Signed-in devices): nama perangkat
+  (OS · nama komputer), aktif terakhir, tombol Sign out (perangkat itu langsung
+  keluar). Perangkat yang tidak dipakai 2 hari otomatis keluar. Untuk
+  mengunci orang lain sepenuhnya tetap perlu ganti password
 - **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
   mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
   **Only my friends can send me private messages** = user mode `+g` solanum +
