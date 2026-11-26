@@ -372,6 +372,10 @@
   body.dark button.tool, body.dark #fmtbar button { background: transparent; border-color: transparent; }
   body.dark button.tool:hover, body.dark #fmtbar button:hover:not(:disabled) { background: #3a2f52; border-color: #6a4bb0; }
   body.dark .rb-trending { background: #2f2818; border-color: #5a4a20; } body.dark .rb-hot { background: #241e30; }
+  .msg.flash { animation: msg-flash 1.6s ease-out; }
+  @keyframes msg-flash { 0%, 35% { background: #ffe066; box-shadow: 0 0 0 2px #f0b400; } 100% { background: transparent; box-shadow: none; } }
+  body.dark .msg.flash { animation-name: msg-flash-dark; }
+  @keyframes msg-flash-dark { 0%, 35% { background: #6b5a20; box-shadow: 0 0 0 2px #c9a227; } 100% { background: transparent; box-shadow: none; } }
   /* @mentions */
   .mention { color: var(--purple); font-weight: bold; }
   .mention.me { background: #ffe58a; color: #5a3d00; border-radius: 3px; padding: 0 2px; }

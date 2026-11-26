@@ -439,6 +439,8 @@ function renderMsg(m) {
     paintName(div.querySelector(".who"), m.who);
     div.querySelector(".who").dataset.nick = m.who;
   }
+  if (withMeta) div.dataset.key = msgKeyStr(msgKeyParts(cur, m));      // for jumping to it
+  if (S.jump && div.dataset.key === S.jump.key && Date.now() < S.jump.until) div.classList.add("flash");
   if (withMeta && !deleted) {
     const due = metaFor(keyOf(cur.name)).expiring.get(msgKeyStr(msgKeyParts(cur, m)));
     if (due) div.querySelector(".txt").insertAdjacentHTML("beforeend", ` <span class="expiry" data-due="${due}" title="Disappears ${esc(new Date(due * 1000).toLocaleString())}">${expiryLabel(due)}</span>`);
@@ -446,20 +448,36 @@ function renderMsg(m) {
   }
   if (poll && !deleted) div.appendChild(pollCard(+poll[1]));
   if (withMeta && !deleted && S.token) { reactionChips(div, cur, m); messageTools(div, cur, m); }
+  const stick = nearBottom();
   logEl.querySelector(".seen")?.remove();
   if (isConvMsg(m)) logEl.querySelector(".older.empty")?.remove();      // first message: drop the hint
   logEl.appendChild(div);
-  logEl.scrollTop = logEl.scrollHeight;
+  // Follow new messages only when the reader is at the bottom (or it's mine).
+  if (!S.bulkRender && (stick || m.cls.split(" ").includes("me"))) logEl.scrollTop = logEl.scrollHeight;
   if (!m.others && m.cls.includes("me")) renderSeen();
 }
 
+const nearBottom = () => logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 40;
+
+/* Rebuild the log. A new conversation opens at the newest message; a redraw
+ * of the same one (reactions, edits, …) keeps the reader's position. */
 function renderLog() {
+  const convKey = S.current || STATUS;
+  const same = logEl.dataset.conv === convKey;
+  const atBottom = !same || nearBottom();
+  const prevTop = logEl.scrollTop;
+  S.bulkRender = true;
   logEl.innerHTML = "";
-  const c = conv(S.current || STATUS);
+  const c = conv(convKey);
   const older = olderLink(c);
   if (older) logEl.appendChild(older);
-  for (const m of c?.msgs || []) if (!(m.others && isIgnored(m.who))) renderMsg(m);
-  renderSeen();
+  try {
+    for (const m of c?.msgs || []) if (!(m.others && isIgnored(m.who))) renderMsg(m);
+    renderSeen();
+  } finally { S.bulkRender = false; }
+  logEl.dataset.conv = convKey;
+  if (S.jump && Date.now() < S.jump.until) keepJump();
+  else logEl.scrollTop = atBottom ? logEl.scrollHeight : prevTop;
 }
 
 function switchTo(key) {
@@ -2622,7 +2640,8 @@ function onSearchBatch(lines) {
       `<div><b>${esc(h.from)}:</b> ${emote(formatIrc(esc(h.m.txt)))}</div>`;
     row.onclick = () => {
       closeSearch();
-      if (isChannel(h.target)) joinOrSwitch(h.target); else openPm(h.target);
+      const c = { kind: isChannel(h.target) ? "room" : "pm", name: h.target };
+      jumpToMessage(h.target, msgKeyStr(msgKeyParts(c, h.m)));
     };
     el.appendChild(row);
   }
@@ -2652,8 +2671,9 @@ function renderSeen() {
   const d = document.createElement("div");
   d.className = "seen";
   d.textContent = `✓ Seen ${fmtTime(c.seenAt)}`;
+  const stick = nearBottom();
   logEl.appendChild(d);
-  logEl.scrollTop = logEl.scrollHeight;
+  if (!S.bulkRender && stick) logEl.scrollTop = logEl.scrollHeight;
 }
 
 /* Someone (or I, on another device) saved a profile: refresh what's open. */
@@ -3809,7 +3829,7 @@ function renderSaved() {
       e.stopPropagation();
       socialApi("/save", { ...s, on: false }).catch(() => {});
     };
-    row.onclick = () => { closeSaved(); if (isChannel(s.conv)) joinOrSwitch(s.conv); else openPm(s.conv); };
+    row.onclick = () => { closeSaved(); jumpToMessage(s.conv, msgKeyStr(s)); };
     el.appendChild(row);
   }
 }
@@ -4000,6 +4020,40 @@ function onImvEvent(d) {
     sys(d.theme === "none" ? `${who} removed the chat theme.` : `${who} changed the chat theme to ${label[2]} ${label[1]}.`, "system", other);
   }
   if (S.current === keyOf(other)) applyImv();
+}
+
+/* ---------- jump to a message (Saved, Search) ---------- */
+
+/* Open the conversation, load older pages until the message is there (up to
+ * MAX_JUMP_PAGES), scroll it to the middle and flash it. */
+const MAX_JUMP_PAGES = 15;
+
+async function jumpToMessage(convName, key) {
+  if (isChannel(convName)) {
+    if (conv(keyOf(convName))?.kind !== "room") { joinOrSwitch(convName); sys("Joining the room… open the message again once you're in.", "tip"); return; }
+    switchTo(convName);
+  } else openPm(convName);
+  const c = conv(keyOf(convName));
+  const find = () => logEl.querySelector(`.msg[data-key="${CSS.escape(key)}"]`);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let t = 0; t < 40 && (!c.historyDone || (S.token && !metaFor(keyOf(c.name)).loaded)); t++) await wait(150);
+  let el = find();
+  for (let page = 0; !el && page < MAX_JUMP_PAGES && !c.noMore && S.current === keyOf(c.name); page++) {
+    loadOlder(c);
+    for (let t = 0; t < 60 && c.loadingOlder; t++) await wait(150);
+    el = find();
+  }
+  if (!el) { sys("That message isn't in the chat history any more (it may have been deleted).", "tip"); return; }
+  // Re-renders in the next moments (reactions/edits loading, …) keep the spot.
+  S.jump = { key, until: Date.now() + 2000 };
+  el.scrollIntoView({ block: "center" });
+  el.classList.add("flash");
+}
+
+/* After a re-render: stay on the message we just jumped to. */
+function keepJump() {
+  if (!S.jump || Date.now() > S.jump.until) { S.jump = null; return; }
+  logEl.querySelector(`.msg[data-key="${CSS.escape(S.jump.key)}"]`)?.scrollIntoView({ block: "center" });
 }
 
 /* ---------- actions ---------- */
