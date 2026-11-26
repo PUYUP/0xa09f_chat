@@ -77,7 +77,8 @@ dari IP soju — itu sebabnya IP soju di-exempt dari batas per-IP & throttle.
 | soju users/networks/history | volume `postgres-data` (DB `soju`)  | ya       |
 | soju admin socket           | volume `soju-db` → `/db`            | ya       |
 | soju uploads                 | volume `soju-uploads`               | ya       |
-| email pemulihan & kode reset | volume `register-data` → `/data/register.db` | ya |
+| data service akun (teman, sesi, email pemulihan, reaksi, …) | volume `postgres-data` (DB `a09f`) | ya |
+| data service Python lama (hanya dibaca sekali saat impor) | volume `register-data` → `/data/register.db` | ya (tidak berubah) |
 
 Backup yang relevan: `docker exec postgres pg_dump -U soju soju > backup.sql`
 atau volume `postgres-data`. File `soju.db` lama (sqlite) masih ada di volume
@@ -93,10 +94,28 @@ Catatan: path ban.db adalah compile-time `/var/local/ban.db` — flag
 - **atheme**: `kill -HUP 1` di container.
 - **soju**: `kill -HUP 1` — reload config/tls/motd (tapi bukan `listen`/`db`/`log`).
 
-## Pendaftaran akun (service `register`)
+## Service akun (`api`)
 
-`server/register/` — HTTP kecil (Python stdlib) yang dipakai tombol
-**Create account** di app desktop. Untuk tiap akun baru ia menjalankan
+`server/api/` — service Go (satu binary + `sojuctl` di image Alpine) yang
+dipakai app desktop: Create account, reset password, teman, event live,
+metadata pesan, room. Datanya di Postgres (database `a09f`, role `a09f`).
+
+Setup sekali (stack lama yang sudah jalan):
+
+```bash
+docker compose up -d postgres
+./scripts/init-api-db.sh                 # A09F_DB_PASSWORD di .env + role/database a09f
+docker compose up -d --build --no-deps api
+docker compose rm -sf register 2>/dev/null   # container Python lama, kalau masih ada
+```
+
+Saat start pertama, data service Python (`register-data/register.db`)
+diimpor ke Postgres satu kali (tabel `migrations` mencatatnya); file SQLite
+hanya dibaca. Sesi app (dulu di memori) sekarang di tabel `sessions` (hash
+SHA-256 token), jadi restart service tidak mengeluarkan siapa pun.
+
+Untuk tiap akun baru service menjalankan
+`sojuctl` lewat admin socket soju (volume `soju-db`): Untuk tiap akun baru ia menjalankan
 `sojuctl` lewat admin socket soju (volume `soju-db`):
 
 1. `user create -username <id> -password <pw> -nick <id> -realname <id>` (non-admin)
@@ -110,7 +129,7 @@ Jadi tiap akun punya nick IRC sendiri (bukan `soluser` bersama). Kalau langkah
 curl -s http://127.0.0.1:16680/health
 curl -s -XPOST http://127.0.0.1:16680/register -H 'Content-Type: application/json' \
   -d '{"username":"budi","password":"rahasia123","email":"budi@example.com"}'
-docker logs register          # log request (tanpa body/password)
+docker logs api               # log request (tanpa body/password)
 ```
 
 Aturan: ID `^[a-z][a-z0-9_-]{2,15}$`, tidak boleh nama reserved / `*serv`;
@@ -123,10 +142,10 @@ akun — jangan expose ke publik tanpa proteksi tambahan (captcha/invite).
 Rebuild service ini **tanpa** menyentuh dependensinya:
 
 ```bash
-docker compose up -d --build --no-deps register
+docker compose up -d --build --no-deps api
 ```
 
-Tanpa `--no-deps`, compose ikut me-rebuild/restart `solanum` (register → soju →
+Tanpa `--no-deps`, compose ikut me-rebuild/restart `solanum` (api → soju →
 solanum), semua upstream soju putus, lalu reconnect bareng dari satu IP dan
 kena throttle solanum ("Reconnecting too fast") sampai beberapa menit.
 
@@ -136,11 +155,11 @@ email `<id>@users.a09f.invalid`) saat sign in pertama, lalu mengatur
 
 Hapus akun: `docker exec soju /sojuctl -config /soju-config user delete <id>`
 lalu ulangi dengan token konfirmasi yang dicetak. Email pemulihannya tetap di
-`register.db` (tidak berbahaya; ditimpa kalau ID yang sama didaftarkan lagi).
+tabel `emails` (tidak berbahaya; ditimpa kalau ID yang sama didaftarkan lagi).
 
 ### Email pemulihan & reset password
 
-Create account wajib mengisi email; disimpan di SQLite service ini (bukan di
+Create account wajib mengisi email; disimpan di database service ini (bukan di
 soju/NickServ). Akun lama bisa menambah/mengganti email dari app (🔑 Password
 → Recovery email); endpoint `/email` memverifikasi password dengan login SASL
 sungguhan ke soju. App mengingatkan (Tip) akun yang belum punya email.
@@ -161,7 +180,7 @@ Pengiriman email lewat SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY`
 Default-nya ke container **Mailpit** (`mailpit:1025`): email tidak benar-benar
 terkirim, tapi bisa dibaca di http://127.0.0.1:16825 — cocok untuk dev. Untuk
 produksi isi `SMTP_*` dengan server SMTP asli lalu
-`docker compose up -d --no-deps register`.
+`docker compose up -d --no-deps api`.
 
 Reset manual oleh admin (akun tanpa email):
 
@@ -172,13 +191,11 @@ docker exec soju /sojuctl -config /soju-config user update <id> -password <baru>
 
 ### Teman, friend request, typing (API sosial)
 
-Service yang sama (`server/register/social.py`) menyimpan daftar teman per
-akun (tabel `friends`, `friend_requests` di `register.db`) dan meneruskan
-event live:
+Service yang sama menyimpan daftar teman per akun (tabel `friends`,
+`friend_requests`) dan meneruskan event live:
 
 - `POST /session {"username","password"}` → token bearer (password dicek
-  dengan login SASL ke soju; token hanya di memori — restart service = app
-  login ulang otomatis).
+  dengan login SASL ke soju; sesi disimpan di Postgres).
 - `GET /friends`, `POST /friends/request|respond|remove|move|rename-group`.
 - `POST /typing {"to","active"}` dan `GET /events?token=…` (Server-Sent
   Events: `friend-request`, `friend-accepted`, `friend-declined`, `typing`).
@@ -189,7 +206,8 @@ Endpoint bertoken tidak dihitung ke rate limit per IP (typing sering).
 `/session` dan `/email` (cek password) juga tidak: yang dibatasi hanya
 **password salah**, per IP+ID (`MAX_LOGIN_FAILS_PER_HOUR`, default 10), jadi
 sign in normal tidak pernah menghabiskan jatah bersama satu IP/NAT.
-Satu koneksi SSE = satu thread; cukup untuk skala kecil.
+Satu koneksi SSE = satu goroutine (beberapa KB); app yang lambat kehilangan
+event (buffer 256) alih-alih memperlambat yang lain.
 
 ### Extban akun (`extb_account`)
 

@@ -8,11 +8,11 @@ Stack IRC lengkap yang berjalan di atas Docker Compose:
 | atheme   | IRC services (NickServ dll)  | `s0fx2/atheme-irc-services` (pinned)    | internal only       |
 | soju     | Bouncer                     | `codeberg.org/emersion/soju` (pinned)   | `16667`, `16697`    |
 | postgres | Database soju (users, networks, message history) | `postgres:17-alpine` (pinned) | internal only |
-| register | Pendaftaran akun mandiri, email pemulihan & reset password (app desktop a09f) | `a09f-register` (build lokal, `server/register/`) | `16680` |
+| api | Service akun a09f (Go): buat akun, reset password, teman, event live, metadata pesan, room | `a09f-api` (build lokal, `server/api/`) | `16680` |
 | mailpit | Penangkap email dev: email reset password dibaca di web | `axllent/mailpit` v1.27 | `16825` (web) |
 
 Dokumen lain di folder ini: `configuration.md`, `operations.md`, `usage.md`,
-`testing.md`, dan **`api.md`** (API service akun `register`: akun, teman,
+`testing.md`, dan **`api.md`** (API service akun `api`: akun, teman,
 event live, metadata pesan, room). App desktop: `desktop/README.md` dan
 `desktop/docs/`. Semua tes: `tests/README.md`.
 

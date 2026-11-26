@@ -41,7 +41,7 @@ def _(args):
 @p.on("bye")
 def _(args):
     p.api.post("/active", {"start": None, "end": None})
-    sql("DELETE FROM user_tz WHERE user='frank'; DELETE FROM scheduled WHERE user='alice';")
+    sql("DELETE FROM user_tz WHERE uname='frank'; DELETE FROM scheduled WHERE uname='alice';")
 
 
 p.run()

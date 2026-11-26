@@ -20,7 +20,7 @@ const $ = (id) => document.getElementById(id);
 /* Fixed connection settings — like a classic messenger, nothing to pick. */
 const SERVER = "127.0.0.1:16667";
 const NETWORK = "solanum";        // soju upstream network name
-const ACCOUNT_URL = "http://127.0.0.1:16680";     // server/register: create account, recovery email, reset
+const ACCOUNT_URL = "http://127.0.0.1:16680";     // server/api: create account, recovery email, reset, …
 const REGISTER_URL = `${ACCOUNT_URL}/register`;
 const DEFAULT_ROOM = "#lobby";    // everyone lands here if they're in no room yet
 const BURST_TOKEN = "a09f-burst-done";
@@ -1193,7 +1193,7 @@ function onMonitor(list, online) {
 
 /* ----- friends: server-side list with groups and friend requests ----- */
 
-/* The account service (server/register) keeps the friends list, so it
+/* The account service (server/api) keeps the friends list, so it
  * follows the person to any computer, and adding someone needs their OK.
  * A session token (password checked by the service) authorizes the calls;
  * live events (requests, answers, typing) arrive over Server-Sent Events. */

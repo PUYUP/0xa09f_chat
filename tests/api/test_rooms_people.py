@@ -73,7 +73,7 @@ finally:
     sql(f"DELETE FROM events WHERE room='{room}'; DELETE FROM rsvps; DELETE FROM room_info WHERE room='{room}'; "
         f"DELETE FROM room_activity WHERE room='{room}'; DELETE FROM room_tz WHERE room='{room}'; "
         f"DELETE FROM user_rooms WHERE room='{room}'; DELETE FROM room_reads WHERE room='{room}'; "
-        "DELETE FROM notes WHERE owner='kate'; DELETE FROM user_active WHERE user='kate'; "
-        "DELETE FROM user_tz WHERE user IN ('kate','leo','mia');")
+        "DELETE FROM notes WHERE owner='kate'; DELETE FROM user_active WHERE uname='kate'; "
+        "DELETE FROM user_tz WHERE uname IN ('kate','leo','mia');")
 
 check.done()

@@ -137,18 +137,23 @@ services:
       ircnet:
         ipv4_address: 172.30.99.30
 
-  # Self-service "Create account" for the a09f desktop app. Creates a soju
-  # user + per-user upstream network through soju's admin socket (soju-db).
-  register:
+  # a09f account service (Go, server/api): Create account, password reset,
+  # friends, live events (SSE), message extras, rooms/people data. Creates
+  # soju users + their upstream network through soju's admin socket (soju-db).
+  # Its data is in postgres (database a09f, see scripts/init-api-db.sh); data
+  # of the old Python service (register-data/register.db) is imported once.
+  api:
     build:
-      context: ./register
-    image: a09f-register:latest
-    container_name: register
+      context: ./api
+    image: a09f-api-soju:latest
+    container_name: api
     restart: unless-stopped
     environment:
+      DATABASE_URL: postgres://a09f:${A09F_DB_PASSWORD:?run scripts/init-api-db.sh}@postgres:5432/a09f?sslmode=disable
+      LEGACY_SQLITE: /data/register.db        # Python service data, read once (never changed)
       UPSTREAM_ADDR: irc+insecure://solanum:6667
       NETWORK_NAME: ${SOJU_NETWORK:-solanum}
-      DATA_DIR: /data                         # recovery emails + reset codes (SQLite)
+      SOJU_IRC: soju:6667
       ADMIN_USERS: ${ADMIN_USERS:-}           # comma-separated IDs allowed to send announcements
       # Password-reset email. Defaults deliver to the local Mailpit catcher;
       # point these at a real SMTP server in production.
@@ -159,26 +164,32 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       MAIL_FROM: ${MAIL_FROM:-a09f <no-reply@a09f.invalid>}
     ports:
-      - "${BIND_ADDR:-127.0.0.1}:${REGISTER_PORT:-16680}:8080"    # account registration (HTTP)
+      - "${BIND_ADDR:-127.0.0.1}:${REGISTER_PORT:-16680}:8080"    # account service (HTTP + live events)
     volumes:
       - ./soju/config:/soju-config:ro
       - soju-db:/db
-      - register-data:/data
+      - register-data:/data:ro
     depends_on:
       soju:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      test: ["CMD", "/a09f-api", "-health"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 5s
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     logging: *default-logging
     networks:
       ircnet:
         ipv4_address: 172.30.99.50
 
-  # Development mail catcher: register sends password-reset emails here.
+  # Development mail catcher: the api sends password-reset emails here.
   # Read them at http://127.0.0.1:16825. Not needed with a real SMTP_HOST.
   mailpit:
     image: axllent/mailpit@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68  # v1.27

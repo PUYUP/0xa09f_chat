@@ -15,6 +15,7 @@ which the scenario reads from its private chat with the peer.
 """
 
 import re
+import signal
 import sys
 import time
 
@@ -47,6 +48,26 @@ class Peer:
         print(f"[peer {self.user}] -> {text}", flush=True)
 
     def run(self, secs=400):
+        # The runner may stop us with SIGTERM: leave test rooms either way, or
+        # they pile up across runs (solanum lets a user be in 15 rooms).
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        try:
+            self._loop(secs)
+        finally:
+            self.leave_test_rooms()
+
+    def leave_test_rooms(self):
+        """PART every #zz-* test room this peer is in."""
+        try:
+            rooms = {m.group(1) for l in self.irc.lines
+                     for m in [re.search(rf":{self.user}!\S+ JOIN :?(#zz-\S+)", l)] if m}
+            for r in sorted(rooms):
+                self.irc.send(f"PART {r} :test done")
+            self.irc.read(0.5)
+        except OSError:
+            pass
+
+    def _loop(self, secs):
         rx = re.compile(rf":{self.boss}!\S+ PRIVMSG {self.ctrl_user} :?cmd:(\S+) ?(.*)$")
         end = time.time() + secs
         while time.time() < end:

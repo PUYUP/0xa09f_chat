@@ -3,7 +3,7 @@
 Suite Python (stdlib saja, tanpa dependency) di `tests/`, tiga kelompok:
 
 - `tests/server/` — infrastruktur: Solanum, Soju, TLS
-- `tests/api/` — service akun (`server/register`) + perilaku IRC yang dipakai app
+- `tests/api/` — service akun (`server/api`, Go) + perilaku IRC yang dipakai app
 - `tests/e2e/` — app desktop sungguhan (debug build) menjalankan skenario
 
 Test server mencetak tiap baris IRC `>>`/`<<` dan `[PASS]` per langkah; test

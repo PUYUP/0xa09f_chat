@@ -1,11 +1,11 @@
 # a09f
 
 Messenger gaya klasik di atas IRC: stack server (Solanum + Atheme + Soju +
-service akun) di Docker, dan app desktop Tauri.
+service akun Go) di Docker, dan app desktop Tauri.
 
 | Folder | Isi | Mulai dari |
 |---|---|---|
-| `server/` | stack IRC + service akun (`register`) | [`server/docs/README.md`](server/docs/README.md) |
+| `server/` | stack IRC + service akun (`server/api`, Go) | [`server/docs/README.md`](server/docs/README.md) |
 | `desktop/` | app desktop a09f (Tauri) | [`desktop/README.md`](desktop/README.md), [`desktop/docs/fitur.md`](desktop/docs/fitur.md) |
 | `tests/` | **semua** tes: server, API, e2e di dalam app, visual | [`tests/README.md`](tests/README.md) |
 
@@ -20,7 +20,8 @@ Cepat mulai:
 
 ```bash
 cd server && cp .env.example .env   # isi password
-docker compose up -d
+docker compose up -d postgres && ./scripts/init-api-db.sh
+docker compose up -d --build
 cd ../desktop && npm install && npm run dev
 tests/run_all.sh                    # dari root repo
 ```

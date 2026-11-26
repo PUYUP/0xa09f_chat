@@ -18,7 +18,7 @@ server/protokol di layar.
   Alamat (`127.0.0.1:16667`) dan network (`solanum`) tetap — ubah konstanta
   `SERVER` / `NETWORK` di `ui/app.js`
 - Layar **Create account** (ID + password + konfirmasi) → membuat akun lewat
-  service `server/register` (`http://127.0.0.1:16680`, konstanta
+  service akun `server/api` (`http://127.0.0.1:16680`, konstanta
   `REGISTER_URL`), lalu langsung sign in. Tiap akun punya nick IRC sendiri
 - Room default **lobby**: kalau akun belum ada di room mana pun setelah sign in
   (akun baru, atau sudah keluar dari semua room), app otomatis join `#lobby`
@@ -87,7 +87,7 @@ server/protokol di layar.
   mengundang lagi lewat ➕ Invite. Room conference kosong yang di-join ulang
   langsung ditinggalkan ("That conference has already ended")
 - **Teman (server-side) + grup + friend request**: daftar teman disimpan di
-  service akun (`server/register`, tabel `friends`/`friend_requests`), jadi
+  service akun (`server/api`, tabel `friends`/`friend_requests`), jadi
   ikut ke komputer mana pun. Add Friend = kirim request (pilih grup + pesan
   opsional); penerima melihat kartu **Accept / Decline** di Friends. Kalau
   dua orang saling request → langsung berteman. Teman dikelompokkan per grup

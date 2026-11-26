@@ -9,7 +9,7 @@
 │ ui/index.html (UI + CSS)  │                     └──────┘     └─────────┘   └────────┘
 │ src-tauri/src/lib.rs      │   HTTP + SSE (16680) ┌──────────────────────┐
 │  (jembatan TCP, keychain, │ ─────────────────▶  │ register (service    │
-│   tray, file export)      │                      │ akun, SQLite)        │
+│   tray, file export)      │                      │ akun, Go + Postgres) │
 └──────────────────────────┘                      └──────────────────────┘
 ```
 
@@ -26,7 +26,7 @@
   pertama (password sama, `BouncerServ sasl set-plain` supaya soju login
   sendiri), kepemilikan room (ChanServ REGISTER/GUARD/MLOCK/FLAGS/ENTRYMSG),
   profil (`NickServ SET PROPERTY`).
-- **Service akun** (`server/register`): hal yang tidak bisa lewat IRC atau
+- **Service akun** (`server/api`, Go): hal yang tidak bisa lewat IRC atau
   harus berlaku lintas perangkat — lihat `server/docs/api.md`.
 
 ## Mengapa beberapa hal tidak lewat IRC

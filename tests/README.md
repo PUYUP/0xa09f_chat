@@ -6,7 +6,7 @@ folder sementara, bukan di samping kode. Python hanya stdlib.
 | Folder | Isi | Butuh |
 |---|---|---|
 | `server/` | smoke test stack IRC: solanum, soju, TLS | stack docker |
-| `api/` | service akun (`server/register`) dan fitur IRC yang dipakai app, lewat HTTP dan koneksi IRC sungguhan | stack docker, akun demo |
+| `api/` | service akun (`server/api`, Go) dan fitur IRC yang dipakai app, lewat HTTP dan koneksi IRC sungguhan | stack docker, akun demo |
 | `e2e/` | skenario yang dijalankan **di dalam app desktop asli** (build debug), dengan skrip "peer" sebagai orang lain | stack docker, akun demo, toolchain Rust/Tauri, sesi desktop |
 | `visual/` | UI asli dirender di Chrome headless dengan API Tauri palsu → screenshot | Google Chrome |
 | `lib/` | pembantu bersama: `a09f.py` (klien IRC lewat soju, klien service akun, SSE, laporan cek), `peer.py` (peer e2e) | — |
@@ -47,11 +47,11 @@ python3 tests/api/test_irc_features.py   # +g/ACCEPT, extban $a:, KNOCK, ChanSer
 
 Catatan:
 - `test_account.py` membuat satu akun (service register mengizinkan 5 per IP
-  per jam; restart container `register` untuk mereset hitungannya).
+  per jam; restart container `api` untuk mereset hitungannya).
 - `test_irc_features.py` bisa SKIP cek KNOCK: solanum hanya mengizinkan satu
   knock per user setiap beberapa menit (`knock_delay`).
 - Tes membersihkan apa yang dibuatnya (room di-DROP lewat ChanServ, baris di
-  SQLite service akun dihapus). Run yang terputus bisa meninggalkan room
+  Postgres service akun dihapus; `A09F_PSQL` untuk postgres di luar docker). Run yang terputus bisa meninggalkan room
   `#zz-test-*`; run berikutnya menghapusnya.
 
 ## e2e/

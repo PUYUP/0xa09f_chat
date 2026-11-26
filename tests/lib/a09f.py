@@ -1,7 +1,7 @@
 """Shared helpers for the a09f test suites (stdlib only).
 
 - Irc:   a real IRC client that signs in to soju with SASL, like the app does
-- Api:   the account service (server/register) with a session token
+- Api:   the account service (server/api) with a session token
 - sse:   collect Server-Sent Events from /events in a background thread
 - Check: PASS/FAIL bookkeeping; exit code 1 when anything failed
 
@@ -227,11 +227,14 @@ def server_ms(line):
     return calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")) * 1000 + int(ts[20:23])
 
 
+# How to run SQL on the account service's database (test clean-up only).
+PSQL = os.environ.get("A09F_PSQL", "docker exec -i postgres psql -U soju -d a09f").split()
+
+
 def sql(statement):
-    """Run SQL on the account service's SQLite (test clean-up only)."""
+    """Run SQL on the account service's Postgres database (test clean-up only)."""
     import subprocess
-    code = f"import sqlite3;c=sqlite3.connect('/data/register.db');c.executescript({statement!r});c.commit()"
-    subprocess.run(["docker", "exec", "register", "python3", "-c", code], check=True, capture_output=True)
+    subprocess.run(PSQL + ["-v", "ON_ERROR_STOP=1", "-q", "-c", statement], check=True, capture_output=True)
 
 
 # ---------------------------------------------------------------- reporting

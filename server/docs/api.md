@@ -1,10 +1,11 @@
-# API service akun (`server/register`)
+# API service akun (`server/api`)
 
-Service HTTP kecil (Python stdlib, `server/register/app.py` + `social.py` +
-`preview.py`) di `127.0.0.1:16680` (`REGISTER_PORT`). Ia melengkapi IRC
+Service HTTP dalam Go (`server/api`: satu binary, PostgreSQL lewat pgx,
+`sojuctl` untuk soju) di `127.0.0.1:16680` (`REGISTER_PORT`). Ia melengkapi IRC
 untuk hal-hal yang tidak bisa (atau tidak boleh) lewat IRC: pembuatan akun,
 reset password, daftar teman di server, event live, dan metadata pesan.
-Datanya di SQLite `/data/register.db` (volume `register-data`).
+Datanya di PostgreSQL (database `a09f`); data service Python lama
+(`register.db`) diimpor sekali saat start pertama.
 
 Semua respons JSON `{"ok": true, …}` atau `{"ok": false, "error": "<kalimat untuk user>"}`
 dengan status 4xx/5xx. CORS `*` (dipanggil dari webview Tauri).
@@ -18,8 +19,8 @@ dengan status 4xx/5xx. CORS `*` (dipanggil dari webview Tauri).
   soju. Kirim `Authorization: Bearer <token>`; untuk `GET /events` dan
   `GET /preview/img` token lewat query `?token=` (EventSource/`<img>` tidak
   bisa mengirim header).
-- Token hanya disimpan di memori service: restart service = semua sesi
-  berakhir, app otomatis login ulang. Sesi yang tidak dipakai 2 hari
+- Sesi disimpan di tabel `sessions` (hanya SHA-256 token), jadi restart
+  service tidak mengeluarkan siapa pun. Sesi yang tidak dipakai 2 hari
   berakhir sendiri; TTL maksimum 7 hari.
 - `sid` = 12 karakter pertama SHA-256 token, publik; dipakai app untuk
   mengenali event yang dipicu perangkatnya sendiri.
@@ -128,7 +129,8 @@ Pesan IRC tidak punya ID (soju tidak memberi `msgid`), jadi pesan dikenali dari
 ## Event live (`GET /events?token=`)
 
 Server-Sent Events. Setiap event `event: <nama>` + `data: <json>`; keepalive
-komentar tiap 25 dtk. Satu koneksi = satu thread di service.
+komentar tiap 25 dtk. Satu koneksi = satu goroutine; app yang lambat
+kehilangan event (buffer 256) alih-alih memperlambat yang lain.
 
 | Event | Ke siapa | Data |
 |---|---|---|
@@ -146,7 +148,7 @@ komentar tiap 25 dtk. Satu koneksi = satu thread di service.
 | `reminder` | user | pengingat yang jatuh tempo |
 | `signed-out` | perangkat user | `except: sid` (ganti password) atau `only: sid` (dikeluarkan) |
 
-## Pengaman SSRF (`preview.py`)
+## Pengaman SSRF (`preview.go`)
 
 Halaman diambil server atas nama user, jadi tidak boleh jadi jalan masuk ke
 jaringan internal:

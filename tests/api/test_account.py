@@ -2,7 +2,7 @@
 """Account service: create account, recovery email, password reset by email,
 login limits. Creates one throw-away account (zzt…) and deletes it again.
 
-Needs the docker stack (register, soju, mailpit). Uses one of the 5
+Needs the docker stack (api, soju, mailpit). Uses one of the 5
 account creations allowed per IP per hour."""
 
 import json
