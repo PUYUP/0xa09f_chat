@@ -11,6 +11,7 @@
     --line: #a89cbc; --ink: #000; --dim: #5a5a6a;
     --me: #c00000; --other: #0033cc; --service: #7a5200; --error: #cc0000;
     --online: #2fb84a;
+    --custom: #7d8fb3;          /* custom status: says nothing about being there */
   }
   * { box-sizing: border-box; margin: 0; }
   html, body { height: 100%; }
@@ -101,7 +102,7 @@
   .modal .pf-pane { width: 340px; }
   .pf-head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #faf8fd; border-bottom: 1px solid var(--lilac-2); }
   .pf-dot { width: 14px; height: 14px; border-radius: 50%; background: #bbb; flex: none; }
-  .pf-dot.st-online { background: var(--online); } .pf-dot.st-busy { background: #d9261c; }
+  .pf-dot.st-online { background: var(--online); } .pf-dot.st-custom { background: var(--custom); } .pf-dot.st-busy { background: #d9261c; }
   .pf-dot.st-away { background: #f0a020; } .pf-dot.st-offline, .pf-dot.st-unknown { background: #bbb; }
   .pf-nick { font-weight: bold; font-size: 14px; color: var(--purple-d); }
   .pf-body { padding: 10px 16px 12px; }
@@ -118,7 +119,7 @@
   .cf-list label { display: flex; align-items: center; gap: 6px; margin: 0; padding: 3px 8px; font-weight: normal; color: var(--ink); cursor: pointer; }
   .cf-list label:hover { background: #fff8dc; }
   .cf-list .st { width: 9px; height: 9px; border-radius: 50%; background: #bbb; }
-  .cf-list .st-online .st { background: var(--online); } .cf-list .st-busy .st { background: #d9261c; } .cf-list .st-away .st { background: #f0a020; }
+  .cf-list .st-online .st { background: var(--online); } .cf-list .st-custom .st { background: var(--custom); } .cf-list .st-busy .st { background: #d9261c; } .cf-list .st-away .st { background: #f0a020; }
   .cf-list .status-text { margin-left: auto; }
   .cf-list .empty-hint { padding: 6px 8px; }
   #cfStart { margin-top: 14px; padding: 6px; font-weight: bold; }
@@ -181,7 +182,7 @@
   .fd-list { flex: 1; overflow-y: auto; min-height: 160px; }
   .fd-row { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid #f0ebf7; }
   .fd-row .st { width: 10px; height: 10px; border-radius: 50%; background: #bbb; flex: none; }
-  .fd-row.st-online .st { background: var(--online); } .fd-row.st-busy .st { background: #d9261c; } .fd-row.st-away .st { background: #f0a020; }
+  .fd-row.st-online .st { background: var(--online); } .fd-row.st-custom .st { background: var(--custom); } .fd-row.st-busy .st { background: #d9261c; } .fd-row.st-away .st { background: #f0a020; }
   .fd-row .status-text { flex: 1; }
   .fd-row button { padding: 1px 8px; font-size: 11px; }
   .fd-tag { font-size: 11px; color: #1a7f1a; font-weight: bold; }
@@ -264,7 +265,7 @@
   .mention-opt { display: flex; align-items: center; gap: 6px; padding: 3px 10px; cursor: pointer; }
   .mention-opt.sel, .mention-opt:hover { background: var(--purple); color: #fff; }
   .mention-opt .st { width: 8px; height: 8px; border-radius: 50%; background: #bbb; }
-  .mention-opt.st-online .st { background: var(--online); } .mention-opt.st-busy .st { background: #d9261c; }
+  .mention-opt.st-online .st { background: var(--online); } .mention-opt.st-custom .st { background: var(--custom); } .mention-opt.st-busy .st { background: #d9261c; }
   .mention-opt.st-away .st { background: #f0a020; }
   #typing { min-height: 15px; padding: 1px 10px; font-size: 11px; font-style: italic; color: var(--dim); background: #fff; }
   .msg .invite-join { margin-left: 8px; padding: 0 8px; font-size: 11px; }
@@ -329,6 +330,7 @@
     background: var(--online); border: 1px solid #1d7a30;
   }
   .st-busy::before { background: #e0393e !important; border-color: #8f1d20 !important; }
+  .st-custom::before { background: var(--custom) !important; border-color: #4e5f80 !important; }
   .st-away::before { background: #f39c12 !important; border-color: #9a5d00 !important; }
   .st-offline::before { background: #c4c4c4 !important; border-color: #8a8a8a !important; }
   .st-unknown::before { background: #eee !important; border-color: #bbb !important; }
@@ -338,6 +340,7 @@
   .status-box select { font: inherit; padding: 2px; border: 1px solid #7f9db9; background: #fff; }
   #statusText { width: 170px; }
   #dot.on.st-busy { background: #e0393e; }
+  #dot.on.st-custom { background: var(--custom); }
   #dot.on.st-away { background: #f39c12; }
   .msg .time { color: #999; font-size: 10px; margin-right: 6px; }
   .chan:hover, .pm:hover, .user:not(.self):hover { background: #fff3c4; }

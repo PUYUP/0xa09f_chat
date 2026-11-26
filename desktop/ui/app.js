@@ -925,7 +925,8 @@ const STATUS_PRESETS = {
   busy:      { label: "Busy",          state: "busy" },
   brb:       { label: "Be Right Back", state: "away" },
   stepped:   { label: "Stepped Out",   state: "away" },
-  custom:    { label: "",              state: "online" },
+  // Its own color: a custom message says nothing about whether they're really there.
+  custom:    { label: "",              state: "custom" },
   // Never posted: invisible = staying AWAY on IRC (sent before registration
   // with draft/pre-away), which everyone else already reads as Offline.
   invisible: { label: "Invisible",     state: "offline" },
@@ -1320,7 +1321,7 @@ function submitAddFriend() {
 
 /* ----- the Friends list ----- */
 
-const STATE_ORDER = { online: 0, busy: 1, away: 2, unknown: 3, offline: 4 };
+const STATE_ORDER = { online: 0, custom: 1, busy: 2, away: 3, unknown: 4, offline: 5 };
 
 function renderFriends() {
   const el = $("friends");
@@ -3088,12 +3089,14 @@ function autoReply(target) {
   const c = conv(keyOf(target));
   if (!c || c.kind !== "pm") return;
   const st = statusOf(target);
-  if (!["busy", "away", "offline"].includes(st.state)) { c.autoReplied = null; return; }
+  if (!["busy", "away", "offline", "custom"].includes(st.state)) { c.autoReplied = null; return; }
   const sig = st.state + "|" + st.label;
   if (c.autoReplied === sig) return;            // once per status
   c.autoReplied = sig;
   const text = st.state === "offline"
     ? `${target} is offline right now. They'll get your message when they sign in.`
+    : st.state === "custom"
+    ? `${target}'s status says: “${st.label}”.`
     : `${target} is ${st.label === "Busy" || st.label === "Be Right Back" || st.label === "Stepped Out" ? `“${st.label}”` : `away: “${st.label}”`}. ` +
       `They'll see your message when they're back.`;
   addMsg(target, { who: "Auto-reply", txt: text, cls: "service autoreply" });
