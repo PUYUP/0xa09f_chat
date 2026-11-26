@@ -58,6 +58,7 @@ def init_schema(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS last_seen (user TEXT PRIMARY KEY, time INTEGER NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, "
                  "text TEXT NOT NULL, due INTEGER NOT NULL, delivered INTEGER NOT NULL DEFAULT 0)")
+    conn.execute("CREATE TABLE IF NOT EXISTS name_colors (user TEXT PRIMARY KEY, color TEXT NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS announcements (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                  "author TEXT NOT NULL, text TEXT NOT NULL, created INTEGER NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS prefs (owner TEXT PRIMARY KEY, data TEXT NOT NULL)")
@@ -549,3 +550,30 @@ def mark_delivered(conn, ids):
 def pending_reminders(conn, me):
     rows = conn.execute("SELECT id, text, due FROM reminders WHERE user = ? AND delivered = 0 ORDER BY due", (me,))
     return [dict(zip(("id", "text", "due"), r)) for r in rows]
+
+
+# ---------- name colors ----------
+
+# Readable on the white chat background; the app shows the same palette.
+NAME_COLORS = {"#c0392b", "#d35400", "#b7950b", "#27ae60", "#16a085", "#2980b9",
+               "#1f3a93", "#8e44ad", "#c2185b", "#6d4c41", "#546e7a", "#000000"}
+
+
+def set_name_color(conn, me, color):
+    if color is None or color == "":
+        conn.execute("DELETE FROM name_colors WHERE user = ?", (me,))
+        color = None
+    else:
+        color = str(color).lower()
+        if color not in NAME_COLORS:
+            raise SocialFail(400, "That color isn't available.")
+        conn.execute("INSERT OR REPLACE INTO name_colors VALUES (?, ?)", (me, color))
+    push_all("namecolor", {"user": me, "color": color})
+
+
+def name_colors(conn, users):
+    users = list(users)[:300]
+    if not users:
+        return {}
+    q = ",".join("?" * len(users))
+    return {u: c for u, c in conn.execute(f"SELECT user, color FROM name_colors WHERE user IN ({q})", users)}

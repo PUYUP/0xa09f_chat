@@ -429,6 +429,9 @@ function renderMsg(m) {
   if (deleted) { txt = "🚫 This message was deleted"; quote = ""; div.classList.add("deleted"); }
   div.innerHTML = `<span class="time">${esc(fmtTime(m.time))}</span>` +
     `<span class="who">${esc(m.who)}:</span> <span class="txt">${quote}${txt}</span>`;
+  if (!m.cls.includes("service") && !m.cls.includes("error") && !m.cls.includes("tip") && !m.cls.includes("status")) {
+    paintName(div.querySelector(".who"), m.who);
+  }
   if (poll && !deleted) div.appendChild(pollCard(+poll[1]));
   if (withMeta && !deleted && S.token) { reactionChips(div, cur, m); messageTools(div, cur, m); }
   logEl.querySelector(".seen")?.remove();
@@ -539,6 +542,7 @@ function renderUsers() {
       name.title = "Room owner / moderator";
     }
     if (c.kind === "room" && isMuted(c, nick)) { name.textContent += " 🔇"; name.title = "Muted"; }
+    paintName(name, nick);
     d.appendChild(name);
     d.appendChild(profileButton(nick));
     if (st.state !== "unknown") {
@@ -1137,6 +1141,7 @@ async function startSocial() {
     await migrateLocalFriends();
     loadRedactions(); loadAnnouncements(); loadStats();
     loadLastSeen(); loadDueReminders();
+    nameColor(S.me); S.friends.forEach(nameColor);
     clearInterval(S.lastSeenTimer);
     S.lastSeenTimer = setInterval(loadLastSeen, 120000);
     const cur = S.current && conv(S.current);
@@ -1202,6 +1207,7 @@ function openEvents() {
   on("pins", (d) => { const c = conv(keyOf(d.room)); if (c && S.meta?.has(keyOf(d.room))) loadMeta(c); });
   on("poll", (d) => { if (S.polls?.has(d.id)) loadPoll(d.id); });
   on("reminder", showReminder);
+  on("namecolor", onNameColor);
   on("signed-out", (d) => {
     if (d.except === S.sid || S.phase !== "online") return;
     forgetSavedPassword();
@@ -1339,7 +1345,8 @@ function renderFriends() {
   // mouse drops WebKit's :hover and swallows clicks on the ⋯ buttons.
   const sig = JSON.stringify([S.friends, [...S.friendGroups], S.outgoing, S.incoming.map((r) => r.from),
     S.friends.map((n) => [statusOf(n), S.typing.has(keyOf(n)), conv(keyOf(n))?.unread || 0, S.lastSeen?.get(keyOf(n)) || 0]),
-    [...(S.collapsedGroups || [])], $("friendAdd").style.display, S.prefs.ignore]);
+    [...(S.collapsedGroups || [])], $("friendAdd").style.display, S.prefs.ignore,
+    S.friends.map((n) => S.nameColors?.get(keyOf(n)) ?? "")]);
   if (sig === S.friendsSig) return;
   S.friendsSig = sig;
   el.innerHTML = "";
@@ -1393,6 +1400,7 @@ function friendRow(nick, pending) {
     `<span class="status-text">${esc(typing ? "typing…" : st.label)}</span>` +
     (pm?.unread ? `<span class="badge">${pm.unread > 99 ? "99+" : pm.unread}</span>` : "") +
     `<span class="more" title="More">⋯</span>`;
+  if (!pending && st.state !== "offline") paintName(d.querySelector(".label"), nick);
   d.querySelector(".more").onclick = (e) => { e.stopPropagation(); friendMenu(e, nick, pending); };
   d.oncontextmenu = (e) => { e.preventDefault(); friendMenu(e, nick, pending); };
   d.onclick = () => openPm(nick);
@@ -2089,6 +2097,8 @@ function openProfile(nick) {
   $("pfDot").className = `pf-dot st-${st.state}`;
   $("pfView").style.display = mine ? "none" : "";
   $("pfEdit").style.display = mine ? "" : "none";
+  if (mine) buildColorPicker();
+  $("pfNick").style.color = nameColor(nick) || "";
   $("pfAddFriend").style.display = mine || isFriend(nick) ? "none" : "";
   for (const id of ["pfvName", "pfvLocation", "pfvAbout", "pfvSince"]) $(id).textContent = "…";
   for (const id of Object.values(PROFILE_FIELDS)) { $(id).value = ""; $(id).disabled = true; }
@@ -3520,6 +3530,84 @@ async function loadDueReminders() {
   try { for (const r of (await socialApi("/reminders/due")).reminders) showReminder(r); } catch {}
 }
 
+/* ---------- custom name colors ---------- */
+
+/* Each person may pick a color for their name (👤 Profile). Same palette as
+ * the account service accepts: all readable on the white chat background. */
+const NAME_COLORS = ["#c0392b", "#d35400", "#b7950b", "#27ae60", "#16a085", "#2980b9",
+  "#1f3a93", "#8e44ad", "#c2185b", "#6d4c41", "#546e7a", "#000000"];
+
+/* The color for a nick, or null for the default. Unknown nicks are fetched
+ * in one batch a moment later, then everything re-renders. */
+function nameColor(nick) {
+  if (!nick || isService(nick)) return null;
+  const key = keyOf(nick);
+  S.nameColors ||= new Map();
+  if (S.nameColors.has(key)) return S.nameColors.get(key);
+  if (S.token) {
+    (S.colorQueue ||= new Set()).add(key);
+    clearTimeout(S.colorTimer);
+    S.colorTimer = setTimeout(fetchNameColors, 250);
+  }
+  return null;
+}
+
+async function fetchNameColors() {
+  const users = [...(S.colorQueue || [])];
+  S.colorQueue = new Set();
+  if (!users.length || !S.token) return;
+  for (const u of users) S.nameColors.set(u, null);          // don't ask twice
+  try {
+    const { colors } = await socialApi(`/namecolors?users=${users.map(encodeURIComponent).join(",")}`);
+    let changed = false;
+    for (const [u, c] of Object.entries(colors)) { S.nameColors.set(u, c); changed = true; }
+    if (changed) repaintNames();
+  } catch {}
+}
+
+function repaintNames() {
+  S.friendsSig = null;
+  renderLog(); renderLists(); renderUsers();
+}
+
+function onNameColor(d) {
+  (S.nameColors ||= new Map()).set(keyOf(d.user), d.color || null);
+  repaintNames();
+  if (keyOf(d.user) === keyOf(S.me)) syncColorPicker();
+}
+
+/* Paint an element's text in someone's color (if they picked one). */
+function paintName(el, nick) {
+  const c = nameColor(nick);
+  if (c) el.style.color = c;
+}
+
+function syncColorPicker() {
+  const mine = S.nameColors?.get(keyOf(S.me)) || null;
+  document.querySelectorAll("#pfColors .swatch").forEach((b) => b.classList.toggle("on", (b.dataset.color || null) === mine));
+  $("pfColorPreview").textContent = S.me || "";
+  $("pfColorPreview").style.color = mine || "";
+}
+
+function buildColorPicker() {
+  const box = $("pfColors");
+  box.innerHTML = "";
+  const add = (color, title) => {
+    const b = document.createElement("span");
+    b.className = "swatch" + (color ? "" : " none");
+    if (color) { b.style.background = color; b.dataset.color = color; } else b.textContent = "✕";
+    b.title = title;
+    b.onclick = async () => {
+      try { await socialApi("/namecolor", { color }); }
+      catch (e) { showMsg("pfMsg", e.message, "error"); }
+    };
+    box.appendChild(b);
+  };
+  add(null, "Default color");
+  for (const c of NAME_COLORS) add(c, c);
+  syncColorPicker();
+}
+
 /* ---------- actions ---------- */
 
 async function doSignIn() {
@@ -3551,6 +3639,7 @@ function doDisconnect(message = "", isError = false) {
   for (const id of ["privacyDialog", "findDialog", "searchDialog", "roomDialog", "annDialog", "annBar", "createRoomDialog"]) $(id).style.display = "none";
   S.pendingCreate = null; S.listProbe = null; S.createName = null;
   S.meta = new Map(); S.polls = new Map(); S.lastSeen = new Map(); clearInterval(S.lastSeenTimer);
+  S.nameColors = new Map(); S.colorQueue = new Set();
   S.replyTo = null; S.editing = null; $("composerBar").style.display = "none"; $("pinBar").style.display = "none";
   S.redactions.clear(); S.admin = false; S.announcement = null; $("btnAnnounce").style.display = "none"; setOnlineCount(0);
   S.csReq = null; S.csChain = null; S.roomDialogFor = null;

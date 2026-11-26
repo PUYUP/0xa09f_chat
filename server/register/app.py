@@ -50,6 +50,7 @@ API (errors: 4xx/5xx {"ok": false, "error": "<human readable>"})
   POST /poll/create {"room","question","options"}  -> {"id"};  GET /poll?id=;  POST /poll/vote {"id","option"}
   GET  /lastseen?users=a,b
   POST /remind {"text","minutes"};  GET /reminders;  GET /reminders/due
+  POST /namecolor {"color"|null};  GET /namecolors?users=a,b
   GET  /prefs  /  POST /prefs {"ignore":[ids],"friendsOnly":bool}
   GET  /users/search?q= -> {"users": [ids]} (substring match on IDs)
   GET  /events?token=   Server-Sent Events: friend-request, friend-accepted,
@@ -448,6 +449,11 @@ class Handler(BaseHTTPRequestHandler):
                 after = parse_qs(url.query).get("after", ["0"])[0]
                 with db() as conn:
                     self._json(200, {"ok": True, "announcements": social.announcements_since(conn, int(after or 0))})
+            elif url.path == "/namecolors":
+                self._token_user()
+                users = [u for u in parse_qs(url.query).get("users", [""])[0].lower().split(",") if USERNAME_RE.match(u)]
+                with db() as conn:
+                    self._json(200, {"ok": True, "colors": social.name_colors(conn, users)})
             elif url.path in ("/msgmeta", "/poll", "/lastseen", "/reminders", "/reminders/due"):
                 me = self._token_user()
                 q = parse_qs(url.query)
@@ -492,7 +498,7 @@ class Handler(BaseHTTPRequestHandler):
     SOCIAL = {"/friends/request", "/friends/respond", "/friends/remove", "/friends/move",
               "/friends/rename-group", "/typing", "/session/end", "/prefs", "/read",
               "/profile/updated", "/session/revoke-others", "/redact", "/announce",
-              "/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind"}
+              "/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind", "/namecolor"}
 
     def do_POST(self):
         if self.path in self.SOCIAL:
@@ -613,6 +619,14 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     social.push(target, "redact", item)
                     social.push(me, "redact", item)
+                self._json(200, {"ok": True})
+                return
+            if self.path == "/namecolor":
+                with db() as conn:
+                    try:
+                        social.set_name_color(conn, me, body.get("color"))
+                    except social.SocialFail as f:
+                        raise Fail(f.status, f.message)
                 self._json(200, {"ok": True})
                 return
             if self.path in ("/react", "/edit", "/pin", "/poll/create", "/poll/vote", "/remind"):

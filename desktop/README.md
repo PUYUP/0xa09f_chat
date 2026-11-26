@@ -170,6 +170,10 @@ server/protokol di layar.
   orang, welcome message); room baru dibuat setelah dikonfirmasi, lalu
   pengaturannya dipasang lewat ChanServ MLOCK/ENTRYMSG (atau MODE kalau room
   tidak bisa didaftarkan). Undangan/conference/knock tetap langsung join
+- **Warna nama**: 👤 Profile → Name color (12 warna yang terbaca di latar
+  putih, atau default). Langsung berlaku di chat, Friends, dan Members semua
+  orang (`/namecolor`, event live `namecolor`; warna diambil per batch lewat
+  `/namecolors`)
 - **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
   mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
   **Only my friends can send me private messages** = user mode `+g` solanum +

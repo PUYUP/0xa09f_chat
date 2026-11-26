@@ -258,6 +258,12 @@
   .cr-btns { justify-content: flex-end; margin-top: 10px; }
   .cr-btns .rd-btn { margin-top: 0; }
   #createRoomDialog .pw-body input[type=text], #createRoomDialog .pw-body input[type=number] { padding: 4px 6px; }
+  .pf-colors { display: flex; align-items: center; gap: 10px; }
+  #pfColors { display: grid; grid-template-columns: repeat(7, 20px); gap: 4px; }
+  #pfColors .swatch { width: 20px; height: 18px; border-radius: 3px; cursor: pointer; border: 1px solid rgba(0,0,0,.25); }
+  #pfColors .swatch.none { background: #fff; color: #999; font-size: 10px; text-align: center; line-height: 18px; }
+  #pfColors .swatch.on { outline: 2px solid var(--purple); outline-offset: 1px; }
+  #pfColorPreview { font-size: 13px; }
   /* @mentions */
   .mention { color: var(--purple); font-weight: bold; }
   .mention.me { background: #ffe58a; color: #5a3d00; border-radius: 3px; padding: 0 2px; }
@@ -584,6 +590,9 @@
         <input type="text" id="pfLocation" maxlength="40" placeholder="City or country">
         <label for="pfAbout">About me</label>
         <textarea id="pfAbout" maxlength="200" rows="3" placeholder="A few words about yourself"></textarea>
+        <label>Name color</label>
+        <div class="pf-colors"><div id="pfColors"></div><b id="pfColorPreview"></b></div>
+        <div class="hint">Changes right away — everyone sees your name in this color.</div>
         <div class="hint">Anyone on a09f can see your profile.</div>
         <button type="submit" id="pfSave">Save Profile</button>
       </div>
