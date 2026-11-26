@@ -255,6 +255,9 @@
   .poll-bar { position: absolute; left: 0; top: 0; bottom: 0; background: #ece2fa; z-index: 0; }
   .poll-label, .poll-n { position: relative; z-index: 1; }
   .poll-foot { font-size: 10px; color: var(--dim); margin-top: 2px; }
+  .cr-btns { justify-content: flex-end; margin-top: 10px; }
+  .cr-btns .rd-btn { margin-top: 0; }
+  #createRoomDialog .pw-body input[type=text], #createRoomDialog .pw-body input[type=number] { padding: 4px 6px; }
   /* @mentions */
   .mention { color: var(--purple); font-weight: bold; }
   .mention.me { background: #ffe58a; color: #5a3d00; border-radius: 3px; padding: 0 2px; }
@@ -622,6 +625,26 @@
             <button id="rdDelete" class="rd-danger">Delete this room…</button>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+  <div id="createRoomDialog" class="modal" style="display:none">
+    <div class="pane pf-pane">
+      <div class="pane-title"><span id="crTitle">Create Room</span> <span class="x" id="crClose" title="Close">✕</span></div>
+      <div class="pw-body">
+        <div id="crOwnerHint" class="hint"></div>
+        <label for="crTopic">Topic</label>
+        <input type="text" id="crTopic" maxlength="300" placeholder="What's this room about? (optional)">
+        <label class="pv-check"><input type="checkbox" id="crPrivate"> Private — only invited people can join</label>
+        <label class="pv-check"><input type="checkbox" id="crHidden"> Hidden — not shown in 🔍 Rooms</label>
+        <div class="rd-row"><span>Password</span><input type="text" id="crKey" maxlength="23" placeholder="none"></div>
+        <div class="rd-row"><span>Max people</span><input type="number" id="crLimit" min="2" max="9999" placeholder="no limit"></div>
+        <div id="crWelcomeBox">
+          <label for="crWelcome">Welcome message</label>
+          <input type="text" id="crWelcome" maxlength="200" placeholder="Shown to everyone who joins (optional)">
+        </div>
+        <div class="rd-row cr-btns"><button id="crCancel">Cancel</button><button id="crCreate" class="rd-btn">Create Room</button></div>
+        <div id="crMsg" class="form-msg"></div>
       </div>
     </div>
   </div>

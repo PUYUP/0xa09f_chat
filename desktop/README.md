@@ -164,6 +164,12 @@ server/protokol di layar.
   + suara + notifikasi; yang jatuh tempo saat app tertutup muncul waktu sign in
 - Tombol ⋯ di Friends selalu terlihat, dan daftar Friends hanya digambar ulang
   kalau ada yang berubah (WebKit kehilangan :hover saat baris diganti)
+- **Buat room**: nama room yang diketik (kotak Join, 🔍 Rooms → Create,
+  `/join`) dicek dulu dengan `LIST #nama`. Sudah ada → langsung masuk. Belum
+  ada → dialog **Create Room** (topik, private, hidden, password, batas
+  orang, welcome message); room baru dibuat setelah dikonfirmasi, lalu
+  pengaturannya dipasang lewat ChanServ MLOCK/ENTRYMSG (atau MODE kalau room
+  tidak bisa didaftarkan). Undangan/conference/knock tetap langsung join
 - **Privacy** (🔒): daftar orang yang di-ignore (pesan mereka tidak tampil di
   mana pun; klik kanan orang / ⋯ / tombol 🚫 Ignore di private chat) dan
   **Only my friends can send me private messages** = user mode `+g` solanum +

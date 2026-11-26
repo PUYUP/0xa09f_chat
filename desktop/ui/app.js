@@ -747,6 +747,7 @@ function onNames(params, trailing) {
       if (pc?.key === keyOf(channel)) { S.pendingConf = null; if (alone) startConference(c, pc.invitees); }
       else if (alone) endedConference(c);        // everyone had left: don't revive it
     } else if (alone) claimRoom(c);
+    else if (S.pendingCreate?.key === keyOf(channel)) S.pendingCreate = null;   // it existed after all
   }
   if (keyOf(channel) === S.current) refreshSide();
 }
@@ -785,6 +786,15 @@ function onNumeric(num, params, trailing) {
     case 332: setTopic(params[1], trailing); return;            // topic on join
     case 331: setTopic(params[1], ""); return;                  // no topic
     case 330: if (keyOf(params[1]) === keyOf(S.me)) { S.selfAccount = params[2]; return; } break;
+    case 322: case 323:
+      if (S.listProbe) {                                   // roomExists() is asking
+        if (num === 322 && keyOf(params[1]) === S.listProbe.key) S.listProbe.found = true;
+        if (num === 323) S.listProbe.done(S.listProbe.found);
+        if (num === 323 || !S.listBuf) return;
+      }
+      break;
+  }
+  switch (num) {
     case 321: S.listBuf = []; return;                                             // LIST start
     case 322: S.listBuf?.push({ name: params[1], users: +params[2] || 0, topic: trailing || "" }); return;
     case 323: S.roomList = S.listBuf || []; S.listBuf = null; S.listLoading = false; renderRoomBrowser(); return;
@@ -1734,6 +1744,7 @@ function linked() {
 function claimRoom(c) {
   if (S.link !== "linked") {
     sys(`You created ${roomName(c.name)}. It will disappear when everyone leaves.`, "tip", c.name);
+    applyCreateSettings(c, false);
     return;
   }
   S.claiming = c.name;
@@ -1751,9 +1762,13 @@ function onChanServ(text) {
     serviceQueue([`PRIVMSG ChanServ :SET ${room} GUARD ON`, `PRIVMSG ChanServ :SET ${room} KEEPTOPIC ON`]);
     sys(`🎉 You created ${roomName(room)} — it's your room now. It stays even when everyone leaves, ` +
         `and you can change its topic with ✏️ Topic.`, "system", room);
+    const rc = conv(keyOf(room));
+    if (rc) applyCreateSettings(rc, true);
   } else if (t.includes("too many") || t.includes("maximum")) {
     S.claiming = null;
     sys(`You already own the maximum number of rooms, so ${roomName(room)} will disappear when everyone leaves.`, "tip", room);
+    const rc = conv(keyOf(room));
+    if (rc) applyCreateSettings(rc, false);
   } else if (t.includes("already registered") || t.includes("must be") || t.includes("not")) {
     S.claiming = null;
   }
@@ -3533,7 +3548,8 @@ function doDisconnect(message = "", isError = false) {
   stopSocial(); S.friendGroups.clear(); S.incoming = []; S.outgoing = []; S.friendsSig = null;
   S.prefs = { ignore: [], friendsOnly: false }; S.callerId = null; S.accepted = null; S.blockedTold = null;
   S.findResults = null; S.searching = false;
-  for (const id of ["privacyDialog", "findDialog", "searchDialog", "roomDialog", "annDialog", "annBar"]) $(id).style.display = "none";
+  for (const id of ["privacyDialog", "findDialog", "searchDialog", "roomDialog", "annDialog", "annBar", "createRoomDialog"]) $(id).style.display = "none";
+  S.pendingCreate = null; S.listProbe = null; S.createName = null;
   S.meta = new Map(); S.polls = new Map(); S.lastSeen = new Map(); clearInterval(S.lastSeenTimer);
   S.replyTo = null; S.editing = null; $("composerBar").style.display = "none"; $("pinBar").style.display = "none";
   S.redactions.clear(); S.admin = false; S.announcement = null; $("btnAnnounce").style.display = "none"; setOnlineCount(0);
@@ -3563,12 +3579,97 @@ function joinRoom(name, key = "") {
   send(`JOIN ${name}${key ? " " + key : ""}`);
 }
 
+const normRoom = (name) => { name = name.trim().replace(/\s+/g, "-"); return !name ? "" : isChannel(name) ? name : "#" + name; };
+
 function joinOrSwitch(name) {
-  name = name.trim().replace(/\s+/g, "-");
+  name = normRoom(name);
   if (!name) return;
-  if (!isChannel(name)) name = "#" + name;
   if (conv(keyOf(name))?.kind === "room") switchTo(name);
   else joinRoom(name);
+}
+
+/* ---------- create room: settings first ---------- */
+
+/* Typed room names (Join box, Rooms → Create, /join): an existing room is
+ * joined straight away; a new one first gets the Create Room dialog, and
+ * the room only comes into being when the person confirms. */
+async function joinOrCreate(name) {
+  name = normRoom(name);
+  if (!name) return;
+  if (conv(keyOf(name))?.kind === "room") { switchTo(name); return; }
+  if (isConference(name) || !/^[#&][^\s,\x07]{1,49}$/.test(name)) { joinRoom(name); return; }
+  const exists = await roomExists(name);
+  if (exists) joinRoom(name);
+  else openCreateRoom(name);
+}
+
+/* LIST <name>: a visible room answers 322. Registered rooms always show up
+ * (ChanServ stays in them); an unknown answer counts as "new". */
+function roomExists(name) {
+  return new Promise((resolve) => {
+    const probe = { key: keyOf(name), found: false };
+    probe.done = (v) => { clearTimeout(probe.timer); if (S.listProbe === probe) S.listProbe = null; resolve(v); };
+    probe.timer = setTimeout(() => probe.done(false), 5000);
+    S.listProbe = probe;
+    send(`LIST ${name}`);
+  });
+}
+
+function openCreateRoom(name) {
+  S.createName = name;
+  $("crTitle").textContent = `Create “${roomName(name)}”`;
+  for (const id of ["crTopic", "crKey", "crLimit", "crWelcome"]) $(id).value = "";
+  $("crPrivate").checked = false; $("crHidden").checked = false;
+  const owned = S.link === "linked";
+  $("crOwnerHint").textContent = owned
+    ? "This room doesn't exist yet. It will be yours: it stays even when everyone leaves."
+    : "This room doesn't exist yet. It will disappear when everyone leaves.";
+  $("crWelcomeBox").style.display = owned ? "" : "none";
+  showMsg("crMsg", "");
+  $("createRoomDialog").style.display = "";
+  $("crTopic").focus();
+}
+
+function closeCreateRoom() { $("createRoomDialog").style.display = "none"; S.createName = null; }
+
+function confirmCreateRoom() {
+  const name = S.createName;
+  if (!name) return;
+  const limit = parseInt($("crLimit").value, 10) || 0;
+  if ($("crLimit").value && (limit < 2 || limit > 9999)) { showMsg("crMsg", "Max people must be between 2 and 9999.", "error"); return; }
+  S.pendingCreate = {
+    key: keyOf(name),
+    topic: cleanField($("crTopic").value).slice(0, 300),
+    private: $("crPrivate").checked,
+    hidden: $("crHidden").checked,
+    password: $("crKey").value.trim().replace(/\s+/g, ""),
+    limit,
+    welcome: cleanField($("crWelcome").value).slice(0, 200),
+  };
+  closeCreateRoom();
+  joinRoom(name);
+}
+
+/* The new room exists and we're its op: apply what the dialog asked for.
+ * Registered → ChanServ MLOCK (Atheme locks -lk by default, and MLOCK keeps
+ * the settings while the room is empty); otherwise plain MODE. */
+function applyCreateSettings(c, registered) {
+  const p = S.pendingCreate;
+  if (!p || p.key !== keyOf(c.name)) return;
+  S.pendingCreate = null;
+  if (p.topic) send(`TOPIC ${c.name} :${p.topic}`);
+  const on = (p.private ? "i" : "") + (p.hidden ? "s" : "") + (p.password ? "k" : "") + (p.limit ? "l" : "");
+  const args = [p.password, p.limit ? String(p.limit) : ""].filter(Boolean);
+  if (registered) {
+    const lines = [`PRIVMSG ChanServ :SET ${c.name} MLOCK +nt${on}${args.length ? " " + args.join(" ") : ""}`];
+    if (p.welcome) lines.push(`PRIVMSG ChanServ :SET ${c.name} ENTRYMSG ${p.welcome}`);
+    serviceQueue(lines);
+  } else if (on) {
+    send(`MODE ${c.name} +${on}${args.length ? " " + args.join(" ") : ""}`);
+  }
+  const bits = [p.private && "private", p.hidden && "hidden", p.password && "password-protected",
+    p.limit && `up to ${p.limit} people`].filter(Boolean);
+  if (bits.length) sys(`Room settings: ${bits.join(", ")}. Change them any time with ⚙️ Settings.`, "system", c.name);
 }
 
 /* Leave a room. soju forgets it too, so it won't come back at next sign-in;
@@ -3604,7 +3705,7 @@ function sendChat() {
   $("input").value = "";
   // Power-user shortcuts still work, but nothing on screen relies on them.
   if (S.editing) { saveEdit(text); return; }
-  if (text.startsWith("/join ")) { joinOrSwitch(text.slice(6)); return; }
+  if (text.startsWith("/join ")) { joinOrCreate(text.slice(6)); return; }
   if (/^\/remind\b/.test(text)) { addReminder(text.replace(/^\/remind\s*/, "")); return; }
   if (/^\/poll\b/.test(text)) {
     const pc = S.current && conv(S.current);
@@ -3856,7 +3957,14 @@ $("input").addEventListener("keydown", (e) => {
 $("composerBarX").onclick = () => { if (S.editing) $("input").value = ""; clearComposerBar(); };
 $("input").addEventListener("input", updateMentionBox);
 $("input").addEventListener("blur", () => setTimeout(hideMentionBox, 150));
-$("btnJoin").onclick = () => { joinOrSwitch($("newChan").value); $("newChan").value = ""; };
+$("btnJoin").onclick = () => { joinOrCreate($("newChan").value); $("newChan").value = ""; };
+$("crClose").onclick = closeCreateRoom;
+$("crCancel").onclick = closeCreateRoom;
+$("crCreate").onclick = confirmCreateRoom;
+$("createRoomDialog").addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeCreateRoom();
+  if (e.key === "Enter" && e.target.tagName === "INPUT" && e.target.type !== "checkbox") confirmCreateRoom();
+});
 $("newChan").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btnJoin").click(); });
 $("statusSel").onchange = () => {
   const code = $("statusSel").value;
@@ -3902,8 +4010,8 @@ $("rbCreate").onclick = () => {
   const name = $("rbNew").value.trim();
   if (!name) { $("rbNew").focus(); return; }
   $("rbNew").value = "";
-  joinOrSwitch(name);
   closeRoomBrowser();
+  joinOrCreate(name);
 };
 $("rbNew").addEventListener("keydown", (e) => { if (e.key === "Enter") $("rbCreate").click(); });
 $("roomBrowser").addEventListener("keydown", (e) => { if (e.key === "Escape") closeRoomBrowser(); });
