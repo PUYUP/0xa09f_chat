@@ -91,12 +91,19 @@ func (s *server) setEmail(ctx context.Context, user, email string) error {
 	return err
 }
 
-// passwordOK checks a password; wrong ones are limited per IP + ID (never a
-// budget shared by everyone behind one address).
+// passwordOK checks a password; wrong ones are limited two ways, because a
+// password guess is the one request that can cost a real login attempt:
+//   - per network + ID (never a budget shared by everyone behind one address);
+//   - per ID, whatever the source. Cycling through a /64, or through many
+//     addresses, is then pointless for guessing one account's password.
 func (s *server) passwordOK(q *req, user, password string) error {
+	tooMany := fail(429, "Too many wrong passwords. Please wait a while and try again.")
+	// Only failures are counted, and only after the answer is known: a correct
+	// password is never refused (people sign in from several devices), whatever
+	// happened before.
 	key := q.ip + "|" + user
-	if s.logins.over(key, s.cfg.maxLoginFail) {
-		return fail(429, "Too many wrong passwords. Please wait a while and try again.")
+	if s.logins.over(key, s.cfg.maxLoginFail) || s.logins.over("acct|"+user, s.cfg.maxLoginFail) {
+		return tooMany
 	}
 	if validID(user) {
 		ok, err := s.bouncer.checkAuth(q.r.Context(), user, password)
@@ -108,7 +115,9 @@ func (s *server) passwordOK(q *req, user, password string) error {
 			return nil
 		}
 	}
+	// One wrong password: charge the network and the account.
 	s.logins.add(key)
+	s.logins.add("acct|" + user)
 	return fail(403, "Your password isn't right.")
 }
 

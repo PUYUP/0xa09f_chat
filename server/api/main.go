@@ -36,16 +36,21 @@ type config struct {
 	// whether a user exists, which needs a route to the port soju's upstream
 	// connections come from; only use it when the bouncer is trusted with that.
 	bouncerLookup string
-	admins        map[string]bool
-	smtpHost      string
-	smtpPort      string
-	smtpSecurity  string
-	smtpUser      string
-	smtpPassword  string
-	mailFrom      string
-	maxAttempts   int
-	maxCreates    int
-	maxLoginFail  int
+	// trustedProxies: rate-limit keys for the reverse proxies in front of this
+	// service (TRUSTED_PROXIES, comma-separated). Only their X-Forwarded-For /
+	// X-Real-IP is believed; without them, behind a proxy every client shares
+	// one bucket ("127.0.0.1") and one attacker exhausts everyone's limits.
+	trustedProxies map[string]bool
+	admins         map[string]bool
+	smtpHost       string
+	smtpPort       string
+	smtpSecurity   string
+	smtpUser       string
+	smtpPassword   string
+	mailFrom       string
+	maxAttempts    int
+	maxCreates     int
+	maxLoginFail   int
 }
 
 func env(key, def string) string {
@@ -70,25 +75,32 @@ func loadConfig() config {
 			admins[u] = true
 		}
 	}
+	proxies := map[string]bool{}
+	for _, p := range strings.Split(os.Getenv("TRUSTED_PROXIES"), ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			proxies[netKey(p)] = true
+		}
+	}
 	return config{
-		listen:        env("LISTEN", ":8080"),
-		databaseURL:   env("DATABASE_URL", "postgres://a09f@localhost/a09f?sslmode=disable"),
-		legacySQLite:  env("LEGACY_SQLITE", "/data/register.db"),
-		sojuConfig:    env("SOJU_CONFIG", "/soju-config"),
-		sojuIRC:       env("SOJU_IRC", "soju:6667"),
-		upstream:      env("UPSTREAM_ADDR", "irc+insecure://solanum:16668"),
-		network:       env("NETWORK_NAME", "solanum"),
-		bouncerLookup: strings.ToLower(env("BOUNCER_LOOKUP", "ctl")),
-		admins:        admins,
-		smtpHost:      os.Getenv("SMTP_HOST"),
-		smtpPort:      env("SMTP_PORT", "587"),
-		smtpSecurity:  strings.ToLower(env("SMTP_SECURITY", "starttls")),
-		smtpUser:     os.Getenv("SMTP_USER"),
-		smtpPassword: os.Getenv("SMTP_PASSWORD"),
-		mailFrom:     env("MAIL_FROM", "a09f <no-reply@a09f.invalid>"),
-		maxAttempts:  envInt("MAX_ATTEMPTS_PER_HOUR", 30),
-		maxCreates:   envInt("MAX_CREATES_PER_HOUR", 5),
-		maxLoginFail: envInt("MAX_LOGIN_FAILS_PER_HOUR", 10),
+		listen:         env("LISTEN", ":8080"),
+		databaseURL:    env("DATABASE_URL", "postgres://a09f@localhost/a09f?sslmode=disable"),
+		legacySQLite:   env("LEGACY_SQLITE", "/data/register.db"),
+		sojuConfig:     env("SOJU_CONFIG", "/soju-config"),
+		sojuIRC:        env("SOJU_IRC", "soju:6667"),
+		upstream:       env("UPSTREAM_ADDR", "irc+insecure://solanum:16668"),
+		network:        env("NETWORK_NAME", "solanum"),
+		bouncerLookup:  strings.ToLower(env("BOUNCER_LOOKUP", "ctl")),
+		trustedProxies: proxies,
+		admins:         admins,
+		smtpHost:       os.Getenv("SMTP_HOST"),
+		smtpPort:       env("SMTP_PORT", "587"),
+		smtpSecurity:   strings.ToLower(env("SMTP_SECURITY", "starttls")),
+		smtpUser:       os.Getenv("SMTP_USER"),
+		smtpPassword:   os.Getenv("SMTP_PASSWORD"),
+		mailFrom:       env("MAIL_FROM", "a09f <no-reply@a09f.invalid>"),
+		maxAttempts:    envInt("MAX_ATTEMPTS_PER_HOUR", 30),
+		maxCreates:     envInt("MAX_CREATES_PER_HOUR", 5),
+		maxLoginFail:   envInt("MAX_LOGIN_FAILS_PER_HOUR", 10),
 	}
 }
 

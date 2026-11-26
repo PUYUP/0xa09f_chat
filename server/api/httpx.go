@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -262,12 +263,86 @@ func readBody(r *http.Request, badMsg string) (map[string]any, error) {
 	return body, nil
 }
 
+// clientIP is where the request came from, for logging.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// clientKey is the rate-limit identity of a request: a client is its network,
+// not its single address, because addresses are cheap to rotate. One IPv6
+// subscriber normally holds a whole /64 (CPE assigns a prefix, hosts pick the
+// middle bits), so counting per address let anyone bypass every limit simply by
+// reconnecting; IPv4 is counted per address, as it is one machine.
+//
+// X-Forwarded-For is only read when the request comes from a trusted proxy
+// (TRUSTED_PROXIES): otherwise anyone sends the header and picks their own
+// bucket, which would be worse than no limit at all.
+func (s *server) clientKey(r *http.Request) string {
+	if len(s.cfg.trustedProxies) == 0 {
+		return netKey(clientIP(r))
+	}
+	peer := netKey(clientIP(r))
+	if !s.cfg.trustedProxies[peer] {
+		return peer // not our proxy: its headers mean nothing
+	}
+	// Walk the chain right-to-left, skipping our own proxies: the first
+	// address that is not a proxy is the client. Each hop is a network key, so
+	// "trusted" cannot be dodged by writing 10.0.0.1 in the left half.
+	var hops []string
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		hops = strings.Split(xff, ",")
+	} else if rip := r.Header.Get("X-Real-IP"); rip != "" {
+		hops = []string{rip}
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		if h := strings.TrimSpace(hops[i]); h != "" {
+			if k := netKey(h); !s.cfg.trustedProxies[k] && !isOurProxyHost(h) {
+				return k
+			}
+		}
+	}
+	return peer
+}
+
+// isOurProxyHost reports a hop that is plainly on our side of the wire: a
+// loopback or private address is never a public client, so a reverse proxy
+// listed in full (or reaching us over docker's bridge) is skipped instead of
+// being mistaken for the client.
+func isOurProxyHost(h string) bool {
+	a, err := netip.ParseAddr(strings.Trim(h, "[]"))
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	return a.IsLoopback() || a.IsPrivate()
+}
+
+// netKey maps an address to the unit rate limits count against: the /64 for
+// IPv6, the address itself for IPv4. Anything unparsable is its own key (it
+// cannot rotate, and it cannot be grouped).
+func netKey(addr string) string {
+	a, err := netip.ParseAddr(strings.Trim(addr, "[]"))
+	if err != nil {
+		return addr
+	}
+	a = a.Unmap() // ::ffff:1.2.3.4 counts as 1.2.3.4
+	if a.Is4() {
+		return a.String()
+	}
+	// Loopback is one machine, not a subscriber's /64 (which ::1 would fall
+	// into), and it is what a proxy on the same host looks like.
+	if a.IsLoopback() {
+		return a.String()
+	}
+	p, err := a.Prefix(64) // a /64 is one subscriber; the mask is all we keep
+	if err != nil {
+		return a.String()
+	}
+	return p.String()
 }
 
 // ---- sliding-window rate limits (in memory) ----

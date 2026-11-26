@@ -161,9 +161,21 @@ docker logs api               # log request (tanpa body/password)
 ```
 
 Aturan: ID `^[a-z][a-z0-9_-]{2,15}$`, tidak boleh nama reserved / `*serv`;
-password 8–128 karakter tanpa karakter kontrol. Rate limit per IP:
+password 8–128 karakter tanpa karakter kontrol. Rate limit per **jaringan**:
 30 percobaan & 5 akun per jam (env `MAX_ATTEMPTS_PER_HOUR`,
-`MAX_CREATES_PER_HOUR`). Port host `REGISTER_PORT` (default `16680`),
+`MAX_CREATES_PER_HOUR`). Yang dihitung bukan satu alamat: IPv4 per alamat,
+IPv6 per **/64** — satu pelanggan memang memegang satu /64, jadi ganti-ganti
+alamat di dalamnya tidak menambah kuota. Login salah dibatasi dua kali:
+per jaringan+ID dan per ID (dari mana pun), karena itu satu-satunya request
+yang benar-benar mencoba menebak password.
+
+Kalau `api` ada di belakang reverse proxy, isi `TRUSTED_PROXIES` (dipisah
+koma, mis. `127.0.0.1` atau IP container Caddy) supaya `X-Forwarded-For`
+dibaca; tanpa itu semua klien terlihat sebagai IP proxy dan **satu** bucket
+dipakai bersama — penyerang bisa menghabiskan jatah orang lain. Header hanya
+dipercaya kalau request datang dari proxy itu.
+
+Port host `REGISTER_PORT` (default `16680`),
 bind ke `BIND_ADDR`. Siapa pun yang bisa menjangkau port ini bisa membuat
 akun — jangan expose ke publik tanpa proteksi tambahan (captcha/invite).
 

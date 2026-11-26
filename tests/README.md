@@ -45,6 +45,37 @@ python3 tests/api/test_preview.py        # pratinjau link + pengaman SSRF (butuh
 python3 tests/api/test_irc_features.py   # +g/ACCEPT, extban $a:, KNOCK, ChanServ, CHATHISTORY, SEARCH, network quote
 ```
 
+### tests/api/bench_load.py — benchmark user aktif
+
+Bukan cek lulus/gagal untuk CI, tapi pengukur beban: membuka `--users` app
+dengan pola app sungguhan (`POST /session`, `GET /events`, lalu `/typing`,
+`/read`, `/activity` tiap `--think` detik), menahan semua stream selama
+`--window`, lalu memeriksa event asli sampai ke app dan semuanya tertutup
+bersih. Tidak mengubah kode server; hanya memakai endpoint yang ada.
+
+```bash
+python3 tests/api/bench_load.py                           # 5.000 user, 60 dtk
+python3 tests/api/bench_load.py --users 1500 --window 30
+python3 tests/api/bench_load.py --mode real --users 100    # password via SASL
+```
+
+Akun memakai ID tetap `b1`…`bN`, password `A09F_BENCH_PASSWORD` (default
+`demo-1234`), dan dibuat sekali lewat `POST /register` — yang hanya
+mengizinkan 5 akun/jam per IP (`MAX_CREATES_PER_HOUR`), jadi run pertama untuk
+5.000 akun perlu jatah itu dinaikkan atau dijalankan bertahap. Satu `/events`
+= satu thread yang memblok dan macOS membatasi thread per user (`ulimit -u`),
+jadi user dipecah ke beberapa proses (`--conns` per proses, `--procs` proses).
+
+Hasil pada mesin 4 core / 16 GB, stack docker lokal, Python 3.9:
+
+| Metrik | Nilai |
+|---|---|
+| `POST /session` (cek password SASL ke soju) | p50 111 ms, max 180 ms |
+| `GET /friends` + `POST /typing` tanpa beban | p50 3,0 ms, p99 17 ms |
+| 300 stream `/events` hidup bersamaan | 300/300; `POST /typing` p50 2,4 ms |
+| Laju buka sesi + stream dari satu proses Python | ±8 app/detik |
+| Pembuka yang menentukan batas | thread per user di klien, `max_connections` Postgres (200), pool `api` (32) |
+
 Catatan:
 - `test_account.py` membuat satu akun (service register mengizinkan 5 per IP
   per jam; restart container `api` untuk mereset hitungannya).

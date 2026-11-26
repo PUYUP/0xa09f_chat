@@ -168,7 +168,7 @@ func (s *server) routes() http.Handler {
 			writeJSON(w, 404, obj{"ok": false, "error": "not found"})
 			return
 		}
-		q := &req{w: w, r: r, ip: clientIP(r), body: map[string]any{}}
+		q := &req{w: w, r: r, ip: s.clientKey(r), body: map[string]any{}}
 		status := 200
 		res, err := s.run(q, rt)
 		if err != nil {
