@@ -14,9 +14,7 @@ run() {                      # run <label> <command...>
 for g in $groups; do
   case $g in
     server)
-      run server/solanum python3 tests/server/test_solanum.py
-      run server/soju python3 tests/server/test_soju.py
-      run server/tls python3 tests/server/test_tls.py ;;
+      run server/ergo python3 tests/server/test_ergo.py ;;
     api)
       for t in tests/api/test_*.py; do run "api/$(basename "$t" .py)" python3 "$t"; done ;;
     e2e)

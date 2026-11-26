@@ -85,6 +85,6 @@ finally:
         "DELETE FROM edits WHERE sender='henry'; DELETE FROM pins WHERE room='#zz-test-msgs'; "
         "DELETE FROM poll_votes WHERE poll IN (SELECT id FROM polls WHERE room='#zz-test-msgs'); "
         "DELETE FROM polls WHERE room='#zz-test-msgs'; DELETE FROM expiring WHERE sender='henry'; "
-        "DELETE FROM scheduled WHERE user='henry'; DELETE FROM saved WHERE user='irene';")
+        "DELETE FROM scheduled WHERE uname='henry'; DELETE FROM saved WHERE uname='irene';")
 
 check.done()

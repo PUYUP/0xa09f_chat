@@ -1,4 +1,5 @@
 """Peer for rooms.js: bob."""
+import urllib.parse
 import time
 
 from peer import Peer
@@ -14,9 +15,11 @@ def _(room):
 
 
 @p.on("welcome?")
-def _(args):
-    seen = any("[#zz-e2e" in l and "Hello from e2e" in l for l in p.irc.lines)
-    p.reply("welcome yes" if seen else "welcome no")
+def _(room):
+    # The welcome message is kept by the account service; a09f apps show it
+    # when they join the room.
+    text = p.api.get(f"/welcome?room={urllib.parse.quote(room.lower())}").get("text", "")
+    p.reply("welcome yes" if "Hello from e2e" in text else "welcome no")
 
 
 @p.on("say")

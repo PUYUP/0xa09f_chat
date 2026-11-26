@@ -1,11 +1,11 @@
 """Peer for privacy_time.js: frank (a stranger to alice)."""
 import time
 
-from a09f import sql
+from a09f import Irc, sql
 from peer import Peer
 
-# Commands come in through bob: messaging frank himself would put him on
-# alice's ACCEPT list and defeat the "only friends" check.
+# Commands come in through bob, so alice's app never writes to frank (that
+# would let frank's answers through "only friends").
 p = Peer("frank", control="bob")
 p.api.post("/friends/remove", {"nick": "alice"})
 
@@ -15,11 +15,21 @@ def _(text):
     p.irc.send(f"PRIVMSG alice :{text}")
 
 
-@p.on("pmcheck")
+@p.on("pmfrom")
 def _(args):
-    p.irc.send("PRIVMSG alice :are you there?")
-    got = p.irc.wait(r" 716 frank alice ", 4)
-    p.reply("blocked" if got else "delivered")
+    # A private message from someone alice never wrote to.
+    who, text = args.split(" ", 1)
+    c = Irc(who)
+    c.send(f"PRIVMSG alice :{text}")
+    c.read(1)
+    c.close()
+    p.reply("sent")
+
+
+@p.on("friendsonly")
+def _(arg):
+    p.api.post("/prefs", {"friendsOnly": arg == "on"})
+    p.reply(f"friendsonly {arg}")
 
 
 @p.on("tz")
@@ -41,7 +51,7 @@ def _(args):
 @p.on("bye")
 def _(args):
     p.api.post("/active", {"start": None, "end": None})
-    sql("DELETE FROM user_tz WHERE user='frank'; DELETE FROM scheduled WHERE user='alice';")
+    sql("DELETE FROM user_tz WHERE uname='frank'; DELETE FROM scheduled WHERE uname='alice';")
 
 
 p.run()

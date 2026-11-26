@@ -1,96 +1,61 @@
-# SolNet — Solanum + Atheme + Soju dalam Docker
+# Server a09f — Ergo + service akun (Go) dalam Docker
 
-Stack IRC lengkap yang berjalan di atas Docker Compose:
+| Service  | Peran | Image | Port host (default) |
+|----------|-------|-------|---------------------|
+| ergo     | Server IRC: akun (NickServ), room (ChanServ), klien *always-on*, history | `ghcr.io/ergochat/ergo:v2.19.1` | `16667` (plain), `16697` (TLS) |
+| postgres | History pesan Ergo (`ergo_history`) + data service akun (`a09f`) | `postgres:17-alpine` (pinned) | internal |
+| api      | Service akun (Go, `server/api`): buat akun, reset password, teman, event live, metadata pesan, room, pencarian | `a09f-api` (build lokal) | `16680` |
+| mailpit  | Penangkap email dev (email reset password) | `axllent/mailpit` v1.27 | `16825` (web) |
 
-| Service  | Peran                        | Image                                   | Port host (default) |
-|----------|------------------------------|-----------------------------------------|---------------------|
-| solanum  | IRC daemon (server)          | `solanum-local` (build dari source)     | `6667`, `6697`      |
-| atheme   | IRC services (NickServ dll)  | `s0fx2/atheme-irc-services` (pinned)    | internal only       |
-| soju     | Bouncer                     | `codeberg.org/emersion/soju` (pinned)   | `16667`, `16697`    |
-| postgres | Database soju (users, networks, message history) | `postgres:17-alpine` (pinned) | internal only |
-| register | Pendaftaran akun mandiri, email pemulihan & reset password (app desktop a09f) | `a09f-register` (build lokal, `server/register/`) | `16680` |
-| mailpit | Penangkap email dev: email reset password dibaca di web | `axllent/mailpit` v1.27 | `16825` (web) |
-
-Dokumen lain di folder ini: `configuration.md`, `operations.md`, `usage.md`,
-`testing.md`, dan **`api.md`** (API service akun `register`: akun, teman,
-event live, metadata pesan, room). App desktop: `desktop/README.md` dan
-`desktop/docs/`. Semua tes: `tests/README.md`.
+Dokumen lain: [configuration.md](configuration.md), [operations.md](operations.md),
+[usage.md](usage.md), [testing.md](testing.md), dan **[api.md](api.md)**.
+App desktop: `desktop/README.md`, `desktop/docs/`. Tes: `tests/README.md`.
 
 ## Arsitektur
 
 ```
-            ┌────────────────────────── docker network: ircnet (172.30.99.0/24) ──────────────────────────┐
-            │                                                                                            │
-  client ──►│  solanum (172.30.99.10)  ◄──TS6/charybdis──  atheme (172.30.99.20)                            │
-  :6667/:6697│       ▲                                                                                    │
-            │       │ upstream (NICK/USER)                                                                │
-  client ──►│  soju (172.30.99.30)                                                                       │
-  :16667/:16697│       │                                                                                  │
-            │       └──db postgres──► postgres (172.30.99.40)                                            │
-            └────────────────────────────────────────────────────────────────────────────────────────────┘
+             docker network a09f (172.30.98.0/24)
+ app ──IRC──► ergo (.10) ──history──► postgres (.40) ◄── api (.50) ◄──HTTP+SSE── app
+ :16667/:16697   ▲                     ergo_history       a09f DB      :16680
+                 └──── HTTP API :8089 (internal) + IRC (JWT) ────┘
 ```
 
-- **solanum** — IRC daemon utama. Menerima client langsung di `6667` (plain)
-  dan `6697` (TLS). Atheme terhubung sebagai server "services" via `6667`.
-- **atheme** — services (NickServ, ChanServ, dll). Dial-out ke `solanum:6667`
-  dengan password TS6. Muncul sebagai `services.int` (numeric `00A`).
-- **soju** — bouncer. Client connect dengan SASL, soju meneruskan ke solanum
-  sebagai nick upstream (`soluser`). Users, networks, channels dan history
-  pesan disimpan di **PostgreSQL** (`message-store db`), sehingga search
-  history dan retensi bisa diskalakan.
-
-Identitas jaringan: server `irc.solanum.test` SID `10A`, network `SolNet`,
-services `services.int`, bouncer `SolNet Bouncer`.
+- **Ergo** satu proses menggantikan solanum (server) + Atheme (services) +
+  soju (bouncer). Setiap akun adalah klien **always-on**: tetap ada di
+  jaringan tanpa perangkat tersambung (pesan offline, history, room tetap),
+  dan otomatis *away* (= "Offline" di app). Tanpa koneksi TCP per akun:
+  akun yang tidak aktif hanya state di memori.
+- History disimpan **sekali per room** (bukan per anggota) di PostgreSQL.
+- **api** (Go) bicara dengan Ergo lewat HTTP API Ergo (buat akun, cek
+  password, ganti password, daftar akun, whois) dan, untuk bertindak atas
+  nama user (kirim nanti, sign-in pertama akun baru), lewat IRC dengan token
+  JWT satu menit (SASL `IRCV3BEARER`) — tanpa menyimpan password. Event live
+  untuk app lewat SSE (satu goroutine per app yang terbuka).
 
 ## Quickstart
 
 ```bash
 cd server
-cp .env.example .env            # sesuaikan password/port
-./scripts/generate-certs.sh     # generate TLS cert (sekali saja)
+./scripts/init-env.sh           # .env dari .env.example + secret acak (tidak dicetak)
 docker compose up -d --build
-docker compose ps               # semua harus (healthy)
+docker compose ps               # semua (healthy)
+./scripts/seed-demo.sh          # #lobby, #a09f-presence, akun demo (demo-1234)
 ```
 
-Semua service `restart: unless-stopped` + healthcheck — stack otomatis
-bangkit dan saling menunggu (`depends_on: service_healthy`).
+Akun dibuat lewat app (Create account) atau `seed-demo.sh`; pendaftaran
+langsung lewat IRC dimatikan.
 
-## Dokumentasi
-
-- [configuration.md](configuration.md) — `.env`, templating config, image
-  pinning, healthcheck, volume
-- [usage.md](usage.md) — cara connect sebagai client, perintah NickServ/ChanServ
-- [operations.md](operations.md) — manajemen service, logs, persistence, troubleshooting
-- [testing.md](testing.md) — test suite di `tests/` (self-contained)
-
-## Struktur repo
+## Struktur
 
 ```
 server/
-├── docker-compose.yml          # 4 service + network + volumes + healthcheck
-├── .env.example                # template env (copy ke .env, gitignored)
-├── scripts/generate-certs.sh   # generate TLS cert self-signed + SAN
-├── solanum/
-│   ├── Dockerfile              # multi-stage build, pinned commit
-│   ├── entrypoint.sh           # render config + foreground + cleanup pidfile
-│   └── etc/
-│       ├── ircd.conf.tmpl      # template config (placeholder __VAR__)
-│       ├── motd                # MOTD (mount ke /usr/local/etc/ircd.motd)
-│       └── ssl-*.pem, dh.pem   # cert TLS (generated, gitignored)
-├── atheme/
-│   ├── entrypoint.sh           # render atheme.conf lalu delegasi ke image entrypoint
-│   └── etc/
-│       ├── atheme.conf.tmpl    # template config services
-│       └── services.db         # database Atheme (persistent, gitignored)
-├── soju/
-│   ├── config                  # konfigurasi soju
-│   ├── motd                    # MOTD bouncer
-│   └── tls-*.pem               # cert TLS bouncer (generated, gitignored)
-└── docs/                       # dokumentasi ini
+├── docker-compose.yml       # ergo, postgres, api, mailpit
+├── .env.example             # template (.env gitignored)
+├── ergo/ircd.yaml           # config Ergo (perubahan dari default ditandai "a09f:")
+├── ergo/motd
+├── postgres/initdb/         # role + database ergo & a09f (volume baru)
+├── api/                     # service akun (Go)
+├── scripts/init-env.sh      # isi secret yang belum ada
+├── scripts/seed-demo.sh     # room bawaan + akun demo
+└── docs/
 ```
-
-Test suite ada di `tests/` di root repo (lihat [testing.md](testing.md)):
-`tests/server/`, `tests/api/`, dan `tests/e2e/`.
-
-Catatan: file cert/private key dan `.env` **tidak di-commit** — generate
-dengan `scripts/generate-certs.sh` dan `cp .env.example .env`.

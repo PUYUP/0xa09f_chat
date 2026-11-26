@@ -1,178 +1,83 @@
 # Konfigurasi
 
-## Prerequisite: `.env` + sertifikat
+## `.env`
 
 ```bash
 cd server
-cp .env.example .env          # isi password/port sesuai kebutuhan
-./scripts/generate-certs.sh   # generate TLS cert self-signed (sekali saja)
-docker compose up -d --build
+./scripts/init-env.sh     # copy .env.example → .env, isi secret yang kosong (openssl rand), chmod 600
 ```
 
-- `.env` — gitignored; berisi link password, password user soju,
-  kredensial postgres (`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`),
-  port host, subnet, `ATHEME_HOST`.
-- `scripts/generate-certs.sh` — generate cert solanum (`ssl-*.pem`, `dh.pem`)
-  dan soju (`tls-*.pem`) dengan SAN `irc.solanum.test,localhost,127.0.0.1`.
-  Semua file cert **di-gitignore** — regenerate dengan script ini.
-- Password link disuntik via **templating**: `*.conf.tmpl` di-render oleh
-  entrypoint container memakai env dari `.env` (via `env_file`).
+Script tidak pernah mencetak secret dan aman dijalankan ulang (hanya mengisi
+yang masih kosong). Isi `.env`:
 
-## docker-compose.yml
+| Variabel | Untuk |
+|---|---|
+| `POSTGRES_PASSWORD` | superuser postgres |
+| `ERGO_DB_PASSWORD` | role `ergo` (history Ergo) |
+| `A09F_DB_PASSWORD` | role `a09f` (data service akun; boleh *membaca* history untuk pencarian) |
+| `ERGO_API_TOKEN` | bearer token api → HTTP API Ergo (`:8089`, hanya di jaringan docker) |
+| `JWT_KEY` | kunci HMAC: api menandatangani token login satu menit untuk bertindak atas nama user |
+| `IRC_PORT`, `IRC_TLS_PORT`, `API_PORT`, `MAILPIT_PORT`, `BIND_ADDR` | port host |
+| `SMTP_*`, `MAIL_FROM` | email reset password (kosong = Mailpit) |
+| `ADMIN_USERS` | ID yang boleh 📢 Announce |
 
-Empat service dalam bridge network `ircnet` (subnet dari `IRC_SUBNET`,
-default `172.30.99.0/24`). IP statis dipakai untuk semua container:
+Role dan database dibuat oleh `postgres/initdb/01-roles.sh` **hanya saat volume
+postgres masih kosong**. Mengganti `ERGO_DB_PASSWORD`/`A09F_DB_PASSWORD`
+setelahnya juga perlu `ALTER ROLE … PASSWORD` di postgres.
 
-| Service   | IP            | Ports ke host (default)                    |
-|-----------|---------------|--------------------------------------------|
-| solanum   | 172.30.99.10  | `6667` plain, `6697` TLS                  |
-| atheme    | 172.30.99.20  | tidak ada (internal)                       |
-| soju      | 172.30.99.30  | `16667` plain, `16697` TLS                 |
-| postgres  | 172.30.99.40  | tidak ada (internal)                       |
+## `ergo/ircd.yaml`
 
-Kenapa IP statis: `connect` block solanum mencocokkan `host` terhadap IP
-peer — nama docker DNS (`atheme`) **tidak** cocok (error `Invalid host`).
-`ATHEME_HOST` di `.env` harus sama dengan `ipv4_address` atheme.
+Berbasis `default.yaml` Ergo 2.19.1; setiap perubahan ditandai `a09f:`.
+Secret tidak ada di file ini: masuk lewat *environment override* Ergo
+(`ERGO__API__BEARER_TOKENS`, `ERGO__ACCOUNTS__JWT_AUTH__TOKENS`,
+`ERGO__DATASTORE__POSTGRESQL__PASSWORD`) yang diisi `docker-compose.yml` dari `.env`.
 
-Image di-pin:
+Yang penting:
 
-- solanum: build dari commit persis (`SOLANUM_COMMIT`, default HEAD yang
-  teruji `92afd03…`) — Solanum tidak punya tag rilis.
-- atheme/soju: pinned by `@sha256:` digest — reproducible, tidak ikut
-  `latest` yang berubah.
+| Bagian | Nilai | Kenapa |
+|---|---|---|
+| `accounts.registration.enabled` | `false` | akun hanya dibuat service akun (`/v1/ns/saregister`) |
+| `accounts.require-sasl.enabled` | `true` | semua orang di jaringan punya akun a09f |
+| `nick-reservation.force-nick-equals-account` | `true` (default) | ID = nick = akun; ban `<id>!*@*` = ban akun |
+| `multiclient.always-on` / `auto-away` | `mandatory` | pesan offline, history, room tetap; tanpa perangkat = away ("Offline") |
+| `history.persistent` | postgres, juga room tak terdaftar (conference), DM | history permanen; `expire-time: 0` |
+| `history.retention.allow-individual-delete` | `true` | REDACT pesan sendiri |
+| `fakelag` | burst 20, 5/dtk, budget CHATHISTORY/WHOIS besar | sign-in mengirim banyak baris sekaligus |
+| `ip-limits.exempted` | jaringan privat | dev: semua app datang dari gateway docker. **Hapus di produksi** |
+| `api` | `:8089`, token dari env | dipakai service akun saja (tidak dipublish) |
+| `jwt-auth` | aktif, `autocreate: false` | login atas nama user oleh service akun |
+| `channels.registration.max-channels-per-account` | 50 | |
+| `limits.monitor-entries` | 500 | MONITOR teman |
 
-Healthcheck + `depends_on: service_healthy`:
+Room terdaftar (ChanServ) di Ergo menyimpan topik, mode (termasuk password
+`+k` dan batas `+l`), daftar ban, dan AMODE sendiri — tidak perlu MLOCK.
 
-- solanum: bash `/dev/tcp` ke `127.0.0.1:6667`
-- atheme: `pgrep atheme-services` + `nc -z solanum 6667`
-- soju: `sojuctl server status`
-- postgres: `pg_isready -U $POSTGRES_USER -d $POSTGRES_DB`
+TLS: `ergo mkcerts` membuat sertifikat self-signed di volume `ergo-tls` saat
+pertama start.
 
-Logging: semua service pakai json-file driver `max-size: 10m, max-file: 3`
-(anchor `x-logging`) supaya log docker tidak memenuhi disk.
+## `docker-compose.yml`
 
-Volumes:
+Network `a09f` (`A09F_SUBNET`, default `172.30.98.0/24`), IP statis:
+ergo `.10`, postgres `.40`, api `.50`, mailpit `.60`. Healthcheck di semua
+service; `api` menunggu postgres dan ergo sehat. Volume: `postgres-data`,
+`ergo-data` (database akun & room Ergo, `ircd.db`), `ergo-tls`.
 
-- `solanum-logs` → `/var/log/solanum`
-- `solanum-state` → `/var/local` — **ban.db solanum ada di `/var/local/ban.db`**
-  (path compile-time `DBPATH`; flag `-banfile` adalah dead code seperti
-  `-motdfile`)
-- `atheme-data` → `/atheme/var`
-- `postgres-data` → `/var/lib/postgresql/data` — DB `soju` (users,
-  networks, channels, message history)
-- `soju-db` → `/db` — admin socket `soju-admin.sock` (+ sisa `soju.db`
-  sqlite dari sebelum migrasi)
-- `soju-uploads` → `/uploads`
+Image di-pin: Ergo `v2.19.1`, postgres & mailpit dengan digest. `api` di-build
+dari `server/api` (Go 1.25, binary statis di Alpine, user non-root).
 
-Bind mounts:
+## Service akun (`api`)
 
-- `./solanum/etc` → `/etc/solanum` (ro) — `ircd.conf.tmpl`, motd, cert
-- `./solanum/etc/motd` → `/usr/local/etc/ircd.motd` (ro)
-- `./atheme/etc` → `/atheme/etc` — `atheme.conf.tmpl`; `atheme.conf` hasil
-  render di-generate di sini (gitignored); `services.db` persisten
-- `./atheme/entrypoint.sh` → `/render-entrypoint.sh` (ro) — render lalu
-  delegasi ke `/entrypoint.sh` bawaan image
-- `./soju/config` → `/soju-config` (ro), `./soju` → `/soju-tls` (ro)
+Variabel environment (diisi compose):
 
-## solanum/Dockerfile
+| Variabel | Default | |
+|---|---|---|
+| `LISTEN` | `:8080` | |
+| `DATABASE_URL` | | data service (skema dibuat otomatis saat start) |
+| `HISTORY_DATABASE_URL` | | history Ergo, baca saja (pencarian); kosong = pencarian mati |
+| `ERGO_API`, `ERGO_API_TOKEN` | `http://ergo:8089` | |
+| `ERGO_IRC` | `ergo:6667` | untuk bertindak atas nama user |
+| `JWT_KEY` | | sama dengan kunci di Ergo |
+| `MAX_ATTEMPTS_PER_HOUR`, `MAX_CREATES_PER_HOUR`, `MAX_LOGIN_FAILS_PER_HOUR` | 30, 5, 10 | batas per IP |
 
-Multi-stage: `builder` (debian slim + toolchain + git) compile meson →
-`stage-1` runtime slim hanya berisi `/usr/local` hasil install + library
-runtime (`libssl3`, `libsqlite3-0`, `libltdl7`, `netbase`, `ca-certificates`).
-Image runtime ~ratusan MB, tanpa gcc/git/meson.
-
-Build arg `SOLANUM_COMMIT` (default SHA yang teruji) di-fetch dengan
-`git fetch --depth 1 origin <sha>` — reproducible.
-
-Catatan dependency yang pernah jadi masalah:
-
-- `netbase` wajib ( `/etc/services`, `/etc/protocols` ) untuk `getaddrinfo`
-  → authd.
-- `/var/local` harus writable `ircd` — ban.db SQLite bandb.
-- User `ircd` uid 1001 — solanum menolak root.
-- `/etc/ld.so.conf.d/solanum.conf` didaftarkan manual untuk
-  `/usr/local/lib/x86_64-linux-gnu`.
-
-## solanum/entrypoint.sh
-
-1. Hapus stale pidfile.
-2. Render `/etc/solanum/ircd.conf.tmpl` → `/tmp/ircd.conf` via `sed`,
-   substitusi `__LINK_SOLANUM_SEND__`, `__LINK_SOLANUM_ACCEPT__`,
-   `__ATHEME_HOST__` dari env.
-3. `exec solanum -foreground -configfile /tmp/ircd.conf ...`
-
-## solanum/etc/ircd.conf.tmpl
-
-Sama seperti konfig sebelumnya, bedanya blok `connect "services.int"`:
-
-```conf
-connect "services.int" {
-	host = "__ATHEME_HOST__";              # → 172.30.99.20 dari .env
-	send_password = "__LINK_SOLANUM_SEND__";
-	accept_password = "__LINK_SOLANUM_ACCEPT__";
-	port = 6667;
-	class = "server";
-	flags = topicburst;
-};
-```
-
-Arah password (mudah tertukar):
-
-- solanum `send_password` = password yang solanum kirim = Atheme
-  `receive_password` → env `LINK_SOLANUM_SEND`
-- solanum `accept_password` = password yang diharapkan solanum = Atheme
-  `send_password` → env `LINK_SOLANUM_ACCEPT`
-
-## atheme/etc/atheme.conf.tmpl + entrypoint.sh
-
-`atheme.conf.tmpl` = config Atheme 7.2 dengan dua placeholder di blok
-`uplink "irc.solanum.test"`:
-
-```conf
-send_password = "__LINK_SOLANUM_ACCEPT__";     # = solanum accept_password
-receive_password = "__LINK_SOLANUM_SEND__";    # = solanum send_password
-```
-
-`atheme/entrypoint.sh` me-render ke `/atheme/etc/atheme.conf` lalu
-`exec /entrypoint.sh` (entrypoint asli image: cek writable + start
-`atheme-services -n`).
-
-Module aktif: `modules/protocol/charybdis` (kompatibel solanum),
-`modules/backend/opensex`, `modules/crypto/pbkdf2v2`, services standar.
-`#mta` dikomentari — email mati.
-
-## soju/config
-
-Tidak ada secret di dalamnya — password user/network dibuat via `sojuctl`
-(**otomatis oleh test** `tests/server/test_soju.py`, idempotent).
-
-Directive penting:
-
-- `auth internal` — user disimpan di **PostgreSQL** (`db postgres`, schema
-  dibuat otomatis oleh soju saat startup)
-- `disable-inactive-user 30d` — user yang disconnect >30 hari di-disable:
-  upstream diputus (tidak ada ghost session di solanum), data tetap utuh
-- `enable-user-on-auth true` — login SASL sukses me-re-enable user
-  otomatis, jadi user yang absen lama bisa langsung balik tanpa intervensi admin
-- `message-store db` + `message-expiry 365d` — history pesan di PostgreSQL
-  (tabel `Message` + `MessageTarget`, full-text search index); pesan lebih
-  tua dari 365 hari dihapus harian supaya tabel tidak tumbuh tak terbatas
-- `listen unix+admin:///db/soju-admin.sock` — socket admin untuk `sojuctl`
-  (tetap di volume `soju-db`, bukan postgres)
-
-Password postgres **tidak ditulis di config** — `db postgres` connection
-string tidak berisi password; soju membaca env `PGPASSWORD` (di-set di
-`docker-compose.yml` dari `POSTGRES_PASSWORD` di `.env`). Image soju
-distroless (tanpa shell) jadi tidak bisa templating — env var adalah
-satu-satunya jalur secret.
-
-## scripts/generate-certs.sh
-
-Generate ulang semua cert dengan SAN. Jalankan saat:
-
-- pertama kali setup (file cert di-gitignore)
-- cert mau di-rotate
-
-```bash
-cd server && ./scripts/generate-certs.sh
-```
+Perintah tambahan binary: `-health` (healthcheck), `-setup-rooms`,
+`-seed-demo id,id,…` (dipakai `scripts/seed-demo.sh`).

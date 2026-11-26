@@ -1,7 +1,7 @@
 """Shared helpers for the a09f test suites (stdlib only).
 
-- Irc:   a real IRC client that signs in to soju with SASL, like the app does
-- Api:   the account service (server/register) with a session token
+- Irc:   a real IRC client that signs in to Ergo with SASL, like the app does
+- Api:   the account service (server/api) with a session token
 - sse:   collect Server-Sent Events from /events in a background thread
 - Check: PASS/FAIL bookkeeping; exit code 1 when anything failed
 
@@ -21,25 +21,26 @@ import time
 import urllib.error
 import urllib.request
 
-SOJU = (os.environ.get("A09F_SOJU_HOST", "127.0.0.1"), int(os.environ.get("A09F_SOJU_PORT", "16667")))
-SOLANUM = (os.environ.get("A09F_SOLANUM_HOST", "127.0.0.1"), int(os.environ.get("A09F_SOLANUM_PORT", "6667")))
+IRC = (os.environ.get("A09F_IRC_HOST", "127.0.0.1"), int(os.environ.get("A09F_IRC_PORT", "16667")))
 API = os.environ.get("A09F_API", "http://127.0.0.1:16680")
 MAILPIT = os.environ.get("A09F_MAILPIT", "http://127.0.0.1:16825")
 DEMO_PASSWORD = os.environ.get("A09F_DEMO_PASSWORD", "demo-1234")
-NETWORK = "solanum"
+# How to run SQL on the account service's database (test clean-up only).
+PSQL = os.environ.get("A09F_PSQL", "docker exec -i a09f-postgres psql -U postgres -d a09f").split()
+# ... and on Ergo's history database (seeding long conversations).
+PSQL_HISTORY = os.environ.get("A09F_PSQL_HISTORY", "docker exec -i a09f-postgres psql -U postgres -d ergo_history").split()
 
 
 # ---------------------------------------------------------------- IRC
 
 class Irc:
-    """IRC client through soju. `client` makes the soju client id unique so
-    soju doesn't replay an old backlog for it (that confuses tests)."""
+    """IRC client signed in to Ergo (one more device of the account's
+    always-on client). `client` is accepted for older callers and ignored."""
 
-    def __init__(self, user, password=DEMO_PASSWORD, caps=("server-time",), client=None, addr=SOJU):
+    def __init__(self, user, password=DEMO_PASSWORD, caps=("server-time",), client=None, addr=IRC):
         self.user = user
         self.buf = b""
         self.lines = []
-        cid = client or f"t{int(time.time() * 1000) % 10**9}"
         self.s = socket.create_connection(addr, timeout=10)
         self.send("CAP LS 302")
         self.send("CAP REQ :" + " ".join(("sasl",) + tuple(caps)))
@@ -47,8 +48,7 @@ class Irc:
         self.send(f"USER {user} 0 * :{user}")
         self.send("AUTHENTICATE PLAIN")
         time.sleep(0.4)
-        ident = f"{user}@{cid}/{NETWORK}"
-        self.send("AUTHENTICATE " + base64.b64encode(f"{ident}\0{ident}\0{password}".encode()).decode())
+        self.send("AUTHENTICATE " + base64.b64encode(f"{user}\0{user}\0{password}".encode()).decode())
         self.send("CAP END")
         self.welcome = self.wait(r" 001 ", 10)
 
@@ -110,14 +110,13 @@ class Irc:
 
 
 def drop_room(user, room):
-    """Unregister a test room (ChanServ DROP needs a confirmation key)."""
+    """Unregister a test room (ChanServ UNREGISTER needs a confirmation code)."""
     c = Irc(user)
     try:
-        reply = " ".join(c.service("ChanServ", f"DROP {room}", 3))
-        m = re.search(r"DROP \S+ ([0-9a-f:]+)", reply)
+        reply = " ".join(c.service("ChanServ", f"UNREGISTER {room}", 3))
+        m = re.search(r"UNREGISTER \S+ (\S+)", reply)
         if m:
-            time.sleep(1.5)
-            c.service("ChanServ", f"DROP {room} {m.group(1)}", 3)
+            c.service("ChanServ", f"UNREGISTER {room} {m.group(1)}", 3)
         c.send(f"PART {room}")
         c.read(0.5)
     finally:
@@ -228,10 +227,17 @@ def server_ms(line):
 
 
 def sql(statement):
-    """Run SQL on the account service's SQLite (test clean-up only)."""
+    """Run SQL on the account service's Postgres database (test clean-up only)."""
     import subprocess
-    code = f"import sqlite3;c=sqlite3.connect('/data/register.db');c.executescript({statement!r});c.commit()"
-    subprocess.run(["docker", "exec", "register", "python3", "-c", code], check=True, capture_output=True)
+    subprocess.run(PSQL + ["-v", "ON_ERROR_STOP=1", "-q", "-c", statement], check=True, capture_output=True)
+
+
+def history_sql(statement):
+    """Run SQL on Ergo's history database; returns the output (tuples only)."""
+    import subprocess
+    r = subprocess.run(PSQL_HISTORY + ["-v", "ON_ERROR_STOP=1", "-At", "-c", statement],
+                       check=True, capture_output=True, text=True)
+    return r.stdout.strip()
 
 
 # ---------------------------------------------------------------- reporting

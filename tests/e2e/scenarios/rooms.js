@@ -1,5 +1,5 @@
 // Rooms: create a new room through the Create Room dialog (settings applied
-// via ChanServ MLOCK), moderate bob (moderator, mute, ban, kick), welcome
+// kept by Ergo for registered rooms), moderate bob (moderator, mute, ban, kick), welcome
 // message, poll, pin, event with RSVP, "Seen by", invite link button, then
 // delete the room. Peer: rooms.peer.py (bob).
 check("signed in", await signIn("alice"));
@@ -12,7 +12,7 @@ $("crTopic").value = "e2e topic"; $("crKey").value = "pw123"; $("crLimit").value
 $("crCreate").click();
 const c = await until(() => conv(keyOf(R)), 10000);
 check("created and registered to us", await until(() => c.msgs.some((m) => /it's your room now/.test(m.txt)), 20000));
-check("settings applied (key + limit via MLOCK)", await until(() => c.key === "pw123" && c.limit === 9, 20000), [c.key, c.limit]);
+check("settings applied (key + limit)", await until(() => c.key === "pw123" && c.limit === 9, 20000), [c.key, c.limit]);
 check("topic set", await until(() => c.topic === "e2e topic", 10000));
 
 openRoomDialog(c); await until(() => c.infoLoaded, 15000);
@@ -23,7 +23,7 @@ check("owner removes key + limit", await until(() => !c.key && !c.limit, 15000),
   { registered: c.registered, key: c.key, limit: c.limit });
 
 check("bob joins (peer)", (await ask(`join ${R}`)) === "joined" && await until(() => c.members.has("bob"), 10000));
-check("welcome message shown to bob", (await ask("welcome?")) === "welcome yes");
+check("welcome message kept for the room", (await ask(`welcome? ${R}`)) === "welcome yes");
 await setModerator(c, "bob", true);
 check("make bob moderator", await until(() => /@/.test(c.members.get("bob") || ""), 10000));
 await setModerator(c, "bob", false);

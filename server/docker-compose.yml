@@ -1,4 +1,11 @@
-name: irc
+name: a09f
+
+# a09f server: Ergo (IRC server with built-in accounts, rooms, always-on
+# clients and history) + PostgreSQL (Ergo history, account service data) +
+# the account service (Go, server/api) + Mailpit (dev email).
+#
+# Secrets come from .env (see .env.example; scripts/init-env.sh fills in the
+# random ones).
 
 # Reusable logging config: cap docker json-file logs so they can't fill the disk.
 x-logging: &default-logging
@@ -8,76 +15,24 @@ x-logging: &default-logging
     max-file: "3"
 
 networks:
-  ircnet:
+  a09f:
     driver: bridge
     ipam:
       config:
-        - subnet: ${IRC_SUBNET:-172.30.99.0/24}
+        - subnet: ${A09F_SUBNET:-172.30.98.0/24}
 
 services:
-  solanum:
-    build:
-      context: ./solanum
-      args:
-        SOLANUM_COMMIT: ${SOLANUM_COMMIT:-92afd03482ae6b0df1c5ba1d6b8886d2d626dbf3}
-    image: solanum-local:latest
-    container_name: solanum
-    restart: unless-stopped
-    env_file: .env
-    ports:
-      - "${BIND_ADDR:-127.0.0.1}:${SOLANUM_PORT:-6667}:6667"        # IRC plaintext
-      - "${BIND_ADDR:-127.0.0.1}:${SOLANUM_TLS_PORT:-6697}:6697"    # IRC over TLS (self-signed)
-    volumes:
-      - ./solanum/etc:/etc/solanum:ro
-      - ./solanum/etc/motd:/usr/local/etc/ircd.motd:ro
-      - solanum-logs:/var/log/solanum
-      - solanum-state:/var/local                # bandb ban.db (/var/local/ban.db)
-    healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6667"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
-    ulimits:
-      nofile:
-        soft: 65536
-        hard: 65536
-    logging: *default-logging
-    networks:
-      ircnet:
-        ipv4_address: 172.30.99.10
-
-  atheme:
-    image: s0fx2/atheme-irc-services@sha256:29f42d1e01ae198e21f80867e0b7924297f5edfa9c5b532c4d0dae4a8461523b
-    container_name: atheme
-    restart: unless-stopped
-    env_file: .env
-    entrypoint: /render-entrypoint.sh
-    volumes:
-      - ./atheme/etc:/atheme/etc
-      - ./atheme/entrypoint.sh:/render-entrypoint.sh:ro
-      - atheme-data:/atheme/var
-    depends_on:
-      solanum:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f atheme-services >/dev/null && nc -z solanum 6667"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
-    logging: *default-logging
-    networks:
-      ircnet:
-        ipv4_address: 172.30.99.20
-
   postgres:
     image: postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
-    container_name: postgres
+    container_name: a09f-postgres
     restart: unless-stopped
-    env_file: .env
-    # Modest tuning for a bouncer workload: message history is insert-heavy.
-    # synchronous_commit stays at default (on) — durability is not traded away.
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/init-env.sh}
+      # Read by initdb/01-roles.sh to create the ergo and a09f roles + databases.
+      ERGO_DB_PASSWORD: ${ERGO_DB_PASSWORD:?run scripts/init-env.sh}
+      A09F_DB_PASSWORD: ${A09F_DB_PASSWORD:?run scripts/init-env.sh}
+    # Insert-heavy chat history; durability is not traded away.
     command: >
       postgres
       -c shared_buffers=256MB
@@ -91,64 +46,69 @@ services:
         hard: 65536
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 10s
     logging: *default-logging
     networks:
-      ircnet:
-        ipv4_address: 172.30.99.40
+      a09f:
+        ipv4_address: 172.30.98.40
 
-  soju:
-    image: codeberg.org/emersion/soju@sha256:c695fb996dce168fb39449415c7523b17189ed81b48c107d4728fc93fb30e799
-    container_name: soju
+  ergo:
+    image: ghcr.io/ergochat/ergo:v2.19.1
+    container_name: a09f-ergo
     restart: unless-stopped
     environment:
-      # lib/pq reads PGPASSWORD for the postgres:// connection in soju/config
-      PGPASSWORD: ${POSTGRES_PASSWORD}
+      ERGO__DATASTORE__POSTGRESQL__PASSWORD: ${ERGO_DB_PASSWORD}
+      ERGO__API__BEARER_TOKENS: '["${ERGO_API_TOKEN:?run scripts/init-env.sh}"]'
+      ERGO__ACCOUNTS__JWT_AUTH__TOKENS: '[{"algorithm": "hmac", "key": "${JWT_KEY:?run scripts/init-env.sh}", "account-claims": ["preferred_username"]}]'
+    # Self-signed TLS certificates are made on first start (ergo mkcerts).
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /ircd/db /ircd/tls && /ircd-bin/ergo mkcerts --conf /ircd/etc/ircd.yaml >/dev/null && exec /ircd-bin/ergo run --conf /ircd/etc/ircd.yaml"]
     ports:
-      - "${BIND_ADDR:-127.0.0.1}:${SOJU_PORT:-16667}:6667"          # bouncer plaintext
-      - "${BIND_ADDR:-127.0.0.1}:${SOJU_TLS_PORT:-16697}:6697"      # bouncer TLS (self-signed)
+      - "${BIND_ADDR:-127.0.0.1}:${IRC_PORT:-16667}:6667"          # IRC plaintext (the app)
+      - "${BIND_ADDR:-127.0.0.1}:${IRC_TLS_PORT:-16697}:6697"      # IRC over TLS (self-signed)
     volumes:
-      - ./soju/config:/soju-config:ro
-      - ./soju:/soju-tls:ro
-      - soju-db:/db
-      - soju-uploads:/uploads
+      - ./ergo/ircd.yaml:/ircd/etc/ircd.yaml:ro
+      - ./ergo/motd:/ircd/etc/motd:ro
+      - ergo-data:/ircd/db
+      - ergo-tls:/ircd/tls
     depends_on:
-      solanum:
-        condition: service_healthy
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "/sojuctl", "-config", "/soju-config", "server", "status"]
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 6667"]
       interval: 10s
       timeout: 5s
       retries: 6
-      start_period: 15s
+      start_period: 10s
     ulimits:
       nofile:
         soft: 65536
         hard: 65536
     logging: *default-logging
     networks:
-      ircnet:
-        ipv4_address: 172.30.99.30
+      a09f:
+        ipv4_address: 172.30.98.10
 
-  # Self-service "Create account" for the a09f desktop app. Creates a soju
-  # user + per-user upstream network through soju's admin socket (soju-db).
-  register:
+  # Account service (Go): accounts, friends, live events (SSE), message
+  # extras, rooms/people data. Talks to Ergo over its HTTP API and IRC.
+  api:
     build:
-      context: ./register
-    image: a09f-register:latest
-    container_name: register
+      context: ./api
+    image: a09f-api:latest
+    container_name: a09f-api
     restart: unless-stopped
     environment:
-      UPSTREAM_ADDR: irc+insecure://solanum:6667
-      NETWORK_NAME: ${SOJU_NETWORK:-solanum}
-      DATA_DIR: /data                         # recovery emails + reset codes (SQLite)
+      DATABASE_URL: postgres://a09f:${A09F_DB_PASSWORD}@postgres:5432/a09f?sslmode=disable
+      HISTORY_DATABASE_URL: postgres://a09f:${A09F_DB_PASSWORD}@postgres:5432/ergo_history?sslmode=disable
+      ERGO_API: http://ergo:8089
+      ERGO_API_TOKEN: ${ERGO_API_TOKEN}
+      ERGO_IRC: ergo:6667
+      JWT_KEY: ${JWT_KEY}
       ADMIN_USERS: ${ADMIN_USERS:-}           # comma-separated IDs allowed to send announcements
       # Password-reset email. Defaults deliver to the local Mailpit catcher;
       # point these at a real SMTP server in production.
@@ -159,43 +119,41 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       MAIL_FROM: ${MAIL_FROM:-a09f <no-reply@a09f.invalid>}
     ports:
-      - "${BIND_ADDR:-127.0.0.1}:${REGISTER_PORT:-16680}:8080"    # account registration (HTTP)
-    volumes:
-      - ./soju/config:/soju-config:ro
-      - soju-db:/db
-      - register-data:/data
+      - "${BIND_ADDR:-127.0.0.1}:${API_PORT:-16680}:8080"
     depends_on:
-      soju:
+      postgres:
+        condition: service_healthy
+      ergo:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      test: ["CMD", "/a09f-api", "-health"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 5s
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     logging: *default-logging
     networks:
-      ircnet:
-        ipv4_address: 172.30.99.50
+      a09f:
+        ipv4_address: 172.30.98.50
 
-  # Development mail catcher: register sends password-reset emails here.
+  # Development mail catcher: the api sends password-reset emails here.
   # Read them at http://127.0.0.1:16825. Not needed with a real SMTP_HOST.
   mailpit:
     image: axllent/mailpit@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68  # v1.27
-    container_name: mailpit
+    container_name: a09f-mailpit
     restart: unless-stopped
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${MAILPIT_PORT:-16825}:8025"     # web inbox
     logging: *default-logging
     networks:
-      ircnet:
-        ipv4_address: 172.30.99.60
+      a09f:
+        ipv4_address: 172.30.98.60
 
 volumes:
   postgres-data:
-  soju-db:
-  soju-uploads:
-  register-data:
-  atheme-data:
-  solanum-logs:
-  solanum-state:
+  ergo-data:
+  ergo-tls:

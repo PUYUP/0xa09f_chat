@@ -1,97 +1,44 @@
 # Penggunaan
 
-## Connect langsung ke Solanum
+Orang biasa memakai app desktop a09f. Untuk debugging, client IRC biasa
+juga bisa tersambung — semua harus login dengan akun a09f (SASL).
 
-| Cara      | Address              | Catatan                    |
-|-----------|----------------------|----------------------------|
-| Plain     | `irc://localhost:6667`  | atau host `127.0.0.1`    |
-| TLS       | `ircs://localhost:6697` | sertifikat self-signed — client akan warning, accept/ignore |
+## Connect
 
-Di client IRC (WeeChat, HexChat, irssi, The Lounge, dst) cukup set host/port di atas.
-Identitas network: `irc.solanum.test` / `SolNet`.
+| | Alamat |
+|---|---|
+| IRC plain | `127.0.0.1:16667` |
+| IRC TLS (self-signed) | `127.0.0.1:16697` |
+| Service akun (HTTP) | `http://127.0.0.1:16680` |
+| Mailpit (web) | `http://127.0.0.1:16825` |
 
-### Services (Atheme)
-
-Begitu connect, services langsung tersedia via private message:
-
-```
-/msg NickServ REGISTER <password> <email>     # register nick
-/msg NickServ IDENTIFY <nick> <password>      # login
-/msg NickServ INFO                             # status akun
-/msg NickServ HELP                             # semua perintah
-
-/msg ChanServ REGISTER #<channel> <password>   # register channel
-/msg ChanServ OP #<channel>                    # ambil op via access list
-/msg ChanServ HELP
-
-/msg HostServ HELP                             # vhost (opsional)
-/msg MemoServ / HelpServ                       # services lain
-```
-
-Setelah REGISTER, nick auto-login (numeric `900`). Channel yang di-`JOIN` akan
-tetap ter-join untuk user itu.
-
-### Oper (admin solanum)
-
-Operator `admin` didefinisikan di `ircd.conf` dengan password ter-hash.
-Login di client dengan `/OPER admin <password>`. Ganti hash password dulu
-sebelum dipakai — hash saat ini hanya untuk dev lokal.
-
-## Connect via Soju bouncer
-
-Soju butuh **autentikasi SASL** — client tanpa SASL akan ditolak `464`.
-
-| Cara      | Address                |
-|-----------|------------------------|
-| Plain     | `irc://localhost:16667`  |
-| TLS       | `ircs://localhost:16697` |
-
-### Login bouncer
-
-Di client, aktifkan SASL (mechanism `PLAIN`) dengan:
-
-- **username**: `pointilis` (user bouncer)
-- **password**: password yang dipakai saat `sojuctl user create`
-
-Setelah login, soju menampilkan MOTD bouncer. Untuk memilih network upstream,
-sesuaikan **username** menjadi `<user>/<network>`:
+Login: SASL PLAIN, username = ID a09f, password = password a09f. Nick harus
+sama dengan ID (Ergo memaksakan ini). Tanpa SASL koneksi ditolak.
 
 ```
-NICK pointilis/solanum
-USER pointilis/solanum ...
+CAP LS 302
+CAP REQ :sasl server-time message-tags batch echo-message away-notify draft/chathistory
+NICK alice
+USER alice 0 * :alice
+AUTHENTICATE PLAIN
+AUTHENTICATE <base64 "alice\0alice\0password">
+CAP END
 ```
 
-Atau pakai ekstensi `soju.im/bouncer-networks` (client modern seperti WeeChat /
-The Lounge mendukungnya — network bisa dipilih dari UI).
+Karena akun always-on, client ini menjadi satu "perangkat" lagi dari akun
+itu: room yang diikuti langsung tampil, history lewat `CHATHISTORY`.
 
-Contoh WeeChat:
+## Services
 
-```
-/set irc.server_tls_verify 0          # abaikan cert self-signed
-/connect solnet irc+insecure://localhost/16667 -n pointilis/solanum
-```
+| Perintah | Fungsi |
+|---|---|
+| `/msg ChanServ REGISTER #room` | room jadi milikmu (harus op di room) |
+| `/msg ChanServ INFO #room` | founder, tanggal daftar |
+| `/msg ChanServ AMODE #room +o <id>` | moderator tetap |
+| `/msg ChanServ TRANSFER #room <id>` | beri room (penerima `TRANSFER ACCEPT #room`) |
+| `/msg ChanServ UNREGISTER #room` | lepas kepemilikan (minta kode konfirmasi) |
+| `/msg NickServ INFO <id>` | info akun |
 
-lalu `/sasl add solnet plain pointilis <password>` (urutan tergantung versi).
+Mute: `MODE #room +b m:<id>!*@*`. Ban: `MODE #room +b <id>!*@*`.
 
-### Perilaku bouncer
-
-- Channel yang di-join **otomatis di-join ulang** setiap reconnect upstream.
-- Pesan yang masuk saat offline disimpan (`message-store db`) dan dikirim
-  sebagai backlog saat client connect lagi.
-- `PART #chan detach` melepaskan channel tanpa meninggalkan di upstream.
-- NickServ/ChanServ dipakai **di dalam network** (setelah bind), sama seperti
-  connect langsung — mis. `/msg NickServ IDENTIFY soluser <password>` untuk
-  mendaftarkan nick upstream `soluser`.
-- `/msg NickServ` di koneksi bouncer (tanpa `/network`) → error; harus pakai
-  network-specific session.
-
-## Port cheat sheet
-
-```
-6667   solanum plain        → client langsung, upstream soju
-6697   solanum TLS          → client langsung TLS
-16667  soju plain           → client via bouncer
-16697  soju TLS             → client via bouncer TLS
-```
-
-Semua bind `0.0.0.0` — bisa diakses dari LAN selama port tidak diblok firewall.
+Pendaftaran akun (`NickServ REGISTER`) dimatikan — buat akun lewat app.

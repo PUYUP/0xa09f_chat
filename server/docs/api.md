@@ -1,10 +1,10 @@
-# API service akun (`server/register`)
+# API service akun (`server/api`)
 
-Service HTTP kecil (Python stdlib, `server/register/app.py` + `social.py` +
-`preview.py`) di `127.0.0.1:16680` (`REGISTER_PORT`). Ia melengkapi IRC
-untuk hal-hal yang tidak bisa (atau tidak boleh) lewat IRC: pembuatan akun,
-reset password, daftar teman di server, event live, dan metadata pesan.
-Datanya di SQLite `/data/register.db` (volume `register-data`).
+Service HTTP dalam Go (`server/api`, satu binary, PostgreSQL lewat pgx) di
+`127.0.0.1:16680` (`API_PORT`). Ia melengkapi IRC (Ergo) untuk hal-hal yang
+tidak bisa (atau tidak boleh) lewat IRC: pembuatan akun, reset password,
+daftar teman di server, event live, dan metadata pesan. Datanya di database
+`a09f`; pencarian membaca history Ergo (`ergo_history`, baca saja).
 
 Semua respons JSON `{"ok": true, …}` atau `{"ok": false, "error": "<kalimat untuk user>"}`
 dengan status 4xx/5xx. CORS `*` (dipanggil dari webview Tauri).
@@ -14,12 +14,11 @@ dengan status 4xx/5xx. CORS `*` (dipanggil dari webview Tauri).
 - **Tanpa token** (dibatasi per IP): `/register`, `/reset/*`, `/email`,
   `/session`, `/join/<room>`, `/health`.
 - **Dengan token**: `POST /session {"username","password","device"}` →
-  `{"token","sid","admin"}`. Password dicek dengan login SASL sungguhan ke
-  soju. Kirim `Authorization: Bearer <token>`; untuk `GET /events` dan
+  `{"token","sid","admin"}`. Password dicek oleh Ergo (`/v1/check_auth`). Kirim `Authorization: Bearer <token>`; untuk `GET /events` dan
   `GET /preview/img` token lewat query `?token=` (EventSource/`<img>` tidak
   bisa mengirim header).
-- Token hanya disimpan di memori service: restart service = semua sesi
-  berakhir, app otomatis login ulang. Sesi yang tidak dipakai 2 hari
+- Sesi disimpan di tabel `sessions` (hanya SHA-256 token), jadi restart
+  service tidak mengeluarkan siapa pun. Sesi yang tidak dipakai 2 hari
   berakhir sendiri; TTL maksimum 7 hari.
 - `sid` = 12 karakter pertama SHA-256 token, publik; dipakai app untuk
   mengenali event yang dipicu perangkatnya sendiri.
@@ -39,10 +38,11 @@ Endpoint bertoken lain tidak dibatasi per IP (typing sering).
 
 | Method & path | Body / query | Hasil |
 |---|---|---|
-| `POST /register` | `username, password, email` | 201. Membuat user soju + network upstream (`-auto-away true`), menyimpan email |
+| `POST /register` | `username, password, email` | 201. Akun Ergo (`/v1/ns/saregister`) + sign-in pertama (klien always-on), menyimpan email |
 | `POST /email` | `username, password[, email]` | baca / ganti email pemulihan |
 | `POST /reset/request` | `username` | kirim kode 6 digit ke email (masked di respons) |
-| `POST /reset/confirm` | `username, code, password` | ganti password di soju, NickServ (`network quote`) dan SASL soju; semua sesi berakhir + event `signed-out` |
+| `POST /reset/confirm` | `username, code, password` | ganti password di Ergo (`/v1/ns/passwd`); semua sesi berakhir + event `signed-out` |
+| `POST /password` | `old, new` | (bertoken) ganti password; perangkat lain keluar (`signed-out {except: sid}`) |
 | `POST /session` | `username, password, device` | token (lihat di atas) |
 | `POST /session/end` | — | akhiri sesi ini (sign out) |
 | `GET /sessions` | — | perangkat yang login: `sid, device, created, last, current` |
@@ -63,6 +63,7 @@ Endpoint bertoken lain tidak dibatasi per IP (typing sering).
 | `GET /users/search?q=` | ≥ 2 huruf | ID yang mengandung `q`, **zona waktu terdekat dulu**; juga `tz` per hasil |
 | `GET /suggestions` | — | saran teman `[{nick, reasons[]}]`: teman dari teman, aktif di room yang sama 14 hari, zona waktu dekat |
 | `GET /notes`, `POST /note` | `about, text` | catatan pribadi tentang seseorang (kosong = hapus) |
+| `GET /canpm?to=` | | `allowed`: boleh kirim pesan pribadi? `false` kalau dia "only friends" dan kita bukan temannya (Ergo tidak punya caller-id; app penerima juga menyaring) |
 
 ## Kehadiran & profil
 
@@ -71,7 +72,9 @@ Endpoint bertoken lain tidak dibatasi per IP (typing sering).
 | `POST /typing` | `to, active` | `to` = ID (private) atau `#room` (disiarkan ke semua app; app tidak mengirim untuk room hidden/conference) |
 | `POST /read` | `to, time` | "✓ Seen" private chat |
 | `POST /roomread`, `GET /roomreads?room=` | `room, time` | "👁 Seen by" di room (bukan conference) |
-| `POST /profile/updated` | — | beri tahu teman (dan perangkat sendiri) untuk memuat ulang profil (profil disimpan di NickServ) |
+| `GET /profile?user=` | | `registered, since, props{name, location, about}` (`since` = tanggal akun di Ergo) |
+| `POST /profile` | `name, location, about` | hanya field yang dikirim berubah; teman & perangkat sendiri dapat `profile-updated` |
+| `POST /profile/updated` | — | beri tahu teman (dan perangkat sendiri) untuk memuat ulang profil |
 | `GET /lastseen?users=` | — | `now` atau unix detik terakhir app ditutup |
 | `POST /tz`, `GET /tz?users=` | `tz, offset` (menit timur UTC) | `GET` juga mengembalikan `active` |
 | `POST /active` | `start, end` (menit lokal) / `null` | jam aktif |
@@ -81,12 +84,12 @@ Endpoint bertoken lain tidak dibatasi per IP (typing sering).
 
 ## Pesan
 
-Pesan IRC tidak punya ID (soju tidak memberi `msgid`), jadi pesan dikenali dari
+Pesan dikenali (sama seperti sebelum Ergo, supaya data lama tetap cocok) dari
 **`sender` + `target` + `time` + `hash`**:
 
 - `target`: nama room (huruf kecil), atau untuk private chat **ID penerima
   dari sudut pandang pengirim**.
-- `time`: waktu server (ms) dari tag `@time`; solanum memberi waktu yang sama
+- `time`: waktu server (ms) dari tag `@time`; server memberi waktu yang sama
   ke semua salinan pesan.
 - `hash`: FNV-1a 32-bit atas unit UTF-16 teks pesan (setelah ACTION dilepas),
   base36 — `msgHash()` di app, `fnv()` di `tests/lib/a09f.py`.
@@ -101,7 +104,8 @@ Pesan IRC tidak punya ID (soju tidak memberi `msgid`), jadi pesan dikenali dari
 | `GET /msgmeta?conv=&from=&to=` | rentang waktu ms opsional | reactions, edits, expiring (+ pins untuk room) satu percakapan |
 | `POST /save`, `GET /saved` | kunci + `conv, text, on` | pesan tersimpan pribadi |
 | `POST /poll/create`, `GET /poll?id=`, `POST /poll/vote` | `room, question, options[2..8]` / `id, option|null` | |
-| `POST /schedule`, `GET /scheduled`, `POST /scheduled/cancel` | `target, text, due` (1 menit – 30 hari) | dikirim soju atas nama user (`sojuctl user run <id> network quote`), maks 50 antre |
+| `POST /schedule`, `GET /scheduled`, `POST /scheduled/cancel` | `target, text, due` (1 menit – 30 hari) | dikirim service atas nama user: login IRC dengan token JWT satu menit (SASL `IRCV3BEARER`, *pre-away* supaya tidak terlihat online), maks 50 antre |
+| `GET /search?q=&in=` | `in` = room atau ID, kosong = semua | cari di history Ergo: room yang sedang diikuti + private chat sendiri; hasil `lines` (baris IRC, maks 100) |
 | `POST /remind`, `GET /reminders`, `GET /reminders/due` | `text, minutes` | pengingat pribadi |
 | `GET /preview?url=`, `GET /preview/img?u=&token=` | | pratinjau link, lihat "Pengaman SSRF" |
 
@@ -117,6 +121,8 @@ Pesan IRC tidak punya ID (soju tidak memberi `msgid`), jadi pesan dikenali dari
 | `POST /activity`, `GET /trending` | `room` | app melapor tiap pesan (bukan room hidden/conference); dipakai juga untuk zona waktu room & saran teman |
 | `GET /roomtz?rooms=` | | median offset pengirim pesan 7 hari (berbobot jumlah pesan) |
 | `GET /join/<room>` | publik | halaman HTML "Open in a09f" → `a09f://join/<room>` |
+| `POST /welcome`, `GET /welcome?room=` | `room, text` | pesan sambutan room (kosong = hapus); app menampilkannya saat join |
+| `POST /knock` | `room` | "ask to join" room private: event `knock {room, from}` ke semua app, moderator room yang menampilkannya; 1×/menit per room |
 
 ## Admin
 
@@ -128,7 +134,8 @@ Pesan IRC tidak punya ID (soju tidak memberi `msgid`), jadi pesan dikenali dari
 ## Event live (`GET /events?token=`)
 
 Server-Sent Events. Setiap event `event: <nama>` + `data: <json>`; keepalive
-komentar tiap 25 dtk. Satu koneksi = satu thread di service.
+komentar tiap 25 dtk. Satu koneksi = satu goroutine; app yang lambat
+kehilangan event (buffer 256) alih-alih memperlambat yang lain.
 
 | Event | Ke siapa | Data |
 |---|---|---|
@@ -142,11 +149,12 @@ komentar tiap 25 dtk. Satu koneksi = satu thread di service.
 | `profile-updated`, `namecolor`, `active-changed` | teman / semua | `nick`/`user` |
 | `imv` | kedua pihak | `a, b, theme, by` |
 | `announcement` | semua | `id, author, text, created` |
+| `knock` | semua | `room, from` |
 | `online` | semua | `count` (di-debounce 2 dtk) |
 | `reminder` | user | pengingat yang jatuh tempo |
 | `signed-out` | perangkat user | `except: sid` (ganti password) atau `only: sid` (dikeluarkan) |
 
-## Pengaman SSRF (`preview.py`)
+## Pengaman SSRF (`preview.go`)
 
 Halaman diambil server atas nama user, jadi tidak boleh jadi jalan masuk ke
 jaringan internal:

@@ -1,44 +1,41 @@
-"""Peer for long_history.js: seeds 2,500 messages into alice's soju history
-for the test room (straight into soju's PostgreSQL), and removes them again."""
-import subprocess
+"""Peer for long_history.js: seeds 2,500 messages from bob into the test
+room's history (straight into Ergo's history database), and removes them."""
 
-from a09f import drop_room
+from a09f import drop_room, history_sql
 from peer import Peer
 
 p = Peer("bob")
 
 
-def psql(q):
-    r = subprocess.run(["docker", "exec", "postgres", "psql", "-U", "soju", "-d", "soju", "-At", "-c", q],
-                       capture_output=True, text=True)
-    return r.stdout.strip()
-
-
-def target_id(room):
-    return psql(f"""select mt.id from "MessageTarget" mt join "Network" n on n.id=mt.network
-                    join "User" u on u.id=n."user" where u.username='alice' and mt.target='{room}'""")
-
-
 @p.on("seed")
 def _(room):
-    tid = target_id(room)
-    if not tid:          # soju creates the target with the first stored message
-        psql(f"""insert into "MessageTarget" (network, target) select n.id, '{room}' from "Network" n
-                 join "User" u on u.id=n."user" where u.username='alice' limit 1""")
-        tid = target_id(room)
-    psql(f"""insert into "Message" (target, raw, time, sender, text)
-             select {tid}, '@time=' || to_char((now() - interval '2 hours' + g * interval '2 seconds') at time zone 'UTC',
-               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') || ' :bob!~bob@172.30.99.30 PRIVMSG {room} :history line ' || g,
-               now() - interval '2 hours' + g * interval '2 seconds', 'bob', 'history line ' || g
-             from generate_series(1, 2500) g""")
+    # Same shape as Ergo's stored items (history.Item as JSON), indexed by
+    # the casefolded room name and the time in nanoseconds.
+    history_sql(f"""
+        WITH m AS (
+          SELECT g, now() - interval '2 hours' + g * interval '2 seconds' AS t FROM generate_series(1, 2500) g
+        ), h AS (
+          INSERT INTO history (data, msgid)
+          SELECT convert_to(json_build_object(
+                   'Type', 1, 'Nick', 'bob!~u@a09f', 'AccountName', 'bob',
+                   'Message', json_build_object('Message', 'history line ' || g, 'Msgid', md5('{room}' || g),
+                                                'Split', null,
+                                                'Time', to_char(t at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),
+                   'Tags', null, 'Params', json_build_array('{room}'))::text, 'UTF8'),
+                 decode(md5('{room}' || g), 'hex')
+          FROM m ORDER BY g
+          RETURNING id, convert_from(data, 'UTF8')::json -> 'Message' ->> 'Time' AS time
+        )
+        INSERT INTO sequence (history_id, target, nanotime)
+        SELECT id, convert_to(lower('{room}'), 'UTF8'),
+               (extract(epoch FROM time::timestamptz) * 1000000)::bigint * 1000 FROM h""")
     p.reply("seeded")
 
 
 @p.on("unseed")
 def _(room):
-    tid = target_id(room)
-    if tid:
-        psql(f'delete from "MessageTarget" where id={tid}')
+    history_sql(f"""WITH d AS (DELETE FROM sequence WHERE target = convert_to(lower('{room}'), 'UTF8') RETURNING history_id)
+                    DELETE FROM history WHERE id IN (SELECT history_id FROM d)""")
     drop_room("alice", room)
 
 

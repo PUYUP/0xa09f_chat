@@ -1,4 +1,4 @@
-// Privacy & time: "only friends" (+g), ignore, far-timezone warning for a
+// Privacy & time: "only friends" (both directions), ignore, far-timezone warning for a
 // stranger, send later, active hours. Peer: privacy_time.peer.py (frank,
 // who is not alice's friend and lives in New York for this test).
 check("signed in", await signIn("alice"));
@@ -6,22 +6,25 @@ const F = "frank";
 const CTRL = "bob";     // the peer takes commands through bob (see privacy_time.peer.py)
 
 openPrivacy(); $("pvFriendsOnly").checked = true; await onFriendsOnlyToggle(); closePrivacy();
-// The app first reads the server's ACCEPT list (removing ex-friends), then
-// sets +g; our lines are paced by soju, so this takes a few seconds.
-check("ACCEPT list read and synced to friends", await until(() => S.accepted && S.callerId, 45000),
-  { accepted: S.accepted && [...S.accepted], callerId: S.callerId });
-// +g reaches the server after our queued lines: let frank retry until blocked.
-let blocked = false;
-const tries = [];
-for (let i = 0; i < 10 && !blocked; i++) {
-  const r = await ask("pmcheck", CTRL);
-  tries.push(r); blocked = r === "blocked";
-  if (!blocked) await wait(2000);
-}
-check("only friends: frank's message is refused (716)", blocked, tries);
-check("…and we get a tip once (718)", await until(() =>
-  [...S.convs.values()].some((c) => c.msgs.some((m) => /frank tried to message you/.test(m.txt))), 15000));
+check("only friends: setting saved", S.prefs.friendsOnly === true);
+// Ergo has no caller-id: this app hides a stranger's private messages and
+// says so once. (grace: alice never wrote to her, so she can't "answer".)
+const knock1 = `only friends test ${Date.now().toString(36)}`;
+await ask(`pmfrom grace ${knock1}`, CTRL);
+check("only friends: a stranger's message isn't shown", await until(() =>
+  [...S.convs.values()].some((c) => c.msgs.some((m) => /grace tried to message you/.test(m.txt))), 15000)
+  && !conv("grace")?.msgs.some((m) => m.txt === knock1));
 openPrivacy(); $("pvFriendsOnly").checked = false; await onFriendsOnlyToggle(); closePrivacy();
+// The other way round: frank takes messages from friends only, so our app
+// doesn't send and tells us why.
+check("frank turns on only friends (peer)", (await ask("friendsonly on", CTRL)) === "friendsonly on");
+S.canPm?.delete(F);
+sendTo(F, "can I message you?");
+check("only friends: we're told frank only takes friends' messages", await until(() =>
+  [...S.convs.values()].some((c) => c.msgs.some((m) => /frank only accepts messages from friends/.test(m.txt))), 10000));
+await ask("friendsonly off", CTRL);
+S.canPm?.delete(F);
+for (const x of S.convs.values()) x.msgs = x.msgs.filter((m) => !/(grace tried to message you|frank only accepts)/.test(m.txt));
 
 await ignoreUser(F, true);
 const hello = `hello from frank ${Date.now().toString(36)}`;

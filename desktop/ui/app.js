@@ -1,4 +1,4 @@
-/* a09f desktop client — IRC protocol logic over the Soju bouncer.
+/* a09f desktop client — IRC protocol logic, talking to the Ergo IRC server.
  * Rust side (src-tauri) is a raw TCP bridge: invoke('send', line) and
  * events 'irc-line' / 'irc-closed'.
  *
@@ -6,7 +6,9 @@
  * screen — just Sign In, rooms, private chats, people and messages.
  *
  * Conversations ("convs") are rooms (#channel) or private chats (a nick).
- * History and offline messages come from soju via IRCv3 draft/chathistory;
+ * Every account is an always-on client in Ergo (it stays on the network while
+ * no device is connected), so history and offline messages come from Ergo
+ * via IRCv3 draft/chathistory;
  * unread counts come from draft/read-marker (synced across devices).
  */
 
@@ -19,13 +21,12 @@ const $ = (id) => document.getElementById(id);
 
 /* Fixed connection settings — like a classic messenger, nothing to pick. */
 const SERVER = "127.0.0.1:16667";
-const NETWORK = "solanum";        // soju upstream network name
-const ACCOUNT_URL = "http://127.0.0.1:16680";     // server/register: create account, recovery email, reset
+const ACCOUNT_URL = "http://127.0.0.1:16680";     // server/api: accounts, friends, live events, …
 const REGISTER_URL = `${ACCOUNT_URL}/register`;
 const DEFAULT_ROOM = "#lobby";    // everyone lands here if they're in no room yet
 const BURST_TOKEN = "a09f-burst-done";
-/* Hidden room every a09f app joins (server/scripts/setup-rooms.py). It carries
- * status messages ("STATUS busy …", kept in soju history) and, because
+/* Hidden room every a09f app joins (server/scripts/seed-demo.sh). It carries
+ * status messages ("STATUS busy …", kept in the room's history) and, because
  * everyone shares it, live Online/Offline changes via away-notify. */
 const PRESENCE_ROOM = "#a09f-presence";
 const PRESENCE_HISTORY = 500;
@@ -35,7 +36,7 @@ const MAX_BUFFER = 1000;           // messages kept per conversation (a sliding 
 
 /* IRCv3 capabilities we use when the server offers them. */
 const WANTED_CAPS = ["sasl", "server-time", "message-tags", "batch", "echo-message", "away-notify",
-                     "draft/chathistory", "draft/read-marker", "draft/pre-away", "soju.im/search"];
+                     "draft/chathistory", "draft/read-marker", "draft/pre-away"];
 
 const logEl = $("log"), roomsEl = $("channels"), pmsEl = $("pms"), usersEl = $("users");
 const dotEl = $("dot"), whoEl = $("who");
@@ -58,7 +59,6 @@ const S = {
   token: null,            // account-service session (friends, typing)
   typing: new Map(),      // nick key -> hide timer, while they're typing to me
   prefs: { ignore: [], friendsOnly: false },   // privacy settings (account service)
-  callerId: null,         // our +g state: null = unknown (fresh sign-in)
   redactions: new Set(),  // deleted messages (see isRedacted)
   admin: false,           // may send announcements
   style: { b: false, i: false, u: false, color: null },   // text style for what I send
@@ -81,9 +81,11 @@ const has = (cap) => S.caps.has(cap);
 const roomName = (c) => (c || "").replace(/^[#&]/, "");
 const isChannel = (t) => !!t && (t.startsWith("#") || t.startsWith("&"));
 const keyOf = (t) => (t || "").toLowerCase();
-const isService = (nick) => /Serv$/i.test(nick || "");
+/* Services (NickServ, ChanServ, …) and "a09f", the account that owns the
+ * built-in rooms and stays in them, are plumbing, never shown as people. */
+const isService = (nick) => /Serv$/i.test(nick || "") || (nick || "").toLowerCase() === "a09f";
 
-/* Services (NickServ, BouncerServ, ...) and the server itself are plumbing. */
+/* Services and the server itself are plumbing. */
 const isPlumbing = (prefix, nick) => !prefix || !prefix.includes("!") || isService(nick);
 
 function esc(s) {
@@ -179,6 +181,7 @@ const pms = () => [...S.convs.values()].filter((c) => c.kind === "pm");
  * order; live ones are appended. */
 function addMsg(target, m, { history = false } = {}) {
   if (m.others && target && isIgnored(m.who)) return;       // ignored: never shown, no chat opened
+  if (m.others && target && !isChannel(target) && blockedByFriendsOnly(m.who, !history)) return;
   const c = target ? getConv(target, isChannel(target) ? "room" : "pm")
                    : (S.current && conv(S.current)) || getConv(STATUS, "status");
   if (m.id && c.ids.has(m.id)) return;
@@ -312,7 +315,11 @@ function onHistoryBatch(target, lines) {
   if (S.exporting && keyOf(target) === S.exporting.key) {            // exportConversation() is paging
     const ls = lines.filter((l) => (l.cmd === "PRIVMSG" || l.cmd === "NOTICE") && !isPlumbing(l.prefix, nickOf(l.prefix)));
     S.exporting.lines = ls.concat(S.exporting.lines);
-    S.exporting.count = lines.filter((l) => l.cmd === "PRIVMSG" || l.cmd === "NOTICE").length;
+    const msgs = lines.filter((l) => l.cmd === "PRIVMSG" || l.cmd === "NOTICE");
+    S.exporting.count = msgs.length;
+    // Next page starts before the oldest line of this one (also when every
+    // line in it was plumbing and isn't exported).
+    if (msgs[0]?.tags?.time) S.exporting.oldest = msgs[0].tags.time;
     S.exporting.pageDone = true;
     return;
   }
@@ -766,8 +773,9 @@ function onJoin(fromNick, channel) {
     loadRoomState(c);
     if (S.burstDone) {
       sys(`You joined ${roomLabel(channel)}`, "system", channel); fetchHistory(c);
+      showWelcome(c);
       // Only a JOIN this device asked for can mean "I just created this room";
-      // soju also relays joins made from my other devices.
+      // Ergo also relays joins made from my other devices.
       c.justJoined = !!S.joining?.delete(keyOf(channel));
     }
     S.current = null;          // force switchTo to re-render
@@ -855,7 +863,6 @@ function onMessage(l) {
   if (isPresenceRoom(l.params[0])) { if (l.cmd === "PRIVMSG") onStatusLine(from, l); return; }
   if (from === "NickServ") { onNickServ(l.text || ""); return; }
   if (from === "ChanServ") { onChanServ(l.text || ""); return; }
-  if (from === "BouncerServ") { onBouncerServ(l.text || ""); return; }
   if (isPlumbing(l.prefix, from)) return;
   addMsg(convTarget(l.params[0], from), msgFrom(l, from));
 }
@@ -877,13 +884,12 @@ const ROOM_ERRORS = {
 function onNumeric(num, params, trailing) {
   switch (num) {
     case 1: onWelcome(params[0]); return;
-    // End of MOTD: soju replays saved room JOINs right after this. A PING
+    // End of MOTD: Ergo replays the rooms I'm in right after this. A PING
     // marker tells us when that replay is over (see onBurstDone).
     case 376: case 422: send(`PING :${BURST_TOKEN}`); return;
     case 353: onNames(params, trailing); return;
     case 332: setTopic(params[1], trailing); return;            // topic on join
     case 331: setTopic(params[1], ""); return;                  // no topic
-    case 330: if (keyOf(params[1]) === keyOf(S.me)) { S.selfAccount = params[2]; return; } break;
     case 322: case 323:
       if (S.listProbe) {                                   // roomExists() is asking
         if (num === 322 && keyOf(params[1]) === S.listProbe.key) S.listProbe.found = true;
@@ -897,19 +903,10 @@ function onNumeric(num, params, trailing) {
     case 322: S.listBuf?.push({ name: params[1], users: +params[2] || 0, topic: trailing || "" }); return;
     case 323: S.roomList = S.listBuf || []; S.listBuf = null; S.listLoading = false; renderRoomBrowser(); return;
     case 311: case 301: case 318: case 401:
-      if (num === 318 && keyOf(params[1]) === keyOf(S.me) && S.link === "checking") { onSelfWhoisDone(); return; }
       if (onWhoisReply(num, params, trailing)) return;
       break;
-    case 716: case 718: onCallerId(num, params); return;
-    case 281: (S.acceptListing ||= []).push(...params.slice(1).join(" ").split(/[\s,]+/).filter(Boolean)); return;
-    case 282: S.accepted = new Set((S.acceptListing || []).map(keyOf)); S.acceptListing = null; applyFriendsOnly(); return;
     case 324: onChannelModes(params); return;
-    case 367: case 368: case 728: case 729: onListEntry(num, params); return;
-    case 710: onKnock(params); return;
-    case 711: sys("Your request was sent to the room's moderators. You'll get an invite if they let you in.", "system"); return;
-    case 712: sysError("You've asked too many times. Please wait a bit."); return;
-    case 713: sysError("That room isn't private — you can just join it."); return;
-    case 714: sysError("You're already in that room."); return;
+    case 367: case 368: onListEntry(num, params); return;
     case 480: sysError("You can't ask to join that room."); return;
     case 742: sysError("Only the room's owner can change that setting."); return;
     case 717: return;
@@ -917,7 +914,7 @@ function onNumeric(num, params, trailing) {
     case 731: onMonitor(trailing, false); return;
     // SASL finished (success or failure): end CAP negotiation so registration completes.
     case 903:
-      // Invisible: be away before soju sees us, so friends never see us online.
+      // Invisible: be away before registration ends, so friends never see us online.
       if (S.myStatus.code === "invisible" && has("draft/pre-away")) send("AWAY :Invisible");
       send("CAP END");
       return;
@@ -989,14 +986,13 @@ function handleLine(line) {
       const ref = params[0].slice(1);
       if (params[0].startsWith("+")) {
         const type = params[1];
-        if (type === "chathistory" || type === "draft/chathistory-targets" || type === "soju.im/search") {
+        if (type === "chathistory" || type === "draft/chathistory-targets") {
           S.batches.set(ref, { type, params: params.slice(2), lines: [] });
         }
       } else {
         const b = S.batches.get(ref);
         S.batches.delete(ref);
         if (b?.type === "chathistory") onHistoryBatch(b.params[0], b.lines);
-        else if (b?.type === "soju.im/search") onSearchBatch(b.lines);
         else if (b) onTargetsBatch(b.lines);
       }
       return;
@@ -1044,7 +1040,7 @@ const STATUS_PRESETS = {
 const invisibleKey = () => `a09f.invisible.${S.account}`;
 
 /* Effective status for a nick: {state: online|busy|away|offline|unknown, label}.
- * Offline = soju auto-away (no device connected), MONITOR offline, or no such
+ * Offline = Ergo auto-away (no device connected), MONITOR offline, or no such
  * nick. Otherwise the person's last STATUS line decides. */
 function statusOf(nick) {
   const key = keyOf(nick);
@@ -1116,9 +1112,9 @@ function onStatusLine(from, l) {
   schedulePresenceRender();
 }
 
-/* soju keeps history per account, so friends who joined PRESENCE_ROOM after
- * our last STATUS line never saw it. Re-announce a non-default status on
- * every sign-in (once our own history told us what it is). */
+/* The room's history only goes back so far, and friends may have joined
+ * PRESENCE_ROOM after our last STATUS line. Re-announce a non-default status
+ * on every sign-in (once our own history told us what it is). */
 function announceMyStatus() {
   if (S.announced || !S.inPresence) return;
   S.announced = true;
@@ -1149,8 +1145,8 @@ function setMyStatus(code, text) {
   renderUsers();
 }
 
-/* Initial state: WHOIS (fresh, unlike soju's cached WHO) for friends and the
- * people on screen; MONITOR covers friends who aren't on a09f/soju. */
+/* Initial state: WHOIS for friends and the people on screen; MONITOR covers
+ * friends' sign-ins and sign-outs. */
 function startPresence() {
   // Friends arrive from the account service (startSocial → applyFriends).
   clearTimeout(S.presenceTimer);
@@ -1326,6 +1322,7 @@ function openEvents() {
   on("event-soon", onEventSoon);
   on("roominfo", (d) => { S.roomInfo?.delete(keyOf(d.room)); });
   on("room-read", onRoomRead);
+  on("knock", onKnock);
   on("notes-changed", loadNotes);
   on("active-changed", (d) => {
     if (keyOf(d.user) === keyOf(S.me)) return;
@@ -1817,56 +1814,17 @@ window.addEventListener("blur", () => { S.focused = false; });
 // Browsers only let audio start after the person interacts with the page.
 document.addEventListener("pointerdown", () => { try { Sound.ensure(); } catch {} }, { capture: true });
 
-/* ---------- NickServ account link + rooms you own ---------- */
+/* ---------- rooms you own ---------- */
 
-/* Every a09f account gets a matching NickServ (Atheme) account, so rooms can
- * be owned and nicks protected. The app does it at sign-in because it's the
- * only place that knows the password; soju then logs in by itself via SASL. */
+/* An a09f ID is its Ergo account too (the app signs in with SASL), so rooms
+ * can be registered with ChanServ right away: nothing to link. */
 function checkAccountLink() {
-  S.link = "checking";
-  S.selfAccount = null;
-  send(`WHOIS ${S.me}`);
-}
-
-function onSelfWhoisDone() {
-  // Already identified (soju SASL) — but only counts if it's *our* account.
-  if (S.selfAccount && keyOf(S.selfAccount) === keyOf(S.me)) { S.link = "linked"; return; }
-  if (S.selfAccount && S.pw && !/\s/.test(S.pw)) {         // logged in as someone else: fix it
-    S.link = "identifying";
-    send(`PRIVMSG NickServ :IDENTIFY ${S.me} ${S.pw}`);
-    return;
-  }
-  if (!S.pw || /\s/.test(S.pw)) { S.link = "unavailable"; return; }   // Atheme can't take spaces
-  S.link = "registering";
-  send(`PRIVMSG NickServ :REGISTER ${S.pw} ${S.me.toLowerCase()}@users.a09f.invalid`);
-}
-
-function onNickServ(text) {
-  const raw = text.replace(/[\x02\x1d\x1f\x0f]/g, "");
-  const t = raw.toLowerCase();
-  if (S.pwChange?.step === "nickserv") return pwStepNickServ(t);
-  if (S.infoReq && onInfoLine(raw)) return;
-  if (S.profileSave && onProfileSaveReply(t)) return;
-  if (S.link === "registering") {
-    if (t.includes("is now registered to")) return linked();
-    if (t.includes("is already registered") || t.includes("already registered")) {
-      S.link = "identifying";
-      send(`PRIVMSG NickServ :IDENTIFY ${S.pw}`);
-      return;
-    }
-    if (t.includes("invalid") || t.includes("too many") || t.includes("cannot")) S.link = "failed";
-  } else if (S.link === "identifying") {
-    if (t.includes("you are now identified") || t.includes("you are now logged in")) return linked();
-    if (t.includes("invalid password") || t.includes("incorrect")) S.link = "failed";
-  }
-}
-
-function linked() {
   S.link = "linked";
   S.selfAccount = S.me;
-  // From now on soju identifies by itself whenever it reconnects.
-  send(`PRIVMSG BouncerServ :sasl set-plain ${S.me} ${S.pw}`);
 }
+
+/* NickServ only speaks up for things the app doesn't use any more. */
+function onNickServ() {}
 
 /* Register a brand-new room to you with ChanServ, keep it around when empty. */
 function claimRoom(c) {
@@ -1880,30 +1838,34 @@ function claimRoom(c) {
 }
 
 function onChanServ(text) {
-  if (onEntryMsg(text)) return;
+  const plain = text.replace(/[\x02\x1d\x1f\x0f]/g, "");
+  const offer = plain.match(/You have been offered ownership of channel (\S+)\./i);
+  if (offer) { onRoomOffered(offer[1]); return; }
   if (onCsReply(text)) return;
-  const t = text.toLowerCase();
+  const t = plain.toLowerCase();
   const room = S.claiming;
   if (!room) return;
-  if (t.includes("is now registered to")) {
+  if (t.includes("successfully registered")) {
     S.claiming = null;
-    serviceQueue([`PRIVMSG ChanServ :SET ${room} GUARD ON`, `PRIVMSG ChanServ :SET ${room} KEEPTOPIC ON`]);
     sys(`🎉 You created ${roomName(room)} — it's your room now. It stays even when everyone leaves, ` +
         `and you can change its topic with ✏️ Topic.`, "system", room);
     const rc = conv(keyOf(room));
-    if (rc) applyCreateSettings(rc, true);
-  } else if (t.includes("too many") || t.includes("maximum")) {
+    if (rc) { rc.registered = true; applyCreateSettings(rc, true); }
+  } else if (t.includes("maximum number of channels")) {
     S.claiming = null;
     sys(`You already own the maximum number of rooms, so ${roomName(room)} will disappear when everyone leaves.`, "tip", room);
     const rc = conv(keyOf(room));
     if (rc) applyCreateSettings(rc, false);
-  } else if (t.includes("already registered") || t.includes("must be") || t.includes("not")) {
+  } else if (t.includes("is registered") || t.includes("must be an oper") || t.includes("not logged") ||
+             t.includes("restricted") || t.includes("invalid")) {
     S.claiming = null;
+    const rc = conv(keyOf(room));
+    if (rc) applyCreateSettings(rc, false);
   }
 }
 
-/* Atheme ignores clients that fire services commands too fast. */
-/* Entries are lines, or {line, onSend, until} from csAsk: onSend runs right
+/* Services commands go out one at a time, paced, so the server's flood
+ * control never drops one. Entries are lines, or {line, onSend, until} from csAsk: onSend runs right
  * before the line goes out, and the queue waits for `until` (its replies)
  * before sending anything else, so replies can't be mixed up. */
 function serviceQueue(lines) {
@@ -1912,9 +1874,8 @@ function serviceQueue(lines) {
   const next = () => {
     const e = S.svcQueue.shift();
     if (!e) { S.svcTimer = null; return; }
-    // Atheme ignores clients that flood services (flood_msgs per flood_time,
-    // REGISTER counts as several): keep a steady pace, more after REGISTER.
-    const gap = (l) => (/ :REGISTER /i.test(l) ? 3000 : 1500);
+    // Ergo's fakelag allows a burst, then a few lines a second: keep a pace.
+    const gap = (l) => (/ :REGISTER /i.test(l) ? 1000 : 400);
     if (typeof e === "string") { send(e); S.svcTimer = setTimeout(next, gap(e)); return; }
     e.onSend?.();
     send(e.line);
@@ -1947,9 +1908,9 @@ function onMode(params, trailing) {
   let add = true, i = 0;
   for (const m of modes) {
     if (m === "+" || m === "-") { add = m === "+"; continue; }
-    // solanum: PREFIX=(ov)@+ ; list modes eIbq ; k always takes an argument,
-    // f/j/l only when set. (q is the mute list here, not an "owner" prefix.)
-    const sym = { o: "@", v: "+" }[m];
+    // Ergo: PREFIX=(qaohv)~&@%+ ; list modes Ibe (mutes are "b m:…") ;
+    // k always takes an argument, f/l only when set.
+    const sym = { q: "~", a: "&", o: "@", h: "%", v: "+" }[m];
     if (sym) {
       const nick = args[i++];
       if (!nick || !c.members.has(nick)) continue;
@@ -1957,7 +1918,7 @@ function onMode(params, trailing) {
       c.members.set(nick, add ? sym + pre : pre);
       continue;
     }
-    const takesArg = "beIqk".includes(m) || ("fjl".includes(m) && add);
+    const takesArg = "beIk".includes(m) || ("fl".includes(m) && add);
     trackRoomMode(c, add, m, takesArg ? args[i++] : undefined);
   }
   if (keyOf(target) === S.current) { refreshSide(); }
@@ -1966,14 +1927,8 @@ function onMode(params, trailing) {
 
 /* ---------- change password ---------- */
 
-/* The same password lives in three places, changed in this order so a
- * failure part-way never locks the person out:
- *   1. soju (what Sign In checks)        BouncerServ user update -password
- *   2. NickServ, if the account is linked NickServ SET PASSWORD
- *   3. soju's SASL login to NickServ     BouncerServ sasl set-plain
- */
-const PW_STEP_TIMEOUT = 10000;
-
+/* The account service changes it in Ergo (what Sign In checks) and signs
+ * out my other devices. */
 function openPwDialog() {
   $("pwDialog").style.display = "";
   for (const id of ["pwCur", "pwNew", "pwNew2"]) $(id).value = "";
@@ -1985,7 +1940,7 @@ function openPwDialog() {
 function closePwDialog() { if (!S.pwChange) $("pwDialog").style.display = "none"; }
 function pwMsg(text, kind = "") { showMsg("pwMsg", text, kind); }
 
-function doChangePassword() {
+async function doChangePassword() {
   const cur = $("pwCur").value, next = $("pwNew").value;
   if (!cur || !next) return pwMsg("Please fill in all the fields.", "error");
   if (cur !== S.pw) return pwMsg("Your current password isn't right.", "error");
@@ -1993,63 +1948,27 @@ function doChangePassword() {
   if (/\s/.test(next)) return pwMsg("New password can't contain spaces.", "error");
   if (next !== $("pwNew2").value) return pwMsg("New passwords don't match.", "error");
   if (next === cur) return pwMsg("That's the same as your current password.", "error");
-  S.pwChange = { next, step: "soju" };
+  S.pwChange = { next };
   $("pwSave").disabled = true; $("pwSave").textContent = "Saving…";
   pwMsg("Changing your password…");
-  pwSend(`PRIVMSG BouncerServ :user update -password ${next}`);
-}
-
-function pwSend(line) {
-  clearTimeout(S.pwChange.timer);
-  const step = S.pwChange.step;
-  S.pwChange.timer = setTimeout(() => {
-    if (S.pwChange?.step === step) pwFail(step === "soju"
-      ? "Couldn't change your password right now. Please try again."
-      : "Your password was changed, but a09f couldn't finish updating everything. Please sign out and back in.");
-  }, PW_STEP_TIMEOUT);
-  send(line);
-}
-
-function onBouncerServ(text) {
-  const t = text.toLowerCase();
-  const pc = S.pwChange;
-  if (!pc) return;
-  if (pc.step === "soju") {
-    if (t.includes("updated user")) {
-      S.pw = pc.next;                                 // Sign In now needs the new one
-      if (S.link === "linked") { pc.step = "nickserv"; pwSend(`PRIVMSG NickServ :SET PASSWORD ${pc.next}`); }
-      else pwDone();
-    } else if (/error|invalid|denied|cannot|failed/.test(t)) {
-      pwFail("Couldn't change your password right now. Please try again.");
-    }
-  } else if (pc.step === "sasl") {
-    if (t.includes("credentials saved")) pwDone();
-    else if (/error|invalid|failed/.test(t)) pwFail("Your password was changed, but auto sign-in to rooms may need a re-login.");
-  }
-}
-
-function pwStepNickServ(t) {
-  const pc = S.pwChange;
-  if (t.includes("password") && (t.includes("changed") || t.includes("has been"))) {
-    pc.step = "sasl";
-    pwSend(`PRIVMSG BouncerServ :sasl set-plain ${S.me} ${pc.next}`);
-  } else if (/not logged in|invalid|denied|error/.test(t)) {
-    pwFail("Your sign-in password was changed, but your room ownership account wasn't. Please sign out and back in.");
+  try {
+    await socialApi("/password", { old: cur, new: next });
+    S.pw = next;                                    // Sign In now needs the new one
+    pwDone();
+  } catch (e) {
+    pwFail(e.message || "Couldn't change your password right now. Please try again.");
   }
 }
 
 function pwDone() {
-  clearTimeout(S.pwChange?.timer);
   S.pwChange = null;
   $("pwSave").disabled = false; $("pwSave").textContent = "Change Password";
   $("pwDialog").style.display = "none";
   sys("Your password was changed. Use the new one next time you sign in.", "status");
   if ($("optRemember").checked) invoke("cred_save", { account: S.account, password: S.pw }).catch(() => {});
-  socialApi("/session/revoke-others", {}).catch(() => {});     // other devices must sign in again
 }
 
 function pwFail(message) {
-  clearTimeout(S.pwChange?.timer);
   S.pwChange = null;
   $("pwSave").disabled = false; $("pwSave").textContent = "Change Password";
   pwMsg(message, "error");
@@ -2070,7 +1989,7 @@ function closeRoomBrowser() { $("roomBrowser").style.display = "none"; }
 function refreshRoomList() {
   S.listLoading = true;
   renderRoomBrowser();
-  // Plain LIST in solanum hides quiet rooms; ">0" (ELIST U) lists every public room.
+  // ">0" (ELIST U) lists every public room, including quiet ones.
   send("LIST >0");
 }
 
@@ -2126,7 +2045,7 @@ function renderRoomBrowser() {
 /* A conference is a secret, invite-only room (+si) named #conf-<owner>-<code>.
  * It is never registered with ChanServ, so it disappears once everyone has
  * left. Each invitee gets an IRC INVITE (lets them past +i) plus a private
- * "/me invited you to a conference: #room" line, which soju keeps in history,
+ * "/me invited you to a conference: #room" line, which Ergo keeps in history,
  * so the invite still reaches people who are signed out. */
 const CONF_PREFIX = "#conf-";
 const INVITE_TEXT = "invited you to a conference:";
@@ -2228,12 +2147,11 @@ function endedConference(c) {
   send(`PART ${c.name} :Conference ended`);
 }
 
-/* ---------- profiles (NickServ properties) ---------- */
+/* ---------- profiles ---------- */
 
-/* Profiles are Atheme account metadata: SET PROPERTY <key> <value> to write,
- * INFO <nick> ("Metadata : key = value") for anyone to read. */
+/* Name, location and about me live in the account service (GET/POST
+ * /profile); "member since" is the Ergo account's registration date. */
 const PROFILE_FIELDS = { name: "pfName", location: "pfLocation", about: "pfAbout" };
-const INFO_TIMEOUT = 8000;
 
 function openProfile(nick) {
   if (!nick) return;
@@ -2274,8 +2192,7 @@ function showProfile(nick, info) {
     S.myProfile = { name: p.name || "", location: p.location || "", about: p.about || "" };
     for (const [k, id] of Object.entries(PROFILE_FIELDS)) { $(id).value = S.myProfile[k]; $(id).disabled = false; }
     $("pfSave").disabled = false;
-    showMsg("pfMsg", S.link === "linked" ? "" : "Your profile can't be saved right now. Please sign out and back in.",
-            S.link === "linked" ? "" : "error");
+    showMsg("pfMsg", "");
     $("pfName").focus();
     return;
   }
@@ -2285,77 +2202,41 @@ function showProfile(nick, info) {
   showMsg("pfMsg", info.registered ? "" : `${nick} hasn't set up a profile yet.`);
 }
 
-/* One INFO at a time; a newer request replaces an older one. */
+/* Load someone's profile: cb({registered, since, props}) or cb(null). */
 function requestInfo(nick, cb) {
-  clearTimeout(S.infoReq?.timer);
-  S.infoReq = { nick, cb, started: false, registered: true, since: "", props: {} };
-  S.infoReq.timer = setTimeout(() => finishInfo(false), INFO_TIMEOUT);
-  send(`PRIVMSG NickServ :INFO ${nick}`);
-}
-
-function finishInfo(ok) {
-  const r = S.infoReq;
-  if (!r) return;
-  clearTimeout(r.timer);
-  S.infoReq = null;
-  r.cb(ok ? r : null);
-}
-
-/* Returns true when the NickServ line belonged to the pending INFO. */
-function onInfoLine(t) {
-  const r = S.infoReq;
-  let m;
-  if (/^Information on \S+/i.test(t)) { r.started = true; return true; }
-  if (!r.started && (m = t.match(/^(\S+) is not registered/i)) && keyOf(m[1]) === keyOf(r.nick)) {
-    r.registered = false; finishInfo(true); return true;
-  }
-  if (!r.started) return false;
-  if (/\*\*\* End of Info \*\*\*/i.test(t)) { finishInfo(true); return true; }
-  if ((m = t.match(/^Registered\s*:\s*(\w{3}) (\d+) [\d:]+ (\d{4})/))) r.since = `${m[1]} ${m[2]}, ${m[3]}`;
-  else if ((m = t.match(/^Metadata\s*:\s*(\S+) = (.*)$/))) r.props[m[1].toLowerCase()] = m[2];
-  return true;                       // other INFO lines (flags, last seen, …) are swallowed
+  socialApi(`/profile?user=${encodeURIComponent(keyOf(nick))}`)
+    .then((d) => cb({ registered: !!d.registered, since: d.since || "", props: d.props || {} }))
+    .catch(() => cb(null));
 }
 
 const cleanField = (v) => v.replace(/[\x00-\x1f\x7f]+/g, " ").replace(/\s+/g, " ").trim();
 
-function saveProfile() {
-  if (!S.myProfile) return;
-  if (S.link !== "linked") {
-    showMsg("pfMsg", "Your profile can't be saved right now. Please sign out and back in.", "error"); return;
-  }
+async function saveProfile() {
+  if (!S.myProfile || S.profileSave) return;
   const next = {};
   for (const [k, id] of Object.entries(PROFILE_FIELDS)) next[k] = cleanField($(id).value);
   const changed = Object.keys(next).filter((k) => next[k] !== S.myProfile[k]);
   if (!changed.length) { closeProfile(); return; }
-  // Empty value = remove the property.
-  const lines = changed.map((k) => `PRIVMSG NickServ :SET PROPERTY ${k}${next[k] ? " " + next[k] : ""}`);
-  S.profileSave = { pending: changed.length, next };
-  S.profileSave.timer = setTimeout(() => profileSaveDone(false), 5000 + 1200 * lines.length);
+  S.profileSave = { next };
   $("pfSave").disabled = true; $("pfSave").textContent = "Saving…";
   showMsg("pfMsg", "");
-  serviceQueue(lines);
-}
-
-function onProfileSaveReply(t) {
-  if (/metadata entry \S+ (added|has been deleted|was not set)/.test(t)) {
-    if (--S.profileSave.pending <= 0) profileSaveDone(true);
-    return true;
+  try {
+    await socialApi("/profile", next);      // also tells friends and my other devices
+    profileSaveDone(true);
+  } catch {
+    profileSaveDone(false);
   }
-  if (/too many|invalid|cannot|denied|not logged in|you are not/.test(t)) { profileSaveDone(false); return true; }
-  return false;
 }
 
 function profileSaveDone(ok) {
   const ps = S.profileSave;
   if (!ps) return;
-  clearTimeout(ps.timer);
   S.profileSave = null;
   $("pfSave").disabled = false; $("pfSave").textContent = "Save Profile";
   if (!ok) { showMsg("pfMsg", "Couldn't save your profile right now. Please try again.", "error"); return; }
   S.myProfile = ps.next;
   closeProfile();
   sys("Your profile was saved.", "status");
-  socialApi("/profile/updated", {}).catch(() => {});
 }
 
 function profileButton(nick) {
@@ -2371,8 +2252,9 @@ function profileButton(nick) {
 
 /* Both settings live in the account service (follow you to any computer).
  * Ignoring is done here in the app: their messages are simply not shown.
- * "Only friends" uses solanum's caller-id: user mode +g, with every friend on
- * the ACCEPT list; the server then drops anyone else's private messages. */
+ * "Only friends": Ergo has no caller-id mode, so the sender's app asks the
+ * account service first (/canpm) and doesn't send, and this app hides
+ * private messages from people who aren't friends (unless I wrote to them). */
 const isIgnored = (nick) => S.prefs.ignore.some((i) => keyOf(i) === keyOf(nick));
 
 async function loadPrefs() {
@@ -2380,7 +2262,6 @@ async function loadPrefs() {
     const p = await socialApi("/prefs");
     S.prefs = { ignore: p.ignore || [], friendsOnly: !!p.friendsOnly };
   } catch { return; }
-  applyFriendsOnly();
   renderLists(); renderLog();
 }
 
@@ -2399,29 +2280,37 @@ async function ignoreUser(nick, on) {
   } catch (e) { sys(e.message, "error"); }
 }
 
-/* Keep +g and the ACCEPT list in line with the setting and the friends list. */
-function applyFriendsOnly() {
-  if (S.phase !== "online" || !S.me) return;
-  if (!S.prefs.friendsOnly) {
-    // null = unknown: the bouncer may still be +g from an earlier session.
-    if (S.callerId !== false) { send(`MODE ${S.me} -g`); S.callerId = false; }
-    return;
+/* A private message from `nick` that "only friends" keeps out. Someone I
+ * wrote to may answer (like caller-id's accept-on-message). */
+function blockedByFriendsOnly(nick, live) {
+  if (!S.prefs.friendsOnly || isFriend(nick) || isService(nick)) return false;
+  if (conv(keyOf(nick))?.msgs.some((m) => !m.others)) return false;
+  if (live && !isIgnored(nick)) {
+    S.blockedTold ||= new Set();
+    if (!S.blockedTold.has(keyOf(nick))) {
+      S.blockedTold.add(keyOf(nick));
+      sys(`${nick} tried to message you, but only friends can message you (🔒 Privacy).`, "tip");
+    }
   }
-  // The ACCEPT list lives on the server (and survives our sessions): read
-  // it first, so ex-friends left on it from earlier sessions are removed.
-  if (S.accepted == null) {
-    if (!S.acceptListing) { S.acceptListing = []; send("ACCEPT *"); }
-    return;
-  }
-  const want = new Set(S.friends.map(keyOf));
-  const have = S.accepted;
-  const add = [...want].filter((n) => !have.has(n));
-  const drop = [...have].filter((n) => !want.has(n));
-  for (let i = 0; i < add.length; i += 10) send(`ACCEPT ${add.slice(i, i + 10).join(",")}`);
-  for (let i = 0; i < drop.length; i += 10) send(`ACCEPT ${drop.slice(i, i + 10).map((n) => "-" + n).join(",")}`);
-  S.accepted = want;
-  if (!S.callerId) { send(`MODE ${S.me} +g`); S.callerId = true; }
+  return true;
 }
+
+/* May I message them? Friends always; others unless they take messages from
+ * friends only. Answers are kept 5 minutes. */
+async function canPm(nick) {
+  if (isFriend(nick) || isService(nick)) return true;
+  S.canPm ||= new Map();
+  const hit = S.canPm.get(keyOf(nick));
+  if (hit && Date.now() - hit.at < 300000) return hit.ok;
+  let ok = true;
+  try { ok = (await socialApi(`/canpm?to=${encodeURIComponent(keyOf(nick))}`)).allowed !== false; }
+  catch { ok = true; }                 // service unreachable: don't block chatting
+  S.canPm.set(keyOf(nick), { ok, at: Date.now() });
+  return ok;
+}
+
+/* Kept for callers: nothing to sync on the IRC server any more. */
+function applyFriendsOnly() {}
 
 function openPrivacy() {
   $("privacyDialog").style.display = "";
@@ -2455,19 +2344,6 @@ async function onFriendsOnlyToggle() {
   } catch (e) {
     $("pvFriendsOnly").checked = !on;
     showMsg("pvMsg", e.message, "error");
-  }
-}
-
-/* 716: they only take messages from friends. 718: someone was blocked by our +g. */
-function onCallerId(num, params) {
-  const nick = params[1];
-  if (num === 716) {
-    sysError(`${nick} only accepts messages from friends. Send them a friend request first.`);
-  } else if (num === 718 && !isIgnored(nick)) {
-    S.blockedTold ||= new Set();
-    if (S.blockedTold.has(keyOf(nick))) return;
-    S.blockedTold.add(keyOf(nick));
-    sys(`${nick} tried to message you, but only friends can message you (🔒 Privacy).`, "tip");
   }
 }
 
@@ -2715,7 +2591,6 @@ function olderLink(c) {
 }
 
 function openSearch() {
-  if (!has("soju.im/search")) { sys("Message search isn't available on this server.", "error"); return; }
   const c = S.current && conv(S.current);
   $("searchDialog").style.display = "";
   const sel = $("srIn");
@@ -2730,16 +2605,21 @@ function openSearch() {
 }
 function closeSearch() { $("searchDialog").style.display = "none"; }
 
-function doSearch() {
+/* The account service searches the server's history (rooms I'm in, my
+ * private chats) and answers with the messages as IRC lines. */
+async function doSearch() {
   const q = $("srQuery").value.trim();
   if (!q) { $("srQuery").focus(); return; }
-  // Attributes use message-tag escaping (soju parses them like tags).
-  const attrs = [`text=${escapeTag(q)}`, "limit=100"];
   const where = $("srIn").value;
-  if (where) attrs.unshift(`in=${where}`);
   S.searching = true;
   $("srResults").innerHTML = `<div class="empty-hint">Searching…</div>`;
-  send(`SEARCH ${attrs.join(";")}`);
+  try {
+    const d = await socialApi(`/search?q=${encodeURIComponent(q)}&in=${encodeURIComponent(where ? keyOf(where) : "")}`);
+    onSearchBatch((d.lines || []).map(parse));
+  } catch (e) {
+    S.searching = false;
+    $("srResults").innerHTML = `<div class="empty-hint">${esc(e.message)}</div>`;
+  }
 }
 
 function onSearchBatch(lines) {
@@ -2765,10 +2645,6 @@ function onSearchBatch(lines) {
     };
     el.appendChild(row);
   }
-}
-
-function escapeTag(v) {
-  return v.replace(/\\/g, "\\\\").replace(/;/g, "\\:").replace(/ /g, "\\s").replace(/\r/g, "\\r").replace(/\n/g, "\\n");
 }
 
 /* ---------- live updates: "Seen", profile changes ---------- */
@@ -2894,12 +2770,13 @@ function onMentionKey(e) {
 
 /* ---------- room management: moderation, settings, owner tools ---------- */
 
-/* Everyone reaches solanum through soju from one IP, so bans and mutes must
- * never use the host: they target the account ($a:<id>, extb_account) and the
- * nick (<id>!*@*, for people not logged in to NickServ). In a09f the ID, the
- * nick and the NickServ account are the same word. */
-const personMasks = (nick) => [`$a:${nick}`, `${nick}!*@*`];
-const maskNick = (mask) => (mask.match(/^\$a:(.+)$/) || mask.match(/^([^!]+)!\*@\*$/) || [])[1] || null;
+/* Bans and mutes target the person's ID as a nick mask (<id>!*@*): Ergo
+ * forces nick = account, so that's the account. Mutes are Ergo's "m:"
+ * extended bans (+b m:<mask>), so both live in the ban list. */
+const personMasks = (nick) => [`${nick}!*@*`];
+const muteMasks = (nick) => [`m:${nick}!*@*`];
+const maskNick = (mask) => (mask.replace(/^m:/, "").match(/^([^!]+)!\*@\*$/) || [])[1] || null;
+const isMuteMask = (mask) => /^m:/.test(mask);
 
 /* Channel modes we show as settings. */
 const ROOM_FLAGS = { i: "Private", s: "Hidden", m: "Announcement" };
@@ -2925,7 +2802,7 @@ function onChannelModes(params) {
     c.modes.add(m);
     if (m === "k") c.key = args.shift() || "";
     else if (m === "l") c.limit = +args.shift() || 0;
-    else if ("fj".includes(m)) args.shift();
+    else if (m === "f") args.shift();
   }
   renderRoomDialog();
 }
@@ -2933,10 +2810,9 @@ function onChannelModes(params) {
 /* After joining a room: learn its modes, bans and mutes. */
 function loadRoomState(c) {
   roomState(c);
-  c.banBuf = new Set(); c.quietBuf = new Set();
+  c.banBuf = new Set();
   send(`MODE ${c.name}`);
   send(`MODE ${c.name} b`);
-  send(`MODE ${c.name} q`);
 }
 
 function onListEntry(num, params) {
@@ -2944,10 +2820,14 @@ function onListEntry(num, params) {
   if (!c) return;
   roomState(c);
   if (num === 367) (c.banBuf ||= new Set()).add(params[2]);
-  else if (num === 368) { c.bans = c.banBuf || new Set(); c.banBuf = null; }
-  else if (num === 728) (c.quietBuf ||= new Set()).add(params[3]);
-  else if (num === 729) { c.quiets = c.quietBuf || new Set(); c.quietBuf = null; }
-  if (num === 368 || num === 729) { if (keyOf(c.name) === S.current) renderUsers(); renderRoomDialog(); }
+  else if (num === 368) {
+    const all = [...(c.banBuf || [])];
+    c.bans = new Set(all.filter((m) => !isMuteMask(m)));
+    c.quiets = new Set(all.filter(isMuteMask));
+    c.banBuf = null;
+    if (keyOf(c.name) === S.current) renderUsers();
+    renderRoomDialog();
+  }
 }
 
 /* Mode changes that matter for settings and the lists (called from onMode). */
@@ -2956,8 +2836,10 @@ function trackRoomMode(c, add, m, arg) {
   if (m in ROOM_FLAGS || "nt".includes(m)) add ? c.modes.add(m) : c.modes.delete(m);
   else if (m === "k") { add ? c.modes.add("k") : c.modes.delete("k"); c.key = add ? arg || "" : ""; }
   else if (m === "l") { add ? c.modes.add("l") : c.modes.delete("l"); c.limit = add ? +arg || 0 : 0; }
-  else if (m === "b" && arg) add ? c.bans.add(arg) : c.bans.delete(arg);
-  else if (m === "q" && arg) add ? c.quiets.add(arg) : c.quiets.delete(arg);
+  else if (m === "b" && arg) {
+    const list = isMuteMask(arg) ? c.quiets : c.bans;
+    add ? list.add(arg) : list.delete(arg);
+  }
 }
 
 /* ----- people: kick, ban, mute, moderators ----- */
@@ -2967,7 +2849,7 @@ function kickUser(c, nick) {
 }
 
 function banUser(c, nick) {
-  send(`MODE ${c.name} +bb ${personMasks(nick).join(" ")}`);
+  send(`MODE ${c.name} +${"b".repeat(personMasks(nick).length)} ${personMasks(nick).join(" ")}`);
   if (c.members.has(nick)) send(`KICK ${c.name} ${nick} :Banned by ${S.me}`);
   sys(`${nick} is banned from ${roomName(c.name)}.`, "system", c.name);
 }
@@ -2979,18 +2861,19 @@ function unbanUser(c, nick) {
 }
 
 function muteUser(c, nick, on) {
-  const masks = on ? personMasks(nick) : [...c.quiets].filter((m) => keyOf(maskNick(m)) === keyOf(nick));
+  const masks = on ? muteMasks(nick) : [...c.quiets].filter((m) => keyOf(maskNick(m)) === keyOf(nick));
   if (!masks.length) return;
-  send(`MODE ${c.name} ${on ? "+" : "-"}${"q".repeat(masks.length)} ${masks.join(" ")}`);
+  send(`MODE ${c.name} ${on ? "+" : "-"}${"b".repeat(masks.length)} ${masks.join(" ")}`);
   sys(on ? `${nick} is muted in ${roomName(c.name)}.` : `${nick} can talk again in ${roomName(c.name)}.`, "system", c.name);
 }
 
-/* Moderator = op. In a registered room it's also saved with ChanServ (AOP),
- * so it sticks when they leave and come back. */
+/* Moderator = op. In a registered room it's also saved with ChanServ
+ * (AMODE +o), so it sticks when they leave and come back. */
 async function setModerator(c, nick, on) {
   send(`MODE ${c.name} ${on ? "+o" : "-o"} ${nick}`);
   if (c.registered) {
-    await csAsk(`FLAGS ${c.name} ${nick} ${on ? "AOP" : "-*"}`, /were set on|not authorized|not registered/i);
+    await csAsk(`AMODE ${c.name} ${on ? "+o" : "-o"} ${keyOf(nick)}`,
+      /successfully set persistent mode|no changes were made|insufficient privileges|account does not exist|not registered/i);
     if ($("roomDialog").style.display !== "none") loadRoomInfo(c);
   }
   sys(on ? `${nick} is now a moderator of ${roomName(c.name)}. 👑` : `${nick} is no longer a moderator.`, "system", c.name);
@@ -3028,7 +2911,7 @@ function onKick(by, channel, nick, reason) {
   refreshSide();
 }
 
-/* ----- ChanServ questions (INFO, FLAGS, …) with collected replies ----- */
+/* ----- ChanServ questions (INFO, AMODE, …) with collected replies ----- */
 
 /* Sends one ChanServ command (through the paced queue) and resolves with the
  * NOTICE lines it answers with, up to a line matching `endRe` or a quiet gap. */
@@ -3037,13 +2920,13 @@ function onKick(by, channel, nick, reason) {
  *   start    for multi-line replies: the line that starts it
  * Lines before `start` (or, without one, lines not matching endRe) belong to
  * earlier commands answering late, and are left to the other handlers. */
-/* soju paces what we send upstream, so after a burst (sign-in, creating a
- * room) services replies can lag several seconds: be patient. */
-function csAsk(command, endRe, { start = null, timeout = 15000 } = {}) {
+/* After a burst (sign-in, creating a room) the server's flood control can
+ * slow replies down: be patient. */
+function csAsk(command, endRe, { start = null, timeout = 15000, done = null } = {}) {
   const run = () => new Promise((resolve) => {
     let release;
     const replied = new Promise((r) => { release = r; });
-    const req = { lines: [], endRe, start, started: false };
+    const req = { lines: [], endRe, start, started: false, done };
     req.finish = () => {
       clearTimeout(req.timer); clearTimeout(req.quiet);
       if (S.csReq === req) S.csReq = null;
@@ -3073,38 +2956,52 @@ function onCsReply(text) {
   }
   req.lines.push(t);
   clearTimeout(req.quiet);
-  if (req.endRe.test(t)) req.finish();
+  if (req.endRe.test(t) || req.done?.(req.lines)) req.finish();
   else req.quiet = setTimeout(req.finish, 3000);           // multi-line reply went quiet
   return true;
 }
 
-/* ChanServ "[#room] message" when you join a room with a welcome message. */
-function onEntryMsg(text) {
-  const m = text.replace(/[\x02\x1d\x1f\x0f]/g, "").match(/^\[([#&]\S+)\] (.*)$/);
-  if (!m) return false;
-  addMsg(m[1], { who: "Welcome", txt: m[2], cls: "service welcome" });
-  return true;
+/* Welcome message of a room (account service), shown when I join it. */
+async function showWelcome(c) {
+  if (!c || c.kind !== "room" || isConference(c.name)) return;
+  try {
+    const { text } = await socialApi(`/welcome?room=${encodeURIComponent(keyOf(c.name))}`);
+    c.entryMsg = text || "";
+    if (text) addMsg(c.name, { who: "Welcome", txt: text, cls: "service welcome" });
+  } catch {}
+}
+
+/* Someone gave me a room (CS TRANSFER): accept it. */
+async function onRoomOffered(room) {
+  const r = await csAsk(`TRANSFER ACCEPT ${room}`, /successfully accepted|could not accept|weren't offered|maximum number/i);
+  if (r.some((l) => /successfully accepted/i.test(l))) {
+    sys(`🎉 ${roomName(room)} is yours now.`, "system", room);
+  } else if (r.some((l) => /maximum number/i.test(l))) {
+    sys(`Someone wanted to give you ${roomName(room)}, but you already own the maximum number of rooms.`, "tip");
+  }
 }
 
 /* ----- room settings dialog ----- */
 
 async function loadRoomInfo(c) {
   c.infoLoaded = false;
-  const info = await csAsk(`INFO ${c.name}`, /end of info|is not registered|not registered/i,
-    { start: /^Information on /i });
-  const notReg = info.some((l) => /is not registered/i.test(l));
-  c.registered = !notReg && info.some((l) => /^Founder\s*:/i.test(l));
+  const info = await csAsk(`INFO ${c.name}`, /^registered at:|is not registered|invalid channel/i,
+    { start: /^Channel \S+ is (not )?registered/i });
+  c.registered = info.some((l) => /^Channel \S+ is registered/i.test(l));
   const f = info.find((l) => /^Founder\s*:/i.test(l));
-  c.founders = f ? f.replace(/^Founder\s*:\s*/i, "").split(/,\s*/).map((x) => x.trim()) : [];
-  const em = info.find((l) => /^Entrymsg\s*:/i.test(l));
-  c.entryMsg = em ? em.replace(/^Entrymsg\s*:\s*/i, "") : "";
+  c.founders = f ? [f.replace(/^Founder\s*:\s*/i, "").trim()] : [];
   c.mods = null;
   if (c.registered) {
-    const lines = await csAsk(`FLAGS ${c.name}`, /end of .* flags listing|not authorized/i,
-      { start: /^Entry\s+Nickname/i });
-    c.mods = lines.map((l) => l.match(/^\d+\s+(\S+)\s+\+(\S+)/)).filter(Boolean)
-      .filter((m) => /o/i.test(m[2])).map((m) => ({ nick: m[1], founder: m[2].includes("F") }));
+    const lines = await csAsk(`AMODE ${c.name}`, /has 0 persistent modes set|insufficient privileges|not registered/i, {
+      start: /has \d+ persistent modes set/i,
+      done: (ls) => { const n = +(ls[0]?.match(/has (\d+) persistent modes/i)?.[1] ?? -1); return n >= 0 && ls.length > n; },
+    });
+    const mods = lines.map((l) => l.match(/^Account (\S+) receives mode \+([qaoh])/i)).filter(Boolean)
+      .map((m) => ({ nick: m[1], founder: false }));
+    for (const fo of c.founders) if (!mods.some((m) => keyOf(m.nick) === keyOf(fo))) mods.unshift({ nick: fo, founder: true });
+    c.mods = mods.map((m) => ({ ...m, founder: c.founders.some((fo) => keyOf(fo) === keyOf(m.nick)) }));
   }
+  try { c.entryMsg = (await socialApi(`/welcome?room=${encodeURIComponent(keyOf(c.name))}`)).text || ""; } catch {}
   c.infoLoaded = true;
   renderRoomDialog();
 }
@@ -3120,7 +3017,7 @@ function openRoomDialog(c) {
   $("rdDelete").dataset.armed = "";
   $("rdDelete").textContent = "Delete this room…";
   $("roomDialog").style.display = "";
-  send(`MODE ${c.name}`); send(`MODE ${c.name} b`); send(`MODE ${c.name} q`);
+  send(`MODE ${c.name}`); send(`MODE ${c.name} b`);
   fillRoomForm(c);
   $("rdOwner").style.display = "none";
   $("rdMods").innerHTML = `<div class="empty-hint">Loading…</div>`;
@@ -3189,24 +3086,8 @@ async function saveRoomSettings() {
   const want = { i: $("rdPrivate").checked, s: $("rdHidden").checked, m: $("rdAnnounce").checked };
   const key = $("rdKey").value.trim().replace(/\s+/g, "");
   const limit = parseInt($("rdLimit").value, 10) || 0;
-  // Registered rooms: ChanServ's MLOCK (default +nt-lk) decides, and the owner
-  // sets it. That also keeps the settings when the room is empty.
-  if (amFounder(c)) {
-    const on = "nt" + Object.keys(want).filter((m) => want[m]).join("") + (key ? "k" : "") + (limit > 0 ? "l" : "");
-    const off = Object.keys(want).filter((m) => !want[m]).join("") + (key ? "" : "k") + (limit > 0 ? "" : "l");
-    const args = [key, limit > 0 ? String(limit) : ""].filter(Boolean);
-    const r = await csAsk(`SET ${c.name} MLOCK +${on}-${off}${args.length ? " " + args.join(" ") : ""}`,
-      /mlock for|not authorized|invalid/i);
-    S.roomFormDirty = false;
-    const ok = r.some((l) => /mlock for/i.test(l));
-    showMsg("rdMsg", ok ? "Saved." : "Couldn't save the settings right now.", ok ? "ok" : "error");
-    setTimeout(() => send(`MODE ${c.name}`), 1500);
-    return;
-  }
-  if (c.registered && (key !== (c.key || "") || limit !== (c.limit || 0))) {
-    showMsg("rdMsg", "Only the room's owner can set a password or a people limit.", "error");
-    return;
-  }
+  // Ergo remembers a registered room's modes (also while it's empty), so
+  // owner and moderators both just set them.
   let plus = "", minus = "", args = [];
   for (const [m, on] of Object.entries(want)) {
     if (on && !c.modes.has(m)) plus += m;
@@ -3230,15 +3111,17 @@ async function saveRoomSettings() {
 async function saveWelcome() {
   const c = S.roomDialogFor && conv(S.roomDialogFor);
   if (!c?.registered) return;
+  if (!amOp(c)) { showMsg("rdMsg", "Only the room's moderators can change the welcome message.", "error"); return; }
   const text = cleanField($("rdWelcome").value);
-  const lines = await csAsk(`SET ${c.name} ENTRYMSG${text ? " " + text : ""}`, /entry message|not authorized|denied/i);
-  const ok = lines.some((l) => /entry message/i.test(l));
-  c.entryMsg = ok ? text : c.entryMsg;
-  showMsg("rdMsg", ok ? (text ? "Welcome message saved." : "Welcome message removed.")
-    : "Only the room owner can change the welcome message.", ok ? "ok" : "error");
+  try {
+    await socialApi("/welcome", { room: keyOf(c.name), text });
+    c.entryMsg = text;
+    showMsg("rdMsg", text ? "Welcome message saved." : "Welcome message removed.", "ok");
+  } catch (e) { showMsg("rdMsg", e.message, "error"); }
 }
 
-/* Hand the room to someone else: they become founder, then we step down. */
+/* Hand the room to someone else (CS TRANSFER, confirmed with the code it
+ * gives); their app accepts it (onRoomOffered). */
 async function giveRoom() {
   const c = S.roomDialogFor && conv(S.roomDialogFor);
   const to = $("rdGiveTo").value.trim().toLowerCase();
@@ -3247,21 +3130,22 @@ async function giveRoom() {
     showMsg("rdMsg", "Type the a09f ID of the new owner.", "error"); return;
   }
   showMsg("rdMsg", `Giving ${roomName(c.name)} to ${to}…`);
-  const r = await csAsk(`FLAGS ${c.name} ${to} +F`, /were set on|not registered|not authorized|too many/i);
-  if (!r.some((l) => /were set on/i.test(l))) {
-    const why = r.find((l) => /not registered/i.test(l)) ? `${to} needs to sign in to a09f once before they can own a room.`
-      : r.find((l) => /too many/i.test(l)) ? `${to} already owns the maximum number of rooms.`
+  const ask = /to confirm your channel transfer|succeeded|successfully transferred|account does not exist|don't own|could not transfer|insufficient/i;
+  let r = await csAsk(`TRANSFER ${c.name} ${to}`, ask);
+  const code = r.join(" ").match(/TRANSFER \S+ \S+ (\S+)/i)?.[1];
+  if (code) r = await csAsk(`TRANSFER ${c.name} ${to} ${code}`, ask);
+  if (!r.some((l) => /succeeded|successfully transferred/i.test(l))) {
+    const why = r.find((l) => /account does not exist/i.test(l)) ? `There's no a09f user with the ID "${to}".`
       : "Couldn't give the room away right now.";
     showMsg("rdMsg", why, "error");
     return;
   }
-  await csAsk(`FLAGS ${c.name} ${S.me} -F`, /were set on|not authorized/i);
-  sys(`${to} is now the owner of ${roomName(c.name)}.`, "system", c.name);
+  sys(`${roomName(c.name)} was offered to ${to}: it becomes theirs as soon as their a09f accepts it.`, "system", c.name);
   $("rdGiveTo").value = "";
-  loadRoomInfo(c);
+  setTimeout(() => loadRoomInfo(c), 3000);
 }
 
-/* Unregister the room (ChanServ DROP, which asks for a confirmation key). */
+/* Unregister the room (CS UNREGISTER, confirmed with the code it gives). */
 async function deleteRoom() {
   const c = S.roomDialogFor && conv(S.roomDialogFor);
   const btn = $("rdDelete");
@@ -3272,19 +3156,21 @@ async function deleteRoom() {
     return;
   }
   btn.dataset.armed = ""; btn.textContent = "Deleting…";
-  const r = await csAsk(`DROP ${c.name}`, /drop \S+ [0-9a-f]+:[0-9a-f]+|has been dropped|not authorized|is not registered/i);
-  const key = r.join(" ").match(/DROP\s+\S+\s+([0-9a-f:]+)/i)?.[1];
-  const done = key ? await csAsk(`DROP ${c.name} ${key}`, /has been dropped|invalid|not authorized/i) : r;
+  const ask = /to confirm, run this command|is now unregistered|no such channel|don't own|insufficient|not registered/i;
+  const r = await csAsk(`UNREGISTER ${c.name}`, ask);
+  const code = r.join(" ").match(/UNREGISTER \S+ (\S+)/i)?.[1];
+  const done = code ? await csAsk(`UNREGISTER ${c.name} ${code}`, ask) : r;
   btn.textContent = "Delete this room…";
-  if (done.some((l) => /has been dropped/i.test(l))) {
+  if (done.some((l) => /is now unregistered/i.test(l))) {
     closeRoomDialog();
+    socialApi("/welcome", { room: keyOf(c.name), text: "" }).catch(() => {});
     sys(`${roomName(c.name)} isn't yours any more: it will disappear once everyone leaves.`, "system", c.name);
   } else {
     showMsg("rdMsg", "Couldn't delete the room right now.", "error");
   }
 }
 
-/* ----- invites to normal rooms, and "ask to join" (KNOCK) ----- */
+/* ----- invites to normal rooms, and "ask to join" ----- */
 
 const ROOM_INVITE_TEXT = "invited you to a room:";
 const ROOM_INVITE_RE = /^invited you to a room: ([#&]\S+)\s*$/i;
@@ -3305,15 +3191,20 @@ function offerKnock(channel) {
   addMsg(null, { who: "Error", txt: `${roomName(channel)} is private.`, cls: "error", knock: channel });
 }
 
-function knock(channel) {
-  send(`KNOCK ${channel} :${S.me} would like to join`);
+/* Ergo has no KNOCK: the account service passes the request to every app,
+ * and the room's moderators show it. */
+async function knock(channel) {
+  try {
+    await socialApi("/knock", { room: keyOf(channel) });
+    sys("Your request was sent to the room's moderators. You'll get an invite if they let you in.", "system");
+  } catch (e) { sysError(e.message); }
 }
 
-/* 710 (to moderators): someone knocked. */
-function onKnock(params) {
-  const channel = params[1];
-  const who = nickOf(params[2] || "");
-  if (!who || !conv(keyOf(channel))) return;
+/* Live event "knock" {room, from}: someone asked to join a room. */
+function onKnock(d) {
+  const channel = d.room, who = d.from;
+  const c = channel && conv(keyOf(channel));
+  if (!who || !c || !amOp(c) || keyOf(who) === keyOf(S.me) || c.members.has(who)) return;
   addMsg(channel, { who: "System", txt: `${who} asked to join this room.`, cls: "service", letIn: who });
   Sound.play("buzz");
   notify(`${who} asked to join ${roomName(channel)}`, "", keyOf(channel));
@@ -3345,9 +3236,9 @@ function autoReply(target) {
 
 /* ---------- deleting your own messages ---------- */
 
-/* soju gives us no msgid to REDACT with, so a message is identified by
- * sender + where it was sent + server time (solanum stamps every copy with
- * the same time) + a hash of its text. The account service keeps the list
+/* A message is identified by sender + where it was sent + server time (the
+ * server stamps every copy with the same time) + a hash of its text, so it
+ * can be found again in anyone's history. The account service keeps the list
  * of deleted messages, so they stay hidden in everyone's history too. */
 function msgHash(text) {
   let h = 0x811c9dc5;
@@ -4095,7 +3986,6 @@ function cardInfo(nick, cb) {
   S.cardCache ||= new Map();
   const hit = S.cardCache.get(keyOf(nick));
   if (hit && Date.now() - hit.at < 300000) { cb(hit.info); return; }
-  if (S.infoReq) { cb(null); return; }                 // don't step on the Profile dialog's request
   requestInfo(nick, (info) => { S.cardCache.set(keyOf(nick), { at: Date.now(), info }); cb(info); });
 }
 
@@ -4219,7 +4109,7 @@ function jumpToLatest(c) {
 
 /* Open the conversation, load older pages until the message is there (up to
  * MAX_JUMP_PAGES), scroll it to the middle and flash it. */
-const JUMP_PAGE = 500;             // bigger pages when hunting for a message (soju allows 1000)
+const JUMP_PAGE = 500;             // bigger pages when hunting for a message (Ergo allows 1000)
 const MAX_JUMP_PAGES = 40;         // ~20,000 messages back
 
 async function jumpToMessage(convName, key) {
@@ -4770,7 +4660,7 @@ function saveNote(nick, text) {
 
 const EXPORT_PAGE = 1000, EXPORT_MAX = 50000;
 
-/* All of a conversation's history from soju (paged, not drawn), with edits,
+/* All of a conversation's history from the server (paged, not drawn), with edits,
  * deletions and reactions, saved to Downloads as JSON. */
 async function exportConversation(c) {
   if (!has("draft/chathistory") || S.exporting) return;
@@ -4786,8 +4676,8 @@ async function exportConversation(c) {
       for (let t = 0; t < 300 && !ex.pageDone; t++) await wait(50);
       if (!ex.pageDone || !ex.count) break;
       total += ex.count;
-      const oldest = ex.lines[0];
-      before = `timestamp=${oldest.tags.time}`;
+      if (!ex.oldest) break;
+      before = `timestamp=${ex.oldest}`;
       if (ex.count < EXPORT_PAGE) break;
     }
   } finally { S.exporting = null; renderTyping(); }
@@ -4852,14 +4742,14 @@ async function doSignIn() {
   if (!u || !$("bpass").value) { setPhase("offline", "Please enter your ID and password.", true); return; }
   S.authFailed = false;
   S.account = u.toLowerCase();
-  S.pw = $("bpass").value;          // memory only: used to link the NickServ account
+  S.pw = $("bpass").value;          // memory only: signs in to the account service too
   if (localStorage.getItem(invisibleKey())) { S.myStatus = { code: "invisible", text: "" }; syncStatusUi(); }
   setPhase("signing-in", "Signing in…");
   try {
     await invoke("connect", { addr: SERVER });
     send("CAP LS 302");
-    send(`NICK ${u}/${NETWORK}`);
-    send(`USER ${u}/${NETWORK} 0 * :a09f`);
+    send(`NICK ${u}`);
+    send(`USER ${u} 0 * :a09f`);
   } catch {
     setPhase("offline", "Can't reach a09f right now. Please try again later.", true);
   }
@@ -4871,7 +4761,7 @@ function doDisconnect(message = "", isError = false) {
   S.caps.clear(); S.convs.clear(); S.batches.clear(); S.away = false;
   S.presence.clear(); S.statuses.clear(); S.whois.clear(); S.friends = [];
   stopSocial(); S.friendGroups.clear(); S.incoming = []; S.outgoing = []; S.friendsSig = null;
-  S.prefs = { ignore: [], friendsOnly: false }; S.callerId = null; S.accepted = null; S.acceptListing = null; S.blockedTold = null;
+  S.prefs = { ignore: [], friendsOnly: false }; S.blockedTold = null; S.canPm = null;
   S.findResults = null; S.searching = false;
   for (const id of ["privacyDialog", "findDialog", "searchDialog", "roomDialog", "annDialog", "annBar", "createRoomDialog"]) $(id).style.display = "none";
   S.pendingCreate = null; S.listProbe = null; S.createName = null;
@@ -4892,10 +4782,10 @@ function doDisconnect(message = "", isError = false) {
   S.pw = null; S.link = null; S.selfAccount = null; S.claiming = null; S.svcQueue = [];
   if (typeof S.svcTimer === "number") clearTimeout(S.svcTimer);
   S.svcTimer = null;
-  clearTimeout(S.pwChange?.timer); S.pwChange = null; S.roomList = null; S.listBuf = null;
+  S.pwChange = null; S.roomList = null; S.listBuf = null;
   $("roomBrowser").style.display = "none"; $("pwDialog").style.display = "none";
   $("profileDialog").style.display = "none"; $("confDialog").style.display = "none";
-  clearTimeout(S.infoReq?.timer); S.infoReq = null; clearTimeout(S.profileSave?.timer); S.profileSave = null;
+  S.profileSave = null;
   S.myProfile = null; S.pendingConf = null; S.confEnded = null;
   $("pfSave").disabled = false; $("pfSave").textContent = "Save Profile";
   $("pwSave").disabled = false; $("pwSave").textContent = "Change Password"; S.myStatus = { code: "available", text: "" };
@@ -4985,8 +4875,8 @@ function confirmCreateRoom() {
 }
 
 /* The new room exists and we're its op: apply what the dialog asked for.
- * Registered → ChanServ MLOCK (Atheme locks -lk by default, and MLOCK keeps
- * the settings while the room is empty); otherwise plain MODE. */
+ * Ergo keeps a registered room's modes by itself; the welcome message is
+ * kept by the account service. */
 function applyCreateSettings(c, registered) {
   const p = S.pendingCreate;
   if (!p || p.key !== keyOf(c.name)) return;
@@ -4994,19 +4884,16 @@ function applyCreateSettings(c, registered) {
   if (p.topic) send(`TOPIC ${c.name} :${p.topic}`);
   const on = (p.private ? "i" : "") + (p.hidden ? "s" : "") + (p.password ? "k" : "") + (p.limit ? "l" : "");
   const args = [p.password, p.limit ? String(p.limit) : ""].filter(Boolean);
-  if (registered) {
-    const lines = [`PRIVMSG ChanServ :SET ${c.name} MLOCK +nt${on}${args.length ? " " + args.join(" ") : ""}`];
-    if (p.welcome) lines.push(`PRIVMSG ChanServ :SET ${c.name} ENTRYMSG ${p.welcome}`);
-    serviceQueue(lines);
-  } else if (on) {
-    send(`MODE ${c.name} +${on}${args.length ? " " + args.join(" ") : ""}`);
+  if (on) send(`MODE ${c.name} +${on}${args.length ? " " + args.join(" ") : ""}`);
+  if (registered && p.welcome) {
+    socialApi("/welcome", { room: keyOf(c.name), text: p.welcome }).then(() => { c.entryMsg = p.welcome; }).catch(() => {});
   }
   const bits = [p.private && "private", p.hidden && "hidden", p.password && "password-protected",
     p.limit && `up to ${p.limit} people`].filter(Boolean);
   if (bits.length) sys(`Room settings: ${bits.join(", ")}. Change them any time with ⚙️ Settings.`, "system", c.name);
 }
 
-/* Leave a room. soju forgets it too, so it won't come back at next sign-in;
+/* Leave a room. Ergo forgets it too, so it won't come back at next sign-in;
  * it can be rejoined any time from 🔍 Rooms. */
 function leaveRoom(c) {
   if (!c || c.kind !== "room") return;
@@ -5027,6 +4914,13 @@ function closePm(c) {
 }
 
 function sendTo(target, body) {
+  if (!isChannel(target) && !isFriend(target) && !isService(target) && !S.canPm?.get(keyOf(target))?.ok) {
+    canPm(target).then((ok) => {
+      if (ok) sendTo(target, body);
+      else sysError(`${target} only accepts messages from friends. Send them a friend request first.`);
+    });
+    return;
+  }
   send(`PRIVMSG ${target} :${body}`);
   if (!isChannel(target)) setTimeout(() => autoReply(target), 300);
   // Without echo-message the server won't send our own message back.

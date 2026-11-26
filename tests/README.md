@@ -5,11 +5,11 @@ folder sementara, bukan di samping kode. Python hanya stdlib.
 
 | Folder | Isi | Butuh |
 |---|---|---|
-| `server/` | smoke test stack IRC: solanum, soju, TLS | stack docker |
-| `api/` | service akun (`server/register`) dan fitur IRC yang dipakai app, lewat HTTP dan koneksi IRC sungguhan | stack docker, akun demo |
+| `server/` | server IRC Ergo: capability, SASL wajib, TLS, always-on | stack docker, akun demo |
+| `api/` | service akun (`server/api`, Go) dan fitur IRC yang dipakai app, lewat HTTP dan koneksi IRC sungguhan | stack docker, akun demo |
 | `e2e/` | skenario yang dijalankan **di dalam app desktop asli** (build debug), dengan skrip "peer" sebagai orang lain | stack docker, akun demo, toolchain Rust/Tauri, sesi desktop |
 | `visual/` | UI asli dirender di Chrome headless dengan API Tauri palsu → screenshot | Google Chrome |
-| `lib/` | pembantu bersama: `a09f.py` (klien IRC lewat soju, klien service akun, SSE, laporan cek), `peer.py` (peer e2e) | — |
+| `lib/` | pembantu bersama: `a09f.py` (klien IRC ke Ergo, klien service akun, SSE, SQL bersih-bersih, laporan cek), `peer.py` (peer e2e) | — |
 
 Jalankan semua: `tests/run_all.sh` (atau satu grup: `tests/run_all.sh api`).
 Setiap skrip mencetak baris `[PASS]` / `[FAIL]` / `[SKIP]` dan keluar dengan
@@ -18,18 +18,17 @@ kode bukan nol kalau ada yang gagal.
 ## Sebelum menjalankan
 
 - Stack `server/` hidup: `cd server && docker compose up -d`.
-- Akun demo alice, bob, charlie, diana, evan, frank, grace, henry, irene, jack,
-  kate, leo, mia, nina, oscar dengan password `demo-1234`, masing-masing sudah
-  pernah sign in lewat app atau terdaftar di NickServ (tes moderasi memakai
-  extban akun). Password bisa diganti lewat `A09F_DEMO_PASSWORD`.
-- `server/.env` berisi `SOJU_PASSWORD` untuk `server/test_soju.py`.
+- Room bawaan + akun demo: `server/scripts/seed-demo.sh` (alice, bob,
+  charlie, diana, evan, frank, grace, henry, irene, jack, kate, leo, mia, nina,
+  oscar, control; password `demo-1234`, bisa diganti lewat `A09F_DEMO_PASSWORD`).
+- Bersih-bersih SQL memakai `docker exec a09f-postgres psql`. Postgres di
+  luar docker: set `A09F_PSQL` dan `A09F_PSQL_HISTORY` (perintah psql untuk
+  database `a09f` dan `ergo_history`).
 
 ## server/
 
 ```bash
-python3 tests/server/test_solanum.py [--tls]
-python3 tests/server/test_soju.py [--tls]
-python3 tests/server/test_tls.py
+python3 tests/server/test_ergo.py
 ```
 
 Rincian yang dicek: `server/docs/testing.md`.
@@ -42,16 +41,14 @@ python3 tests/api/test_friends.py        # request, grup, privasi, typing, peran
 python3 tests/api/test_messages.py       # hapus, reaksi, edit, pin, polling, pesan menghilang, saved, kirim nanti
 python3 tests/api/test_rooms_people.py   # event/RSVP, kategori, trending, zona waktu room, saran teman, seen-by, catatan
 python3 tests/api/test_preview.py        # pratinjau link + pengaman SSRF (butuh internet)
-python3 tests/api/test_irc_features.py   # +g/ACCEPT, extban $a:, KNOCK, ChanServ, CHATHISTORY, SEARCH, network quote
+python3 tests/api/test_irc_features.py   # always-on, /canpm, ChanServ REGISTER/AMODE, mute/ban, /knock, CHATHISTORY, search
 ```
 
 Catatan:
-- `test_account.py` membuat satu akun (service register mengizinkan 5 per IP
-  per jam; restart container `register` untuk mereset hitungannya).
-- `test_irc_features.py` bisa SKIP cek KNOCK: solanum hanya mengizinkan satu
-  knock per user setiap beberapa menit (`knock_delay`).
-- Tes membersihkan apa yang dibuatnya (room di-DROP lewat ChanServ, baris di
-  SQLite service akun dihapus). Run yang terputus bisa meninggalkan room
+- `test_account.py` membuat satu akun (service akun mengizinkan 5 per IP
+  per jam; restart container `api` untuk mereset hitungannya) dan butuh Mailpit.
+- Tes membersihkan apa yang dibuatnya (room di-UNREGISTER lewat ChanServ,
+  baris di Postgres service akun dihapus). Run yang terputus bisa meninggalkan room
   `#zz-test-*`; run berikutnya menghapusnya.
 
 ## e2e/
@@ -78,20 +75,20 @@ Cara kerjanya — tidak ada file source yang diubah:
 - Peer (`tests/lib/peer.py`) menerima `cmd:<nama> <argumen>` sebagai private
   message dari alice dan membalas `re:<teks>`. Pakai
   `Peer(user, control="bob")` kalau mengirim pesan ke `user` akan mengubah
-  tes (daftar ACCEPT user +g otomatis bertambah dengan siapa pun yang dia
-  kirimi pesan).
+  tes ("only friends" mengizinkan balasan dari orang yang pernah kita kirimi
+  pesan).
 
 | Skenario | Cakupan |
 |---|---|
 | `friends` | kartu request → accept, typing, status live, invisible (pre-away), hapus teman dua arah |
 | `messaging` | gaya teks, /me, reply, edit, reaksi dari peer, hapus, pratinjau link, Seen, search, saved + lompat |
-| `rooms` | dialog Create Room + MLOCK, pengaturan pemilik, moderator/mute/ban, pesan sambutan, polling, pin, event, Seen by, link undangan, hapus room |
-| `privacy_time` | hanya-teman (+g, sinkron ACCEPT), ignore, konfirmasi zona waktu jauh, kirim nanti, jam aktif |
+| `rooms` | dialog Create Room + mode, pengaturan pemilik, moderator/mute/ban, pesan sambutan, polling, pin, event, Seen by, link undangan, hapus room |
+| `privacy_time` | hanya-teman (dua arah), ignore, konfirmasi zona waktu jauh, kirim nanti, jam aktif |
 | `long_history` | 2.500 pesan: 100 pertama, jendela 1.000, Jump to latest, pesan pertama, lompat jauh |
 | `app_settings` | mode gelap, Cmd+K, Do Not Disturb, profil, warna nama, email pemulihan, perangkat, ekspor JSON |
 
-Tips: skenario yang lambat atau kadang gagal biasanya sedang menunggu soju
-menahan laju baris app setelah sign in. `signIn()` sudah menunggu antrian itu
+Tips: skenario yang lambat atau kadang gagal biasanya sedang menunggu batas
+laju server (fakelag Ergo) setelah sign in. `signIn()` sudah menunggu antrian itu
 habis. Bandingkan jawaban peer hanya setelah perintah dikirim (`ask` sudah
 melakukannya). Sign in sebagai alice di jendela lain saat tes berjalan
 (misalnya jendela demo) bisa membuat cek invisible menjadi SKIP.
