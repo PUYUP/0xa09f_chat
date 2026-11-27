@@ -366,7 +366,8 @@ crontab -e
 lain (solanum uid 1001, atheme uid 1000, soju dan api sebagai root tanpa
 capability), sementara bind mount mempertahankan pemilik dan izin file di
 host. Karena itu `sync-secrets.sh` menulis secret dengan izin `644` di folder
-`700`, dan `generate-certs.sh` meng-`chown` kunci TLS ke uid pembacanya (butuh
+`700`, kecuali `pgpass` yang harus `600` milik root (soju mengabaikan pgpass
+yang lebih longgar, lalu login postgres gagal); keduanya butuh `sudo`. Lalu `generate-certs.sh` meng-`chown` kunci TLS ke uid pembacanya (butuh
 `sudo`). Di Mac masalah ini tidak terlihat karena Docker Desktop mengabaikan
 izin file. User deploy harus anggota grup `docker`
 (`sudo usermod -aG docker $USER`, lalu login ulang).

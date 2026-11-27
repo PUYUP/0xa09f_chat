@@ -14,9 +14,15 @@
 # and the containers read them as other users (solanum uid 1001, atheme uid
 # 1000, soju/api as root with cap_drop ALL, i.e. without the right to bypass
 # file modes). A 600 file owned by the deploy user is unreadable to them on
-# Linux; Docker Desktop on macOS hides this. soju's lib/pq (v1.12) accepts a
-# pgpass file that is not 600.
+# Linux; Docker Desktop on macOS hides this.
+#
+# pgpass is the exception: soju's lib/pq ignores it unless it is 0600
+# ("has group or world access"), and soju runs as root without
+# CAP_DAC_OVERRIDE, so on Linux it must be 0600 *and owned by root* (sudo).
 set -eu
+
+SUDO=
+if [ "$(uname -s)" = Linux ] && [ "$(id -u)" != 0 ]; then SUDO=sudo; fi
 cd "$(dirname "$0")/.."
 
 ENV_FILE=.env
@@ -61,12 +67,14 @@ write_secret smtp-password        "$(get SMTP_PASSWORD)"
 # host:port:database:user:password. Host is the docker DNS name "postgres".
 PGPASS="$SECRETS_DIR/pgpass"
 PGPASS_VALUE="$(get POSTGRES_PASSWORD)"
+$SUDO rm -f "$PGPASS"     # may be root-owned from a previous run
 if [ -n "$PGPASS_VALUE" ]; then
     printf 'postgres:5432:%s:%s:%s\n' "$(get POSTGRES_DB)" "$(get POSTGRES_USER)" "$PGPASS_VALUE" > "$PGPASS"
-    chmod 644 "$PGPASS"
+    chmod 600 "$PGPASS"
+    if [ "$(uname -s)" = Linux ]; then
+        $SUDO chown 0 "$PGPASS"   # soju (root, no DAC override) must own it
+    fi
     echo "  + pgpass"
-else
-    rm -f "$PGPASS"
 fi
 
 echo "sync-secrets: done — run 'docker compose up -d' to apply"
