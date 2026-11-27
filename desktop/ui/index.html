@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Snailog IM</title>
 <style>
   /* Classic early-2000s desktop messenger look */
@@ -80,10 +80,11 @@
   .rb-tools { display: flex; gap: 6px; padding: 8px; background: #faf8fd; border-bottom: 1px solid var(--lilac-2); }
   .rb-tools input { flex: 1; }
   #rbList { flex: 1; overflow-y: auto; min-height: 120px; }
-  .rb-row { display: grid; grid-template-columns: 150px 64px 1fr 74px; gap: 8px; align-items: center; padding: 5px 10px; border-bottom: 1px solid #f0ebf7; }
+  .rb-row { display: grid; grid-template-columns: minmax(120px, 1fr) 112px minmax(0, 1.6fr) 74px; gap: 10px; align-items: center; padding: 5px 10px; border-bottom: 1px solid #f0ebf7; }
   .rb-row:hover { background: #fff8dc; }
   .rb-row .rname { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rb-row .rcount { color: var(--dim); font-size: 11px; }
+  .rb-row .rcount { color: var(--dim); font-size: 11px; white-space: nowrap; }
+  .rb-row > button, .rb-row > .joined { justify-self: stretch; }
   .rb-row .rtopic { color: #444; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rb-row .joined { color: #1a7f1a; font-size: 11px; font-weight: bold; text-align: center; cursor: pointer; }
   .rb-head { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; background: #f6f2fb; }
@@ -583,7 +584,19 @@
   body:not(.offline) #signin { display: none; }
 
   /* ---------- responsive ---------- */
-  .back-btn { display: none; }
+  /* browsers: follow the visible viewport (mobile URL bars) and keep clear of notches */
+  body { height: 100dvh; }
+  header { padding-top: max(6px, env(safe-area-inset-top)); padding-left: max(10px, env(safe-area-inset-left)); padding-right: max(10px, env(safe-area-inset-right)); }
+  #composer { padding-bottom: max(6px, env(safe-area-inset-bottom)); }
+  #side .side-box:last-child { padding-bottom: max(6px, env(safe-area-inset-bottom)); }
+  .back-btn, .people-btn { display: none; }
+  #chatTitle .back-btn { flex: none; margin-left: 0; font-weight: bold; }
+
+  /* touch screens have no hover: keep the hover-only controls reachable */
+  @media (hover: none) {
+    .user .profile-btn, .friend .profile-btn, .pm .close, .chan .close, .friend .close, .user .add-friend { visibility: visible; }
+    .friend .more, .fgroup .more { color: var(--dim); }
+  }
 
   @media (max-width: 900px) {
     #side { width: 200px; }
@@ -591,9 +604,34 @@
     #toolbar::-webkit-scrollbar { display: none; }
     #fmtbar { overflow-x: auto; scrollbar-width: none; }
     #fmtbar::-webkit-scrollbar { display: none; }
+    #fmtbar > * { flex: none; }
+
+    /* member list becomes a drawer opened from the chat title */
+    #chatTitle .people-btn { display: inline-flex; }
+    #right { display: none; }
+    body.people-open #right {
+      display: flex; position: absolute; top: 6px; right: 6px; bottom: 6px; z-index: 8;
+      width: min(240px, 80%); box-shadow: -4px 0 18px rgba(0,0,0,.25);
+    }
+    body.people-open #chatTitle .people-btn { background: #e8dcfa; border-color: var(--purple); }
   }
 
   @media (max-width: 640px) {
+    header { gap: 6px; }
+    .brand { margin-right: 0; }
+    .brand-name, #onlineCount { display: none; }
+    #who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .header-status { flex: none; }
+    #statusSel { max-width: 130px; }
+    #statusCustom { display: none !important; }
+
+    /* toolbar: icons only so every button fits */
+    #toolbar { padding: 2px 4px; gap: 0; justify-content: space-between; }
+    #toolbar > span[style] { display: none; }
+    button.tool { padding: 4px 6px; }
+    button.tool .ico { font-size: 20px; }
+    button.tool .ico + span { display: none; }
+
     /* one pane at a time: conversation list, or the open chat */
     main { gap: 0; padding: 0; }
     .pane { border: none; }
@@ -601,25 +639,79 @@
     #center { display: none; }
     body.chat-open #side { display: none; }
     body.chat-open #center { display: flex; }
-    .back-btn { display: inline-flex; }
+    #chatTitle .back-btn { display: inline-flex; }
+    body.people-open #right { top: 0; right: 0; bottom: 0; }
+    .pane-title { padding: 7px 8px; }
+    #chatTitle .title-btn { padding: 2px 7px; font-size: 13px; }
+
+    /* bigger tap targets (~44px rows) so neighbours aren't hit by mistake */
+    .chan, .pm, .user, .friend { min-height: 44px; padding: 8px 6px 8px 32px; font-size: 14px; border-bottom: 1px solid #f0ebf7; }
+    .chan::before, .pm::before { left: 10px; top: 50%; transform: translateY(-50%); font-size: 14px; }
+    .friend::before, .user::before { left: 11px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; }
+    .status-text { font-size: 12px; }
+    .group { padding: 10px; font-size: 13px; }
+    .fgroup { min-height: 38px; padding: 4px 6px 4px 14px; font-size: 12px; }
+    .fgroup .more, .friend .more, .pm .close, .chan .close, .friend .close,
+    .user .profile-btn, .friend .profile-btn, .add-friend {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 36px; min-height: 36px; padding: 0 6px; font-size: 14px; border-radius: 6px; }
+    .badge { line-height: 18px; font-size: 11px; }
+    .side-box.row { padding: 8px; }
+    #btnJoin, #btnSend { min-height: 40px; }
+    .find-link, #emptyFind { display: inline-block; padding: 8px 0; font-size: 13px; }
+
+    #ctxMenu .item { padding: 12px 18px; font-size: 14px; }
+    .qs-row, .sr-row { padding: 12px 14px; font-size: 14px; }
+    .mention-opt { padding: 10px 12px; font-size: 14px; }
+    .cf-list label { padding: 10px 12px; font-size: 14px; }
+    .mtools span { padding: 6px 10px; font-size: 15px; }
+    .rchip { padding: 3px 10px; font-size: 13px; }
+    .rb-hot { padding: 4px 10px; }
+    .modal .pane-title .x { padding: 6px 10px; margin: -6px -8px -6px auto; font-size: 15px; }
+    .signin-box .signin-opts { gap: 0; }
+    .signin-box .signin-opts label { padding: 7px 0; font-size: 13px; }
+    .forgot a, .switch a { display: inline-block; padding: 8px 4px; font-size: 13px; }
+    .signin-box input[type=text], .signin-box input[type=password], .signin-box input[type=email] { min-height: 42px; }
+    .signin-box button { min-height: 44px; }
 
     /* 16px inputs stop iOS auto-zoom on focus */
     input, select, textarea { font-size: 16px; }
     #composer input, #log { font-size: 14px; }
+    #composer input { font-size: 16px; }
+    #fmtbar button { min-width: 32px; padding: 2px 6px; }
 
     /* dialogs use the full width */
     .modal { inset: 0; padding-top: 0; align-items: stretch; }
-    .modal .pane { width: 100%; max-height: none; border: none; }
+    .modal .pane, .modal .pw-pane, .modal .pf-pane, .modal .rd-pane, .modal .ev-pane { width: 100%; max-height: none; border: none; }
     .qs-overlay { padding-top: 40px; }
+    .qs-box { width: calc(100% - 16px); }
     .rd-body { flex-direction: column; gap: 10px; }
-    .rb-row { grid-template-columns: 1fr 60px; }
-    .rb-row .rname { grid-column: 1 / -1; }
+    /* room browser: filters wrap, each room is a card (name + count, Join on the right, topic below) */
+    .rb-tools { flex-wrap: wrap; }
+    .rb-tools #rbSearch { flex: 1 1 100%; }
+    .rb-tools select { flex: 1; min-width: 0; max-width: none; }
+    .rb-head { display: none; }
+    .rb-row { grid-template-columns: minmax(0, 1fr) 76px; grid-template-areas: "name act" "count act" "topic topic";
+      gap: 2px 10px; padding: 8px 10px; }
+    .rb-row .rname { grid-area: name; }
+    .rb-row .rcount { grid-area: count; white-space: normal; }
+    .rb-row .rcount br { display: none; }
+    .rb-row .rcount small { margin-left: 8px; }
+    .rb-row .rtopic { grid-area: topic; white-space: normal; font-size: 12px; margin-top: 2px; }
+    .rb-row > button, .rb-row > .joined { grid-area: act; align-self: center; padding: 6px 0; }
+    .rb-foot { flex-wrap: wrap; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+    .rb-foot span { flex: 1 1 100%; font-weight: bold; color: var(--purple-d); }
+
+    /* sign-in: fill the screen instead of a floating card */
+    #signin { align-items: flex-start; overflow-y: auto; }
+    .signin-box { width: 100%; max-width: 420px; border: none; box-shadow: none; border-radius: 0; min-height: 100%; }
+    .signin-box .signin-opts label { white-space: normal; }
   }
 </style>
 </head>
 <body class="offline">
 <header>
-  <span class="brand"><img class="brand-icon" src="snail.png" alt="">Snailog IM</span>
+  <span class="brand"><img class="brand-icon" src="snail.png" alt=""><span class="brand-name">Snailog IM</span></span>
   <span id="dot" title="Offline"></span>
   <span id="who"></span>
   <span id="onlineCount" title="People with Snailog IM open right now"></span>

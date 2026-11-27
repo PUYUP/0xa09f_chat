@@ -526,13 +526,17 @@ function renderLog() {
   else logEl.scrollTop = atBottom ? logEl.scrollHeight : prevTop;
 }
 
-function switchTo(key) {
+/* show: the person picked this conversation, so on a phone open it over the
+ * list. Automatic switches (rooms rejoined at sign-in, leaving a room) pass
+ * false and keep whatever pane is on screen. */
+function switchTo(key, show = true) {
   key = key && keyOf(key);
+  if (show) document.body.classList.toggle("chat-open", !!key);
+  document.body.classList.remove("people-open");
   if (key === S.current) return;
   if (S.typingTo && keyOf(S.typingTo) !== key) stopTyping();
   if ($("composerBar").style.display !== "none") { if (S.editing) $("input").value = ""; clearComposerBar(); }
   S.current = key;
-  document.body.classList.toggle("chat-open", !!key);   // mobile: show chat instead of list
   const c = key && conv(key);
   if (c && c.kind !== "status" && !metaFor(key).loaded) loadMeta(c);
   if (c) { fetchHistory(c); markRead(c); }
@@ -656,12 +660,27 @@ function renderUsers() {
   }
 }
 
+/* The open chat went away: show another room (wide screens), back to the list on a phone. */
+function leaveToList() {
+  document.body.classList.remove("chat-open");
+  switchTo(rooms().at(-1)?.name || null, false);
+  renderLog();
+}
+
+// Narrow screens: the member list is a drawer; a tap outside it closes it.
+document.addEventListener("click", (e) => {
+  if (document.body.classList.contains("people-open") && !e.target.closest("#right"))
+    document.body.classList.remove("people-open");
+});
+
 /* Title bar: the name/topic may be cut short ("…"), the buttons never are.
  * Each button becomes icon + label; the label hides when the pane is narrow. */
 function layoutTitle() {
   const t = $("chatTitle");
+  const back = t.querySelector(".back-btn");
+  back?.remove();
   const btns = [...t.querySelectorAll(".title-btn")];
-  if (!btns.length || t.querySelector(".title-btns")) return;
+  if (!btns.length || t.querySelector(".title-btns")) { if (back) t.prepend(back); return; }
   const box = document.createElement("span");
   box.className = "title-btns";
   for (const b of btns) {
@@ -674,6 +693,7 @@ function layoutTitle() {
   text.className = "title-text";
   while (t.firstChild) text.appendChild(t.firstChild);
   t.append(text, box);
+  if (back) t.prepend(back);
 }
 
 function refreshSide() {
@@ -700,10 +720,13 @@ function refreshSide() {
       ` <button id="btnPmTheme" class="title-btn" title="Chat theme (both of you see it)">🎨 Theme</button>` +
       ` <button id="btnPmIgnore" class="title-btn">${isIgnored(c.name) ? "✅ Unignore" : "🚫 Ignore"}</button>`;
   }
+  if (c?.kind === "room")   // narrow screens hide the member list behind this button
+    title += ` <button id="btnPeopleM" class="title-btn people-btn" title="Who's here">👥 People</button>`;
   $("chatTitle").innerHTML = title;
   $("chatTitle").insertAdjacentHTML("afterbegin",
     ` <button id="btnBackM" class="title-btn back-btn" title="Back to the list">‹ Back</button>`);
   $("btnBackM").onclick = () => switchTo(null);
+  if ($("btnPeopleM")) $("btnPeopleM").onclick = (e) => { e.stopPropagation(); document.body.classList.toggle("people-open"); };
   if ($("btnTopic")) $("btnTopic").onclick = () => editTopic(c);
   if ($("btnLeave")) $("btnLeave").onclick = () => leaveRoom(c);
   if ($("btnInvite")) $("btnInvite").onclick = () => openConfDialog(c);
@@ -776,7 +799,7 @@ function onJoin(fromNick, channel) {
       c.justJoined = !!S.joining?.delete(keyOf(channel));
     }
     S.current = null;          // force switchTo to re-render
-    switchTo(channel);
+    switchTo(channel, S.burstDone);   // rejoins at sign-in don't open a chat on a phone
   } else if (!isService(fromNick)) {          // ChanServ & co. come and go silently
     addMsg(channel, { who: fromNick, txt: isConference(channel) ? "joined the conference" : "joined the room", cls: "action", local: true });
   }
@@ -788,7 +811,7 @@ function onPart(fromNick, channel) {
   const key = keyOf(channel);
   if (keyOf(fromNick) === keyOf(S.me)) {
     S.convs.delete(key);
-    if (S.current === key) { S.current = null; switchTo(rooms().at(-1)?.name || null); renderLog(); }
+    if (S.current === key) { S.current = null; leaveToList(); }
     if (S.confEnded?.delete(key)) {
       S.leaving?.delete(key);
       sys("That conference has already ended.", "tip");
@@ -3023,7 +3046,7 @@ function onKick(by, channel, nick, reason) {
   if (!c) return;
   if (keyOf(nick) === keyOf(S.me)) {
     S.convs.delete(key);
-    if (S.current === key) { S.current = null; switchTo(rooms().at(-1)?.name || null); renderLog(); }
+    if (S.current === key) { S.current = null; leaveToList(); }
     sys(`${by} removed you from ${roomName(channel)}.`, "error");
     refreshSide();
     return;
@@ -5028,7 +5051,7 @@ function openPm(nick) {
 
 function closePm(c) {
   S.convs.delete(keyOf(c.name));
-  if (S.current === keyOf(c.name)) { S.current = null; switchTo(rooms().at(-1)?.name || null); renderLog(); }
+  if (S.current === keyOf(c.name)) { S.current = null; leaveToList(); }
   refreshSide();
 }
 
