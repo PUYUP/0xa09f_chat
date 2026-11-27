@@ -33,7 +33,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 TAURI = os.path.join(REPO, "desktop", "src-tauri")
-APP = os.path.join(TAURI, "target", "debug", "snailog-desktop")
+APP = os.path.join(TAURI, "target", "debug", "Snailog_IM")
 SCEN = os.path.join(HERE, "scenarios")
 TIMEOUT = int(os.environ.get("SNAILOG_E2E_TIMEOUT", "420"))
 
