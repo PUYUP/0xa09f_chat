@@ -173,6 +173,7 @@ services:
     ports:
       - "${SOJU_BIND:-127.0.0.1}:${SOJU_PORT:-16667}:6667"          # bouncer plaintext
       - "${SOJU_BIND:-127.0.0.1}:${SOJU_TLS_PORT:-16697}:6697"      # bouncer TLS (CA-signed)
+      - "${SOJU_BIND:-127.0.0.1}:${SOJU_WS_PORT:-16668}:8080"       # bouncer WebSocket (webapp)
     volumes:
       - ./soju/config:/soju-config:ro
       - ./soju:/soju-tls:ro

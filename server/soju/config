@@ -1,6 +1,11 @@
 listen ircs://:6697
 listen irc+insecure://:6667
+listen ws+insecure://:8080
 listen unix+admin:///db/soju-admin.sock
+
+# WebSocket origins allowed to use the ws:// listener (glob patterns).
+# Local dev: the webapp is served from http://localhost or http://127.0.0.1.
+http-origin http://localhost:* http://127.0.0.1:*
 
 tls /soju-tls/tls-cert.pem /soju-tls/tls-key.pem
 
