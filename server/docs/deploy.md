@@ -164,7 +164,8 @@ go-live: kirim satu request lewat Caddy, lalu cek alamat asal di log
 +http-origin https://im.snailog.com
 +# Caddy meneruskan WebSocket dari host; percayai X-Forwarded-For darinya
 +# supaya soju melihat IP pengguna asli (bukan semuanya 172.30.99.1).
-+accept-proxy-ip 172.30.99.1
++# Harus format CIDR (/32 untuk satu alamat), kalau tidak soju menolak start.
++accept-proxy-ip 172.30.99.1/32
 +
 -hostname irc.solanum.test
 +hostname irc.snailog.com
@@ -173,6 +174,9 @@ go-live: kirim satu request lewat Caddy, lalu cek alamat asal di log
 - `http-origin` adalah pengaman utama WebSocket: tanpa ini, halaman web mana
   pun bisa membuka koneksi atas nama pengguna yang sedang login. Jangan
   memakai `*`.
+- `accept-proxy-ip` hanya menerima CIDR: tulis `172.30.99.1/32`, bukan
+  `172.30.99.1` (soju berhenti dengan `failed to parse CIDR`). Nilainya harus
+  sama dengan IP di `TRUSTED_PROXIES` (§5).
 - Kalau masih butuh webapp lokal untuk dev di server yang sama, tambahkan
   origin localhost di config **staging**, bukan di produksi.
 - `hostname` soju hanya kosmetik (nama yang terlihat klien). Nama server
@@ -441,7 +445,7 @@ Kalau `.env` berubah: `./scripts/sync-secrets.sh` dulu, baru `up -d`.
 - [ ] SPF, DKIM, DMARC untuk `snailog.com`; email uji tidak masuk spam
 - [ ] `.env` dibuat dengan `gen-prod-env.sh`; tidak ada `__ISI_`, SMTP sungguhan, `SOJU_USER`, `ADMIN_USERS`, `TRUSTED_PROXIES` sudah diverifikasi
 - [ ] Semua `*_BIND` = `127.0.0.1`; firewall hanya 22/80/443
-- [ ] `soju/config`: `http-origin https://im.snailog.com`, `accept-proxy-ip`
+- [ ] `soju/config`: `http-origin https://im.snailog.com`, `accept-proxy-ip 172.30.99.1/32`
 - [ ] User/password tes (`SOJU_USER`, akun demo) dihapus atau diganti
 - [ ] Caddy aktif, sertifikat terbit untuk ketiga domain (atau, dengan Cloudflare Workers: `irc.snailog.com` di Caddy, `im.` lewat Workers, redirect apex di Cloudflare)
 - [ ] CSP diuji dalam mode report-only, lalu diaktifkan
