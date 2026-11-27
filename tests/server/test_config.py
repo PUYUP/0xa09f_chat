@@ -74,6 +74,32 @@ check("email password-recovery modules disabled",
       and '#loadmodule "modules/nickserv/setpass"' in atheme
       and '#loadmodule "modules/nickserv/sendpass_user"' in atheme)
 
+# An unterminated /* comment once swallowed every NickServ SET module
+# (set_core..vhost) — services ran fine but NS SET PROPERTY was dead.
+# (Raw counts of /* vs */ lie: both appear inside comment text, so scan
+# for a comment still open at EOF instead.)
+i, _line, _start, unclosed = 0, 1, None, None
+while i < len(atheme) - 1:
+    if atheme[i] == "\n":
+        _line += 1
+    if atheme[i:i+2] == "/*" and _start is None:
+        _start = _line
+        i += 2
+        continue
+    if atheme[i:i+2] == "*/" and _start is not None:
+        _start = None
+        i += 2
+        continue
+    i += 1
+unclosed = _start
+check("no unterminated block comment in atheme.conf.tmpl",
+      unclosed is None, f"comment opened at line {unclosed} never closed")
+atheme_code = re.sub(r"/\*.*?\*/", "", atheme, flags=re.S)
+check("nickserv SET modules not inside a comment",
+      'loadmodule "modules/nickserv/set_core"' in atheme_code
+      and 'loadmodule "modules/nickserv/set_property"' in atheme_code
+      and 'loadmodule "modules/nickserv/taxonomy"' in atheme_code)
+
 print()
 if failures:
     print(f"{len(failures)} FAILURES: {', '.join(failures)}")

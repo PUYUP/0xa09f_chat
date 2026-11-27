@@ -245,7 +245,7 @@ loadmodule "modules/nickserv/return";
 /* Password-recovery-via-email modules disabled: mta is off, so they cannot
  * deliver anything, and password reset is handled by the a09f api service
  * (sojuctl + NickServ SET PASSWORD quote). sendpass_user would let any user
- * trigger password mailings.
+ * trigger password mailings. */
 #loadmodule "modules/nickserv/resetpass";
 #loadmodule "modules/nickserv/setpass";
 #loadmodule "modules/nickserv/sendpass_user";
