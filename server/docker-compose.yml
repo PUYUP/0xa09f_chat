@@ -211,7 +211,9 @@ services:
     container_name: mailpit
     restart: unless-stopped
     ports:
-      - "${BIND_ADDR:-127.0.0.1}:${MAILPIT_PORT:-16825}:8025"     # web inbox
+      # Always localhost: this inbox shows password-reset emails — it must
+      # never follow BIND_ADDR to a public interface.
+      - "127.0.0.1:${MAILPIT_PORT:-16825}:8025"                 # web inbox
     logging: *default-logging
     networks:
       ircnet:

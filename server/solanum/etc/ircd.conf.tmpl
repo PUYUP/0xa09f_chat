@@ -19,28 +19,24 @@ serverinfo {
 	nicklen = 30;
 };
 
-/* Auth blocks are order-independent: a "*@*" block always wins over the
- * specific one below, so a catch-all that also restates the bouncer's address
- * must allow the same flags. */
+/* Auth blocks are first-match-wins: solanum ignores any block listed after a
+ * match ("Ignoring redundant auth block" in the log), so the specific soju
+ * block MUST come before the catch-all.
+ *
+ * NOTE: need_ident was tried here and rejected — solanum then demands an
+ * identd response and soju does not provide one, so every upstream connection
+ * was closed ("You need to install identd"). exceed_limit alone is what the
+ * bouncer needs: all its users share this one source IP. */
 auth {
-	user = "*@*";
+	user = "*@__SOJU_HOST__";   /* = soju: ipv4_address in docker-compose.yml */
 	class = "users";
 	flags = exceed_limit;
 };
 
-/* soju: every bouncer user's upstream connection comes from this one IP, so
- * it must not count against per-IP class limits (number_per_ip = 10 would cap
- * the whole service at 10 accounts).
- *
- * This block is also what stops a local client from claiming a user's nick
- * and logging in as them with NickServ: solanum runs the IDENT check by
- * default for every client, so 172.30.99.30 only gets in here (and only gets
- * past need_ident) when it answers for that ident, which only the bouncer
- * does. It names the address, never "*". */
 auth {
-	user = "*@172.30.99.30";   /* = soju: ipv4_address in docker-compose.yml */
+	user = "*@*";
 	class = "users";
-	flags = exceed_limit, need_ident;
+	flags = exceed_limit;
 };
 
 admin {
@@ -124,7 +120,9 @@ privset "admin" {
 
 operator "admin" {
 	user = "*admin@*";
-	password = "$6$tI7kifousnNyHP59$2cjjp4t/PUe9EsoMe4h8Qb47sobmvNSx1.QLiZehuU5Ed8vuI0fLflBiZ58f/bT7RP3XIgxxrVy1LnUhY37KL1";
+	/* Rendered by entrypoint.sh: sha512-crypt hash of OPER_ADMIN_PASSWORD
+	 * from .env — never commit a literal hash here. */
+	password = "__OPER_ADMIN_PASSWORD__";
 	snomask = "+Zbfkrsuy";
 	flags = encrypted;
 	privset = "admin";

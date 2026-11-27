@@ -9,6 +9,18 @@ rm -f /tmp/solanum.pid /var/local/solanum.pid
 # an empty password). Fail instead of starting a half-configured network.
 : "${LINK_SOLANUM_SEND:?set LINK_SOLANUM_SEND in .env (see .env.example)}"
 : "${LINK_SOLANUM_ACCEPT:?set LINK_SOLANUM_ACCEPT in .env (see .env.example)}"
+: "${OPER_ADMIN_PASSWORD:?set OPER_ADMIN_PASSWORD in .env (see .env.example)}"
+
+# The oper password is hashed here so the repo never holds even the hash.
+# Restrict the charset: the value is substituted into ircd.conf via sed, so
+# '|' and '&' would corrupt the render.
+case "$OPER_ADMIN_PASSWORD" in
+*[!A-Za-z0-9._~+-]*)
+    echo "sol: OPER_ADMIN_PASSWORD may only contain [A-Za-z0-9._~+-]" >&2
+    exit 1
+    ;;
+esac
+OPER_ADMIN_PASSWORD_HASH=$(openssl passwd -6 "$OPER_ADMIN_PASSWORD")
 
 # The bouncer's own address: only it is treated as the bouncer (auth "soju" in
 # ircd.conf.tmpl). It comes from a docker secret (./secrets/soju-host.ip, see
@@ -31,6 +43,7 @@ sed -e "s|__LINK_SOLANUM_SEND__|${LINK_SOLANUM_SEND}|g" \
     -e "s|__LINK_SOLANUM_ACCEPT__|${LINK_SOLANUM_ACCEPT}|g" \
     -e "s|__ATHEME_HOST__|${ATHEME_HOST:-atheme}|g" \
     -e "s|__SOJU_HOST__|${SOJU_HOST}|g" \
+    -e "s|__OPER_ADMIN_PASSWORD__|${OPER_ADMIN_PASSWORD_HASH}|g" \
     /etc/solanum/ircd.conf.tmpl > /tmp/ircd.conf
 
 # An unreplaced placeholder would leave an auth rule matching nothing (or the

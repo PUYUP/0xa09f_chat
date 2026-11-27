@@ -756,16 +756,13 @@ loadmodule "modules/groupserv/set_url";
  *
  * HTTP Server                                  modules/misc/httpd
  */
-loadmodule "modules/misc/httpd";
+/* HTTP server module — disabled: nothing consumes it, and it would listen on
+ * 0.0.0.0:8080 inside the container (reachable by every service on ircnet).
+#loadmodule "modules/misc/httpd";
 
-/* XMLRPC server module.
- * 
- * The XML-RPC handler requires modules/misc/httpd to be loaded as it merely
- * registers a path handler for XML-RPC. The path used for XML-RPC is /xmlrpc.
- *
- * XMLRPC handler for the httpd                 modules/transport/xmlrpc
- */
-loadmodule "modules/transport/xmlrpc";
+/* XMLRPC server module — disabled together with httpd (it only registers a
+ * path handler on the httpd).
+#loadmodule "modules/transport/xmlrpc";
 
 /* Extended target entity types. [EXPERIMENTAL]
  *
