@@ -358,6 +358,15 @@ crontab -e
 #   */5 * * * *  /opt/snailog/server/scripts/monitor.sh >> /var/log/irc-monitor.log 2>&1
 ```
 
+**Izin file di Linux.** Container membaca secret dan kunci TLS sebagai user
+lain (solanum uid 1001, atheme uid 1000, soju dan api sebagai root tanpa
+capability), sementara bind mount mempertahankan pemilik dan izin file di
+host. Karena itu `sync-secrets.sh` menulis secret dengan izin `644` di folder
+`700`, dan `generate-certs.sh` meng-`chown` kunci TLS ke uid pembacanya (butuh
+`sudo`). Di Mac masalah ini tidak terlihat karena Docker Desktop mengabaikan
+izin file. User deploy harus anggota grup `docker`
+(`sudo usermod -aG docker $USER`, lalu login ulang).
+
 Cek nama dan urutan script di `README.md` / `operations.md` kalau ada yang
 berubah sejak dokumen ini ditulis.
 

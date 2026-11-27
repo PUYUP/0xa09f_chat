@@ -40,8 +40,16 @@ if [ ! -f pki/ca.pem ]; then
 fi
 
 # --- CA-signed server certs --------------------------------------------------
+# On Linux the key files keep their host owner inside the containers, and the
+# containers can't bypass file modes (cap_drop ALL), so each key is handed to
+# the uid that reads it (see own_keys below). Re-running the script must
+# first remove those root/ircd-owned keys, hence $SUDO.
+SUDO=
+if [ "$(uname -s)" = Linux ] && [ "$(id -u)" != 0 ]; then SUDO=sudo; fi
+
 gen() {
     dir=$1; cn=$2; cert=$3; key=$4
+    [ -n "$SUDO" ] && $SUDO rm -f "$dir/$key"
     openssl req -newkey rsa:2048 -nodes \
         -keyout "$dir/$key" -out "/tmp/solnet-$cn.csr" \
         -subj "/CN=$cn"
@@ -55,6 +63,12 @@ gen() {
 
 gen solanum/etc irc.solanum.test ssl-cert.pem ssl-key.pem
 gen soju irc.solanum.test tls-cert.pem tls-key.pem
+
+# Linux: keys stay 600, owned by the container user that reads them.
+if [ "$(uname -s)" = Linux ]; then
+    $SUDO chown 1001 solanum/etc/ssl-key.pem   # solanum runs as ircd, uid 1001 (solanum/Dockerfile)
+    $SUDO chown 0 soju/tls-key.pem             # the soju image has no USER: it runs as root
+fi
 
 openssl dhparam -out solanum/etc/dh.pem 2048
 chmod 644 solanum/etc/dh.pem

@@ -19,31 +19,6 @@ serverinfo {
 	nicklen = 30;
 };
 
-/* Auth blocks are first-match-wins: solanum ignores any block listed after a
- * match ("Ignoring redundant auth block" in the log), so the specific soju
- * block MUST come before the catch-all.
- *
- * need_ssl rejects every plaintext client connection ("You need to use
- * SSL/TLS to use this server."). soju's upstreams are ircs://solanum:6697
- * with certs chaining to pki/ca.pem, so the bouncer is unaffected; the
- * plaintext ports stay up only so the rejection message can be served.
- *
- * NOTE: need_ident was tried here and rejected — solanum then demands an
- * identd response and soju does not provide one, so every upstream connection
- * was closed ("You need to install identd"). exceed_limit alone is what the
- * bouncer needs: all its users share this one source IP. */
-auth {
-	user = "*@__SOJU_HOST__";   /* = soju: ipv4_address in docker-compose.yml */
-	class = "users";
-	flags = exceed_limit, need_ssl;
-};
-
-auth {
-	user = "*@*";
-	class = "users";
-	flags = exceed_limit, need_ssl;
-};
-
 admin {
 	name = "Lazy admin (lazya)";
 	description = "SolNet client server";
@@ -83,6 +58,36 @@ class "server" {
 	max_number = 1;
 	max_autoconn = 1;
 	sendq = 4 megabytes;
+};
+
+/* Auth blocks are first-match-wins: solanum ignores any block listed after a
+ * match ("Ignoring redundant auth block" in the log), so the specific soju
+ * block MUST come before the catch-all.
+ *
+ * need_ssl rejects every plaintext client connection ("You need to use
+ * SSL/TLS to use this server."). soju's upstreams are ircs://solanum:6697
+ * with certs chaining to pki/ca.pem, so the bouncer is unaffected; the
+ * plaintext ports stay up only so the rejection message can be served.
+ *
+ * NOTE: need_ident was tried here and rejected — solanum then demands an
+ * identd response and soju does not provide one, so every upstream connection
+ * was closed ("You need to install identd"). exceed_limit alone is what the
+ * bouncer needs: all its users share this one source IP.
+ *
+ * They also must come AFTER the class{} blocks they name: solanum resolves
+ * the class while parsing, so auth blocks above class "users" silently put
+ * every client in the default class (log: 'Using default class for missing
+ * class "users"'). */
+auth {
+	user = "*@__SOJU_HOST__";   /* = soju: ipv4_address in docker-compose.yml */
+	class = "users";
+	flags = exceed_limit, need_ssl;
+};
+
+auth {
+	user = "*@*";
+	class = "users";
+	flags = exceed_limit, need_ssl;
 };
 
 listen {
