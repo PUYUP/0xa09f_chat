@@ -29,6 +29,7 @@
     color: #fff; border-bottom: 2px solid var(--purple-d);
   }
   .brand { display: flex; align-items: center; gap: 6px; font: bold 18px/1 Verdana, Geneva, sans-serif; text-shadow: 1px 1px 0 #2a0b47; margin-right: 6px; }
+  .brand-icon { width: 24px; height: 24px; }
   #who { font-weight: bold; }
 
   /* status smiley: grey offline, yellow online */
@@ -583,7 +584,7 @@
 </head>
 <body class="offline">
 <header>
-  <span class="brand">Snailog IM</span>
+  <span class="brand"><img class="brand-icon" src="snail.png" alt="">Snailog IM</span>
   <span id="dot" title="Offline"></span>
   <span id="who"></span>
   <span id="onlineCount" title="People with Snailog IM open right now"></span>
@@ -607,7 +608,7 @@
 <div id="signin" data-screen="signin">
   <form class="signin-box" id="signinForm" autocomplete="on">
     <div class="signin-logo">Snailog IM</div>
-    <div class="signin-face">😊</div>
+    <div class="signin-face">🐌</div>
     <label for="buser">ID</label>
     <input type="text" id="buser" autocomplete="username">
     <label for="bpass">Password</label>
@@ -625,7 +626,7 @@
 
   <form class="signin-box" id="resetForm" autocomplete="off" novalidate>
     <div class="signin-logo">Snailog IM</div>
-    <div class="signin-face">🔑</div>
+    <div class="signin-face">🐌</div>
     <div class="reset-title">Reset your password</div>
     <label for="ruser">Your ID</label>
     <input type="text" id="ruser" autocomplete="username" maxlength="16">
@@ -646,7 +647,7 @@
 
   <form class="signin-box" id="createForm" autocomplete="off" novalidate>
     <div class="signin-logo">Snailog IM</div>
-    <div class="signin-face">🎉</div>
+    <div class="signin-face">🐌</div>
     <label for="cuser">Choose an ID</label>
     <input type="text" id="cuser" autocomplete="username" maxlength="16">
     <div class="hint">3–16 letters or numbers, starting with a letter</div>
