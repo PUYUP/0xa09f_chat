@@ -1,4 +1,4 @@
-# Arsitektur app desktop snailog
+# Arsitektur app desktop Snailog IM
 
 ## Gambaran
 

@@ -165,13 +165,13 @@ fn show_main(app: &AppHandle) {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open snailog", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Snailog IM", true, None::<&str>)?;
     let signout = MenuItem::with_id(app, "signout", "Sign Out", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit snailog", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Snailog IM", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&open, &signout, &sep, &quit])?;
     let mut tray = TrayIconBuilder::with_id("main")
-        .tooltip("snailog")
+        .tooltip("Snailog IM")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {

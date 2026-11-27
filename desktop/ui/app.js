@@ -1801,7 +1801,7 @@ function totalUnread() {
 
 function updateTitle() {
   const n = S.phase === "online" ? totalUnread() : 0;
-  const title = n ? `snailog (${n > 99 ? "99+" : n})` : "snailog";
+  const title = n ? `Snailog IM (${n > 99 ? "99+" : n})` : "Snailog IM";
   if (title === S.title) return;
   S.title = title;
   document.title = title;

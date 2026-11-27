@@ -1,4 +1,4 @@
-# snailog Desktop
+# Snailog IM Desktop
 
 Client desktop IRC untuk stack `server/` (Solanum + Atheme + Soju) —
 dibangun dengan Tauri (Rust backend + vanilla JS frontend).
@@ -56,7 +56,7 @@ server/protokol di layar.
   sedang dilihat. Di build dev macOS notifikasi tampil atas nama Terminal
 - **Suara** (disintesis WebAudio, tanpa file audio): pesan masuk, mention,
   BUZZ, teman online/offline, sign in. Tombol 🔊/🔇 di toolbar (diingat)
-- Judul jendela menampilkan total belum dibaca, mis. "snailog (3)"
+- Judul jendela menampilkan total belum dibaca, mis. "Snailog IM (3)"
 - **Akun NickServ otomatis**: saat sign in app cek `WHOIS <diri>` (330 =
   sudah login). Kalau belum: `NickServ REGISTER <password> <id>@users.snailog.invalid`
   (email unik: Atheme `maxusers = 5` per email), atau `IDENTIFY` kalau nick sudah
@@ -108,7 +108,7 @@ server/protokol di layar.
 - **Tray**: tombol tutup menyembunyikan jendela, snailog tetap jalan (pesan,
   BUZZ, notifikasi tetap masuk). Ikon tray: klik = buka; menu Open / Sign Out /
   Quit. macOS: klik ikon Dock juga membuka lagi
-- **Start snailog when my computer starts** (`tauri-plugin-autostart`): dimulai
+- **Start Snailog IM when my computer starts** (`tauri-plugin-autostart`): dimulai
   tersembunyi di tray dengan argumen `--autostart`; kombinasikan dengan
   auto sign-in
 - **Serba live (SSE dari service akun)**: hapus teman berlaku dua arah dan

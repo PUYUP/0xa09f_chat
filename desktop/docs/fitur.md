@@ -1,4 +1,4 @@
-# Panduan fitur snailog
+# Panduan fitur Snailog IM
 
 Panduan pemakaian app desktop snailog, per area. Detail teknis tiap fitur ada di
 `desktop/README.md`, cara kerjanya di `desktop/docs/arsitektur.md`, dan API
