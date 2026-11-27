@@ -355,9 +355,16 @@ python3 tests/server/test_tls.py              # handshake TLS kedua listener
 - Semua sertifikat TLS **self-signed** — jangan expose ke internet tanpa CA asli.
 - Password link solanum↔atheme dan password user soju `pointilis` adalah
   credential dev — ganti sebelum dipakai serius.
-- Password oper `admin` di ircd.conf sudah di-hash SHA-512 crypt tapi tetap
-  credential lemah untuk dev.
+- Password oper `admin` diambil dari `OPER_ADMIN_PASSWORD` di `.env` dan
+  di-hash saat startup — jangan commit hash/password ke repo. Password yang
+  lama (pernah ter-commit sebagai hash) sudah diganti.
+- Port default ter-bind ke `127.0.0.1` (`BIND_ADDR`). Mailpit **selalu**
+  localhost karena menampilkan email reset password. Untuk publik, hanya
+  buka port TLS (`6697`/`16697`) dan tetap waspada: tidak ada penegakan
+  `need_ssl`, jadi client plaintext bisa mengirim password NickServ
+  cleartext — pertimbangkan firewall yang hanya mengizinkan TLS.
+- Atheme `httpd`/`xmlrpc` dimatikan; kalau diaktifkan lagi, port 8080-nya
+  listen `0.0.0.0` di dalam container dan bisa dijangkau semua service di
+  `ircnet`.
 - Solanum jalan sebagai user `ircd` non-root; atheme sebagai user `atheme`;
   soju image berjalan sebagai user non-root bawaan image.
-- Port ter-bind ke `0.0.0.0` — akses LAN terbuka. Batasi dengan firewall atau
-  ganti ke `127.0.0.1:6667:6667` kalau hanya untuk lokal.

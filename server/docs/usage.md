@@ -33,9 +33,10 @@ tetap ter-join untuk user itu.
 
 ### Oper (admin solanum)
 
-Operator `admin` didefinisikan di `ircd.conf` dengan password ter-hash.
-Login di client dengan `/OPER admin <password>`. Ganti hash password dulu
-sebelum dipakai — hash saat ini hanya untuk dev lokal.
+Operator `admin` didefinisikan di `ircd.conf`; passwordnya adalah
+`OPER_ADMIN_PASSWORD` di `.env` (di-hash sha512-crypt saat container
+start — plaintext/hash tidak ada di repo). Login di client dengan
+`/OPER admin <OPER_ADMIN_PASSWORD>`.
 
 ## Connect via Soju bouncer
 

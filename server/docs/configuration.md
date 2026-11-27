@@ -9,8 +9,9 @@ cp .env.example .env          # isi password/port sesuai kebutuhan
 docker compose up -d --build
 ```
 
-- `.env` — gitignored; berisi link password, password user soju,
-  kredensial postgres (`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`),
+- `.env` — gitignored; berisi link password, `OPER_ADMIN_PASSWORD` (password
+  oper `admin`, di-hash saat container start — lihat bawah), password user
+  soju, kredensial postgres (`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`),
   port host, subnet, `ATHEME_HOST`.
 - `scripts/generate-certs.sh` — generate cert solanum (`ssl-*.pem`, `dh.pem`)
   dan soju (`tls-*.pem`) dengan SAN `irc.solanum.test,localhost,127.0.0.1`.
@@ -40,6 +41,9 @@ itu dibaca dari docker secret `secrets/soju-host.ip`, bukan dari `.env`.
 Semua port di atas bind ke `${BIND_ADDR}` (default `127.0.0.1`), dengan
 override per service: `SOLANUM_BIND`, `SOJU_BIND`, `SOLANUM_SOJU_BIND`.
 Untuk host publik, biarkan plaintext di `127.0.0.1` dan hanya buka TLS.
+
+Pengecualian: **mailpit selalu `127.0.0.1`** — inbox web-nya menampilkan
+email reset password, jadi tidak boleh ikut `BIND_ADDR` ke interface publik.
 
 Image di-pin:
 
@@ -103,10 +107,15 @@ Catatan dependency yang pernah jadi masalah:
 ## solanum/entrypoint.sh
 
 1. Hapus stale pidfile.
-2. Render `/etc/solanum/ircd.conf.tmpl` → `/tmp/ircd.conf` via `sed`,
+2. Wajibkan env `LINK_SOLANUM_SEND`, `LINK_SOLANUM_ACCEPT`, dan
+   `OPER_ADMIN_PASSWORD`; hash password oper via `openssl passwd -6`
+   (charset dibatasi `[A-Za-z0-9._~+-]` supaya aman untuk substitusi sed).
+3. Render `/etc/solanum/ircd.conf.tmpl` → `/tmp/ircd.conf` via `sed`,
    substitusi `__LINK_SOLANUM_SEND__`, `__LINK_SOLANUM_ACCEPT__`,
-   `__ATHEME_HOST__` dari env.
-3. `exec solanum -foreground -configfile /tmp/ircd.conf ...`
+   `__ATHEME_HOST__`, `__SOJU_HOST__` (dari docker secret `soju-ip`), dan
+   `__OPER_ADMIN_PASSWORD__` (hash di atas). Placeholder yang tersisa
+   menggagalkan startup.
+4. `exec solanum -foreground -configfile /tmp/ircd.conf ...`
 
 ## solanum/etc/ircd.conf.tmpl
 
@@ -130,6 +139,23 @@ Arah password (mudah tertukar):
 - solanum `accept_password` = password yang diharapkan solanum = Atheme
   `send_password` → env `LINK_SOLANUM_ACCEPT`
 
+Blok `auth` di bagian atas file **first-match-wins** — solanum mengabaikan
+blok yang muncul setelah match (`Ignoring redundant auth block` di log),
+jadi blok `*@__SOJU_HOST__` harus tetap di atas `*@*`. Flag `exceed_limit`
+diberikan ke keduanya karena semua client sampai lewat IP gateway docker
+(yang sama untuk soju maupun user biasa), jadi limit per-IP tidak bisa
+ditegakkan di deployment ini; connect-throttle solanum (`throttle_*` di
+`general {}`) tetap aktif dan itulah proteksi anti-flood yang bekerja.
+
+`need_ident` **sengaja tidak dipakai**: butuh jawaban identd yang tidak
+disediakan soju — semua upstream langsung ditutup ("You need to install
+identd"). Terverifikasi empiris.
+
+Operator `admin` juga di-render: `password = "__OPER_ADMIN_PASSWORD__"`
+berisi hash sha512-crypt dari env `OPER_ADMIN_PASSWORD` — hash tidak pernah
+ditulis di repo (hash lama yang ter-commit dianggap compromised dan sudah
+diganti).
+
 ## atheme/etc/atheme.conf.tmpl + entrypoint.sh
 
 `atheme.conf.tmpl` = config Atheme 7.2 dengan dua placeholder di blok
@@ -146,7 +172,9 @@ receive_password = "__LINK_SOLANUM_SEND__";    # = solanum send_password
 
 Module aktif: `modules/protocol/charybdis` (kompatibel solanum),
 `modules/backend/opensex`, `modules/crypto/pbkdf2v2`, services standar.
-`#mta` dikomentari — email mati.
+`#mta` dikomentari — email mati. `modules/misc/httpd` dan
+`modules/transport/xmlrpc` **dimatikan** — tidak dipakai dan httpd akan
+listen `0.0.0.0:8080` yang bisa dijangkau semua container di `ircnet`.
 
 ## soju/config
 
