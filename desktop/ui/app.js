@@ -5464,7 +5464,6 @@ function insertEmote(code) {
 document.querySelectorAll("#fmtbar [data-emo]").forEach((b) => {
   b.onclick = () => insertEmote(b.dataset.emo);
 });
-$("btnEmote").onclick = () => insertEmote(":)");
 $("btnBuzz").onclick = sendBuzz;
 $("btnSound").onclick = (e) => { e.stopPropagation(); soundMenu(e); };
 setMuted(Sound.muted);
