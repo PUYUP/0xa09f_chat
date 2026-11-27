@@ -14,6 +14,7 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const appWindow = window.__TAURI__.window.getCurrentWindow();
 const { PhysicalPosition } = window.__TAURI__.dpi;
+const IS_WEB = !!window.__TAURI__.isWebApp;   // browser build: hide desktop-only settings
 
 const $ = (id) => document.getElementById(id);
 
@@ -476,7 +477,7 @@ function renderMsg(m) {
   if (poll && !deleted) div.appendChild(pollCard(+poll[1]));
   const evm = !m.buzz && !deleted && m.txt.match(EVENT_RE);
   if (evm) { div.querySelector(".txt").textContent = "planned an event:"; div.appendChild(eventCard(+evm[1])); }
-  if (m.reveal) {
+  if (m.reveal && !IS_WEB) {
     const b = document.createElement("button");
     b.className = "title-btn"; b.textContent = "Show in folder";
     b.onclick = () => invoke("plugin:opener|reveal_item_in_dir", { path: m.reveal }).catch(() => {});
@@ -531,6 +532,7 @@ function switchTo(key) {
   if (S.typingTo && keyOf(S.typingTo) !== key) stopTyping();
   if ($("composerBar").style.display !== "none") { if (S.editing) $("input").value = ""; clearComposerBar(); }
   S.current = key;
+  document.body.classList.toggle("chat-open", !!key);   // mobile: show chat instead of list
   const c = key && conv(key);
   if (c && c.kind !== "status" && !metaFor(key).loaded) loadMeta(c);
   if (c) { fetchHistory(c); markRead(c); }
@@ -699,6 +701,9 @@ function refreshSide() {
       ` <button id="btnPmIgnore" class="title-btn">${isIgnored(c.name) ? "✅ Unignore" : "🚫 Ignore"}</button>`;
   }
   $("chatTitle").innerHTML = title;
+  $("chatTitle").insertAdjacentHTML("afterbegin",
+    ` <button id="btnBackM" class="title-btn back-btn" title="Back to the list">‹ Back</button>`);
+  $("btnBackM").onclick = () => switchTo(null);
   if ($("btnTopic")) $("btnTopic").onclick = () => editTopic(c);
   if ($("btnLeave")) $("btnLeave").onclick = () => leaveRoom(c);
   if ($("btnInvite")) $("btnInvite").onclick = () => openConfDialog(c);
@@ -4866,6 +4871,7 @@ async function doSignIn() {
 }
 
 function doDisconnect(message = "", isError = false) {
+  document.body.classList.remove("chat-open");
   invoke("disconnect");
   S.me = null; S.current = null; S.burstDone = false;
   S.caps.clear(); S.convs.clear(); S.batches.clear(); S.away = false;
@@ -5223,9 +5229,13 @@ async function initSignInOptions() {
   const auto = remember && localStorage.getItem(LS.auto) === "1";
   $("optRemember").checked = remember;
   $("optAuto").checked = auto;
-  invoke("plugin:autostart|is_enabled").then((on) => { $("optStartup").checked = !!on; }).catch(() => {
+  if (IS_WEB) {
     $("optStartup").closest("label").style.display = "none";
-  });
+  } else {
+    invoke("plugin:autostart|is_enabled").then((on) => { $("optStartup").checked = !!on; }).catch(() => {
+      $("optStartup").closest("label").style.display = "none";
+    });
+  }
   const id = localStorage.getItem(LS.lastId) || "";
   if (!remember || !id) return;
   $("buser").value = id;

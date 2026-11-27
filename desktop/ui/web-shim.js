@@ -111,8 +111,26 @@
     return Promise.resolve(() => handlers.get(name)?.delete(cb));
   };
 
+  // Window management doesn't exist in a browser tab — no-op stubs.
+  const appWindow = {
+    unminimize: async () => {},
+    show: async () => {},
+    setFocus: async () => {},
+    requestUserAttention: async () => {},
+    outerPosition: async () => ({ x: 0, y: 0 }),
+    setPosition: async () => {},
+    setTitle: async (t) => { document.title = t; },
+  };
+
   window.__TAURI__ = {
+    isWebApp: true,   // lets app.js hide desktop-only settings
     core: { invoke },
     event: { listen },
+    window: { getCurrentWindow: () => appWindow },
+    dpi: {
+      PhysicalPosition: class {
+        constructor(x, y) { this.x = x; this.y = y; }
+      },
+    },
   };
 })();

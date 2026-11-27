@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Snailog IM</title>
 <style>
   /* Classic early-2000s desktop messenger look */
@@ -580,6 +581,40 @@
   /* signed-out shows only the sign-in screen */
   body.offline #toolbar, body.offline main { display: none; }
   body:not(.offline) #signin { display: none; }
+
+  /* ---------- responsive ---------- */
+  .back-btn { display: none; }
+
+  @media (max-width: 900px) {
+    #side { width: 200px; }
+    #toolbar { overflow-x: auto; scrollbar-width: none; }
+    #toolbar::-webkit-scrollbar { display: none; }
+    #fmtbar { overflow-x: auto; scrollbar-width: none; }
+    #fmtbar::-webkit-scrollbar { display: none; }
+  }
+
+  @media (max-width: 640px) {
+    /* one pane at a time: conversation list, or the open chat */
+    main { gap: 0; padding: 0; }
+    .pane { border: none; }
+    #side { width: 100%; }
+    #center { display: none; }
+    body.chat-open #side { display: none; }
+    body.chat-open #center { display: flex; }
+    .back-btn { display: inline-flex; }
+
+    /* 16px inputs stop iOS auto-zoom on focus */
+    input, select, textarea { font-size: 16px; }
+    #composer input, #log { font-size: 14px; }
+
+    /* dialogs use the full width */
+    .modal { inset: 0; padding-top: 0; align-items: stretch; }
+    .modal .pane { width: 100%; max-height: none; border: none; }
+    .qs-overlay { padding-top: 40px; }
+    .rd-body { flex-direction: column; gap: 10px; }
+    .rb-row { grid-template-columns: 1fr 60px; }
+    .rb-row .rname { grid-column: 1 / -1; }
+  }
 </style>
 </head>
 <body class="offline">
