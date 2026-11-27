@@ -957,7 +957,14 @@ function onNumeric(num, params, trailing) {
       doDisconnect("Wrong ID or password. Please try again.", true);
       return;
   }
-  if (num === 401 && params[1]) { sysError(`There's no snailog user with the ID "${params[1]}".`); return; }
+  if (num === 401 && params[1]) {
+    // solanum answers "LIST #new-room" with 401 when the room doesn't exist yet:
+    // that's roomExists() getting its "no", not an error (323 ends the probe).
+    if (S.listProbe?.key === keyOf(params[1])) return;
+    if (isChannel(params[1])) { sysError(`The room ${roomName(params[1])} doesn't exist (any more).`); return; }
+    sysError(`There's no snailog user with the ID "${params[1]}".`);
+    return;
+  }
   if (num === 473 && isConference(params[1])) { sysError("You need a new invite to join this conference."); return; }
   if (num === 473) { offerKnock(params[1]); return; }
   if (num === 475) { addMsg(null, { who: "Error", txt: `${roomName(params[1])} needs a password.`, cls: "error", askKey: params[1] }); return; }
