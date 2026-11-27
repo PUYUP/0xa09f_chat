@@ -914,13 +914,12 @@ serverinfo {
 	#hidden;
 
 	/* (*)mta
-	 * The full path to your mail transfer agent.
-	 * This is used for email authorization and password retrieval.
+	 * The full path to your mail transfer agent (sendmail-compatible).
+	 * msmtp is installed in this image; ~/.msmtprc is rendered by
+	 * entrypoint.sh from the SMTP_* env vars (shared with the api service).
 	 * Comment this out to disable sending email.
-	 * Warning: sending email can disclose the IP of your services
-	 * unless you take precautions (not discussed here further).
 	 */
-	#mta = "/usr/sbin/sendmail";
+	mta = "/usr/bin/msmtp";
 
 	/* (*)loglevel
 	 * Specify the default categories of logging information to record

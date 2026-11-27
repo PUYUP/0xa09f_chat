@@ -219,8 +219,15 @@ Pengiriman email lewat SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY`
 = `starttls|ssl|none`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM` di `.env`).
 Default-nya ke container **Mailpit** (`mailpit:1025`): email tidak benar-benar
 terkirim, tapi bisa dibaca di http://127.0.0.1:16825 — cocok untuk dev. Untuk
-produksi isi `SMTP_*` dengan server SMTP asli lalu
-`docker compose up -d --no-deps api`.
+produksi isi `SMTP_*` dengan server SMTP asli (mis. Brevo:
+`smtp-relay.brevo.com:587` + `SMTP_SECURITY=starttls` + SMTP key sebagai
+`SMTP_PASSWORD`) lalu `docker compose up -d --no-deps api atheme`.
+
+Variabel `SMTP_*` yang sama juga mengkonfigurasi **msmtp di container
+atheme** (`/atheme/.msmtprc`, dirender entrypoint) — jadi email NickServ
+(verifikasi registrasi bila `auth = email`, dsb.) ikut terkirim lewat relay
+yang sama. `auth` sengaja tetap `none`: akun yang dibuat `api` memakai email
+placeholder, verifikasi email akan menahan registrasi mereka.
 
 Reset manual oleh admin (akun tanpa email):
 

@@ -166,9 +166,30 @@ send_password = "__LINK_SOLANUM_ACCEPT__";     # = solanum accept_password
 receive_password = "__LINK_SOLANUM_SEND__";    # = solanum send_password
 ```
 
-`atheme/entrypoint.sh` me-render ke `/atheme/etc/atheme.conf` lalu
-`exec /entrypoint.sh` (entrypoint asli image: cek writable + start
+`atheme/entrypoint.sh` me-render `atheme.conf.tmpl` → `/atheme/etc/atheme.conf`
+lalu `exec /entrypoint.sh` (entrypoint asli image: cek writable + start
 `atheme-services -n`).
+
+Entrypoint yang sama juga me-render **`/atheme/.msmtprc`** — msmtp adalah
+MTA sendmail-compatible yang dipanggil atheme (`mta = "/usr/bin/msmtp"` di
+`serverinfo`). Konfig SMTP diambil dari env `SMTP_*` yang **sama dengan
+service api** (satu akun relay bisa dipakai dua service):
+
+- `SMTP_HOST`/`SMTP_PORT`/`SMTP_SECURITY` (`none|starttls|ssl`) — default
+  `mailpit`/`1025`/`none`
+- `SMTP_USER` + `SMTP_PASSWORD` — password **tidak ditulis** ke file;
+  msmtprc memakai `passwordeval "printenv SMTP_PASSWORD"`
+- `MAIL_FROM` — diekstrak ke alamat bare bila berbentuk `Name <addr>`
+
+File dirender `chmod 600` milik user `atheme`. Untuk Brevo:
+`SMTP_HOST=smtp-relay.brevo.com`, `SMTP_PORT=587`,
+`SMTP_SECURITY=starttls`, `SMTP_USER=<email login>`,
+`SMTP_PASSWORD=<SMTP key>`, `MAIL_FROM=<sender verified>`.
+
+Catatan: `auth = email` di `serverinfo` **sengaja `none`** — akun NickServ
+yang dibuat service `api` memakai email palsu (`<id>@users.a09f.invalid`),
+jadi verifikasi email NickServ akan menahan registrasi mereka. Aktifkan
+hanya kalau flow pembuatan akun di api ikut diubah.
 
 Module aktif: `modules/protocol/charybdis` (kompatibel solanum),
 `modules/backend/opensex`, `modules/crypto/pbkdf2v2`, services standar.
