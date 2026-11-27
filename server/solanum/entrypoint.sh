@@ -7,6 +7,19 @@ rm -f /tmp/solanum.pid /var/local/solanum.pid
 # Server links carry their passwords in the config: without them config_load()
 # skips the connect block and services never link (or, before, they linked with
 # an empty password). Fail instead of starting a half-configured network.
+#
+# Values come from docker secrets (/run/secrets/<name>, generated from .env by
+# scripts/sync-secrets.sh); the matching env var is the fallback so the
+# container still works when secrets are not mounted (e.g. ad-hoc runs).
+for pair in link-solanum-send:LINK_SOLANUM_SEND \
+            link-solanum-accept:LINK_SOLANUM_ACCEPT \
+            oper-admin-password:OPER_ADMIN_PASSWORD; do
+    file=${pair%%:*}; var=${pair##*:}
+    if [ -s "/run/secrets/$file" ]; then
+        eval "$var=\$(tr -d ' \t\r\n' < /run/secrets/$file)"
+    fi
+done
+
 : "${LINK_SOLANUM_SEND:?set LINK_SOLANUM_SEND in .env (see .env.example)}"
 : "${LINK_SOLANUM_ACCEPT:?set LINK_SOLANUM_ACCEPT in .env (see .env.example)}"
 : "${OPER_ADMIN_PASSWORD:?set OPER_ADMIN_PASSWORD in .env (see .env.example)}"

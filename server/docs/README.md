@@ -22,18 +22,21 @@ event live, metadata pesan, room). App desktop: `desktop/README.md` dan
             ┌────────────────────────── docker network: ircnet (172.30.99.0/24) ──────────────────────────┐
             │                                                                                            │
   client ──►│  solanum (172.30.99.10)  ◄──TS6/charybdis──  atheme (172.30.99.20)                            │
-  :6667/:6697│       ▲                                                                                    │
-            │       │ upstream (NICK/USER)                                                                │
-  client ──►│  soju (172.30.99.30)                                                                       │
-  :16667/:16697│       │                                                                                  │
+  :6667/:6697│       ▲                              ▲                                                     │
+            │       │ upstream (NICK/USER)        │ services link (plaintext,                            │
+  client ──►│  soju (172.30.99.30)                │  isolated di irc-link 172.31.99.0/24:             │
+  :16667/:16697│       │                          │  solanum .10 ↔ atheme .20)                          │
             │       └──db postgres──► postgres (172.30.99.40)                                            │
             └────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **solanum** — IRC daemon utama. Menerima client langsung di `6667` (plain)
-  dan `6697` (TLS). Atheme terhubung sebagai server "services" via `6667`.
-- **atheme** — services (NickServ, ChanServ, dll). Dial-out ke `solanum:6667`
-  dengan password TS6. Muncul sebagai `services.int` (numeric `00A`).
+- **solanum** — IRC daemon utama. Menolak plaintext untuk semua client
+  (`need_ssl`); client via `6697` (TLS, CA-signed). Atheme terhubung
+  sebagai server "services" via link plaintext di network `irc-link`
+  terisolasi (`172.31.99.10`↔`172.31.99.20`).
+- **atheme** — services (NickServ, ChanServ, dll). Dial-out ke
+  `solanum` (irc-link) dengan password TS6. Muncul sebagai `services.int`
+  (numeric `00A`).
 - **soju** — bouncer. Client connect dengan SASL, soju meneruskan ke solanum
   sebagai nick upstream (`soluser`). Users, networks, channels dan history
   pesan disimpan di **PostgreSQL** (`message-store db`), sehingga search
@@ -48,6 +51,8 @@ services `services.int`, bouncer `SolNet Bouncer`.
 cd server
 cp .env.example .env            # sesuaikan password/port
 ./scripts/generate-certs.sh     # generate TLS cert (sekali saja)
+./scripts/sync-secrets.sh       # .env → docker secrets (tiap .env berubah)
+./scripts/soju-host-ip.sh       # secret IP soju (sekali saja)
 docker compose up -d --build
 docker compose ps               # semua harus (healthy)
 ```
@@ -70,6 +75,10 @@ server/
 ├── docker-compose.yml          # 4 service + network + volumes + healthcheck
 ├── .env.example                # template env (copy ke .env, gitignored)
 ├── scripts/generate-certs.sh   # local CA + cert CA-signed + SAN
+├── scripts/sync-secrets.sh     # .env → secrets/ (docker secrets)
+├── scripts/monitor.sh          # health check minimal (cron-friendly)
+├── scripts/backup.sh           # arsip semua volume persisten
+├── secrets/                    # file secret (gitignored, dari sync-secrets)
 ├── solanum/
 │   ├── Dockerfile              # multi-stage build, pinned commit
 │   ├── entrypoint.sh           # render config + foreground + cleanup pidfile
@@ -92,5 +101,6 @@ server/
 Test suite ada di `tests/` di root repo (lihat [testing.md](testing.md)):
 `tests/server/`, `tests/api/`, dan `tests/e2e/`.
 
-Catatan: file cert/private key dan `.env` **tidak di-commit** — generate
-dengan `scripts/generate-certs.sh` dan `cp .env.example .env`.
+Catatan: file cert/private key, `.env`, dan `secrets/` **tidak di-commit** —
+generate dengan `scripts/generate-certs.sh`, `cp .env.example .env`, lalu
+`./scripts/sync-secrets.sh`.

@@ -17,7 +17,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
-from a09f import Check, Irc, drop_room  # noqa: E402
+from a09f import Check, Irc, DEMO_PASSWORD, drop_room  # noqa: E402
 
 check = Check("IRC features used by the app")
 room = "#zz-test-irc"
@@ -29,6 +29,14 @@ b = Irc("bob", caps=caps)
 if not (a.welcome and b.welcome):
     sys.exit("could not sign in as alice/bob through soju — is the stack up?")
 try:
+    # ChanServ REGISTER needs a services login; the bouncer upstream session
+    # is only identified while a client sends NickServ IDENTIFY (the app does
+    # this on connect — do the same here so the test doesn't depend on a
+    # leftover identified session from an earlier run).
+    for c, u in ((a, "alice"), (b, "bob")):
+        rep = c.service("NickServ", f"IDENTIFY {u} {DEMO_PASSWORD}", 4)
+        check(f"NickServ IDENTIFY {u}", any("logged in" in r.lower() or "identified" in r.lower() for r in rep), rep)
+
     # presence room (invisible / pre-away is covered by tests/e2e)
     for c in (a, b):
         c.send("JOIN #a09f-presence")

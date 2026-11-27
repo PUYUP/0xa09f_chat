@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -86,10 +87,17 @@ CREATE INDEX IF NOT EXISTS events_room ON events (room, start);
 CREATE TABLE IF NOT EXISTS rsvps (event BIGINT NOT NULL, uname TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY (event, uname));
 `
 
-func openDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
+func openDB(ctx context.Context, url, passwordFile string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, err
+	}
+	if passwordFile != "" {
+		b, err := os.ReadFile(passwordFile)
+		if err != nil {
+			return nil, fmt.Errorf("read db password file: %w", err)
+		}
+		cfg.ConnConfig.Password = strings.TrimSpace(string(b))
 	}
 	cfg.MaxConns = 32
 	var pool *pgxpool.Pool

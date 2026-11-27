@@ -386,6 +386,39 @@ Jadwalkan via cron, mis. harian:
 Restore: `docker compose down`, `docker run --rm -v irc_<vol>:/data -v
 $PWD/backups/<ts>:/<vol> alpine tar xzf /<vol>.tgz -C /data`, `up -d`.
 
+## Monitoring
+
+`scripts/monitor.sh` adalah health check minimal — satu baris per check,
+exit non-zero bila ada FAIL, jadi aman untuk cron:
+
+```bash
+cd server && ./scripts/monitor.sh
+```
+
+Cek: status healthy kelima container, TLS handshake solanum:6697, upstream
+soju `[connected]` (sampling `pointilis`), ukuran DB postgres, dan jumlah
+baris error di log 15 menit terakhir. Contoh cron tiap 5 menit:
+
+```cron
+*/5 * * * *  /path/to/server/scripts/monitor.sh >> /var/log/irc-monitor.log 2>&1
+```
+
+WARN tidak menggagalkan exit code (mis. restart count > 0, error log
+sedang naik) — FAIL hanya untuk hal yang memang down.
+
+## Rotasi secret
+
+Semua password hidup di `.env` (satu-satunya sumber) → `scripts/sync-secrets.sh`
+menyalinnya ke `server/secrets/*` (gitignored) → compose me-mount-nya sebagai
+docker secrets di `/run/secrets/`. Jadi:
+
+1. Edit `.env`
+2. `./scripts/sync-secrets.sh`
+3. `docker compose up -d` (container yang pakai secret itu di-recreate)
+
+`docker inspect` tidak lagi menampilkan password manapun. Yang tersisa di
+env hanyalah konfigurasi non-secret (port, host SMTP, dst).
+
 ## Security notes (dev only!)
 
 - Sertifikat TLS di-sign **local CA** (`server/pki/`) — CA private key ada di
@@ -400,8 +433,13 @@ $PWD/backups/<ts>:/<vol> alpine tar xzf /<vol>.tgz -C /data`, `up -d`.
   localhost karena menampilkan email reset password. Untuk publik, solanum
   sudah menegakkan TLS untuk semua client (`need_ssl` di kedua `auth {}`
   block) — password NickServ tidak bisa lagi terkirim cleartext; upstream
-  soju→solanum juga sudah `ircs://` terverifikasi CA. Yang tersisa plaintext:
-  server link solanum↔atheme di bridge internal.
+  soju→solanum juga sudah `ircs://` terverifikasi CA. Server link
+  solanum↔atheme tetap plaintext (Atheme tidak support TLS link) tetapi
+  diisolasi di network `irc-link` internal yang hanya di-join kedua
+  container itu — tidak bisa di-sniff container lain.
+- Semua password (link, oper, postgres, api DB, SMTP) sampai ke container
+  via docker secrets `/run/secrets/`, bukan env — tidak terlihat di
+  `docker inspect`. Sumbernya `.env` + `scripts/sync-secrets.sh`.
 - Atheme `httpd`/`xmlrpc` dimatikan; modul recovery password NickServ
   (`resetpass`, `setpass`, `sendpass_user`) juga dimatikan — reset password
   ditangani service `api`. Operator `jilles` (sra tanpa password) dihapus.

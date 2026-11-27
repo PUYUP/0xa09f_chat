@@ -20,6 +20,10 @@ server/soju/tls-key.pem
 # Local CA + issued certs (run server/scripts/generate-certs.sh)
 server/pki/
 
+# Docker secret files generated from server/.env by scripts/sync-secrets.sh
+server/secrets/*
+!server/secrets/soju-host.ip
+
 # Python
 __pycache__/
 *.pyc

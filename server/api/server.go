@@ -26,7 +26,7 @@ type server struct {
 }
 
 func newServer(ctx context.Context, cfg config) (*server, error) {
-	db, err := openDB(ctx, cfg.databaseURL)
+	db, err := openDB(ctx, cfg.databaseURL, cfg.dbPasswordFile)
 	if err != nil {
 		return nil, err
 	}

@@ -999,8 +999,11 @@ uplink "irc.solanum.test" {
 	// The server name of the ircd you're linking to goes above.
 
 	// host
-	// The hostname to connect to.
-	host = "solanum";
+	// The hostname to connect to. This is solanum's address on the dedicated
+	// irc-link network (docker-compose.yml) — NOT its ircnet address, so the
+	// link never traverses a segment other containers can reach. Atheme
+	// cannot do TLS server links; isolation replaces encryption here.
+	host = "172.31.99.10";
 
 	// send_password
 	// The password sent for linking.

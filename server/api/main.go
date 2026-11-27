@@ -25,13 +25,16 @@ import (
 )
 
 type config struct {
-	listen       string
-	databaseURL  string
-	legacySQLite string
-	sojuConfig   string
-	sojuIRC      string
-	upstream     string
-	network      string
+	listen      string
+	databaseURL string
+	// dbPasswordFile: docker secret with the postgres password (DB_PASSWORD_FILE).
+	// DATABASE_URL carries no password; pgx uses this instead.
+	dbPasswordFile string
+	legacySQLite   string
+	sojuConfig     string
+	sojuIRC        string
+	upstream       string
+	network        string
 	// bouncerLookup: "ctl" (default) or "irc". "irc" logs in to soju to check
 	// whether a user exists, which needs a route to the port soju's upstream
 	// connections come from; only use it when the bouncer is trusted with that.
@@ -60,6 +63,17 @@ func env(key, def string) string {
 	return def
 }
 
+// envFile returns the value of KEY_FILE (a docker secret path) when set,
+// falling back to KEY itself. Keeps passwords out of the process env.
+func envFile(key string) string {
+	if f := os.Getenv(key + "_FILE"); f != "" {
+		if b, err := os.ReadFile(f); err == nil {
+			return strings.TrimSpace(string(b))
+		}
+	}
+	return os.Getenv(key)
+}
+
 func envInt(key string, def int) int {
 	var n int
 	if _, err := fmt.Sscanf(os.Getenv(key), "%d", &n); err == nil {
@@ -84,6 +98,7 @@ func loadConfig() config {
 	return config{
 		listen:         env("LISTEN", ":8080"),
 		databaseURL:    env("DATABASE_URL", "postgres://a09f@localhost/a09f?sslmode=disable"),
+		dbPasswordFile: os.Getenv("DB_PASSWORD_FILE"),
 		legacySQLite:   env("LEGACY_SQLITE", "/data/register.db"),
 		sojuConfig:     env("SOJU_CONFIG", "/soju-config"),
 		sojuIRC:        env("SOJU_IRC", "soju:6667"),
@@ -96,7 +111,7 @@ func loadConfig() config {
 		smtpPort:       env("SMTP_PORT", "587"),
 		smtpSecurity:   strings.ToLower(env("SMTP_SECURITY", "starttls")),
 		smtpUser:       os.Getenv("SMTP_USER"),
-		smtpPassword:   os.Getenv("SMTP_PASSWORD"),
+		smtpPassword:   envFile("SMTP_PASSWORD"),
 		mailFrom:       env("MAIL_FROM", "a09f <no-reply@a09f.invalid>"),
 		maxAttempts:    envInt("MAX_ATTEMPTS_PER_HOUR", 30),
 		maxCreates:     envInt("MAX_CREATES_PER_HOUR", 5),

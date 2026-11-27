@@ -174,5 +174,9 @@ send("PRIVMSG NickServ :INFO")
 time.sleep(2)
 require(lambda l: "NickServ" in l, "NickServ reachable through bouncer", timeout=10)
 
+# Leave the channel: soju persists joined channels per user, and repeated
+# test runs otherwise accumulate #test* channels until max_chans_per_user.
+send(f"PART {CHANNEL}")
+time.sleep(1)
 s.close()
 print("ALL TESTS PASSED")

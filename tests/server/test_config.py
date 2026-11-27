@@ -57,6 +57,35 @@ check("soju trusts the local CA for upstream TLS",
 check("api upstream template is TLS",
       "ircs://solanum:6697" in compose)
 
+# --- secrets & link isolation -------------------------------------------------
+# Passwords must reach containers as docker secrets (/run/secrets), never as
+# env vars — env shows up in `docker inspect`.
+check("no env_file in compose (secrets stay out of env)",
+      "env_file" not in compose)
+check("compose declares the password secrets",
+      all(s in compose for s in (
+          "link-solanum-send", "link-solanum-accept", "oper-admin-password",
+          "postgres-password", "a09f-db-password", "smtp-password", "pgpass")))
+check("postgres uses POSTGRES_PASSWORD_FILE",
+      "POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password" in compose)
+check("soju uses PGPASSFILE, not PGPASSWORD",
+      "PGPASSFILE: /run/secrets/pgpass" in compose
+      and "PGPASSWORD" not in compose)
+check("api DATABASE_URL carries no password",
+      "postgres://a09f@postgres" in compose
+      and "DB_PASSWORD_FILE: /run/secrets/a09f-db-password" in compose)
+check("secret files are gitignored",
+      "server/secrets/*" in (Path(__file__).resolve().parents[2] / ".gitignore").read_text())
+
+# Atheme cannot do TLS server links — the link is isolated on a dedicated
+# docker network that only solanum+atheme join.
+check("irc-link network is internal and only solanum+atheme join",
+      "internal: true" in compose and "irc-link:" in compose
+      and compose.count("irc-link:") >= 3)  # network def + 2 service attachments
+check("atheme uplink targets the irc-link IP, not ircnet",
+      'host = "172.31.99.10"' in atheme
+      and 'host = "solanum"' not in atheme.split('uplink "irc.solanum.test"')[1].split('};')[0])
+
 # --- compose -----------------------------------------------------------------
 mailpit = re.search(r"mailpit:.*?ports:\s*\n(.*?)\n\s*\n", compose, re.S)
 check("mailpit binds 127.0.0.1 only",

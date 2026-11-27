@@ -20,6 +20,7 @@ Cepat mulai:
 
 ```bash
 cd server && cp .env.example .env   # isi password
+./scripts/generate-certs.sh && ./scripts/sync-secrets.sh && ./scripts/soju-host-ip.sh
 docker compose up -d postgres && ./scripts/init-api-db.sh
 docker compose up -d --build
 cd ../desktop && npm install && npm run dev

@@ -6,13 +6,21 @@
 cd server
 cp .env.example .env          # isi password/port sesuai kebutuhan
 ./scripts/generate-certs.sh   # generate local CA + cert (sekali saja)
+./scripts/sync-secrets.sh     # salin password .env → docker secrets
+./scripts/soju-host-ip.sh     # secret IP soju (sekali, atau setelah ganti subnet)
 docker compose up -d --build
 ```
 
-- `.env` — gitignored; berisi link password, `OPER_ADMIN_PASSWORD` (password
-  oper `admin`, di-hash saat container start — lihat bawah), password user
-  soju, kredensial postgres (`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`),
-  port host, subnet, `ATHEME_HOST`.
+- `.env` — gitignored; **satu-satunya sumber** semua password (link password,
+  `OPER_ADMIN_PASSWORD`, `POSTGRES_PASSWORD`, `A09F_DB_PASSWORD`,
+  `SMTP_PASSWORD`), port host, subnet, `ATHEME_HOST`, dan kredensial
+  postgres (`POSTGRES_USER`/`POSTGRES_DB`).
+- `scripts/sync-secrets.sh` — menyalin nilai secret dari `.env` ke file
+  individual di `server/secrets/` (gitignored, mode 600): `link-solanum-send`,
+  `link-solanum-accept`, `oper-admin-password`, `postgres-password`,
+  `a09f-db-password`, `smtp-password`, `pgpass`. **Jalankan ulang setiap
+  `.env` berubah** sebelum `docker compose up -d`. Password tidak lagi lewat
+  env container — tidak terlihat di `docker inspect`.
 - `scripts/generate-certs.sh` — buat **local CA** (`pki/ca.pem` +
   `pki/ca-key.pem`) lalu terbitkan cert bertenaga CA untuk solanum
   (`ssl-*.pem`, `dh.pem`) dan soju (`tls-*.pem`), SAN
@@ -22,12 +30,14 @@ docker compose up -d --build
   regenerate dengan script ini (CA hanya dibuat sekali; hapus `pki/` untuk
   rotasi total).
 - Password link disuntik via **templating**: `*.conf.tmpl` di-render oleh
-  entrypoint container memakai env dari `.env` (via `env_file`).
+  entrypoint container. Entrypoint membaca `/run/secrets/<name>` dulu,
+  fallback ke env var bila secret tidak ter-mount (mis. run ad-hoc).
 
 ## docker-compose.yml
 
 Empat service dalam bridge network `ircnet` (subnet dari `IRC_SUBNET`,
-default `172.30.99.0/24`). IP statis dipakai untuk semua container:
+default `172.30.99.0/24`) plus network `irc-link` khusus untuk link
+solanum↔atheme (lihat bawah). IP statis dipakai untuk semua container:
 
 | Service   | IP            | Ports ke host (default)                    |
 |-----------|---------------|--------------------------------------------|
@@ -51,8 +61,13 @@ override per service: `SOLANUM_BIND`, `SOJU_BIND`.
 — koneksi non-TLS ditolak dengan "You need to use SSL/TLS to use this
 server." Upstream soju sudah `ircs://solanum:6697` (cert diverifikasi ke
 `pki/ca.pem` via `SSL_CERT_FILE`), jadi `need_ssl` tidak mengganggu bouncer.
-Server link solanum↔atheme tetap plaintext di docker bridge (class `server`,
-tidak kena `auth {}`).
+Server link solanum↔atheme tetap plaintext (class `server`, tidak kena
+`auth {}`), tetapi **diisolasi di network `irc-link`** (`internal: true`,
+subnet `172.31.99.0/24`) yang hanya di-join solanum (`172.31.99.10`) dan
+atheme (`172.31.99.20`). Atheme memang tidak bisa TLS server link, jadi
+isolasi network menggantikan enkripsi: container lain tidak bisa menjangkau
+segmen itu dan link password tidak bisa di-sniff. `ATHEME_HOST` di `.env`
+= `172.31.99.20` (connect block solanum), uplink atheme → `172.31.99.10`.
 
 Pengecualian: **mailpit selalu `127.0.0.1`** — inbox web-nya menampilkan
 email reset password, jadi tidak boleh ikut `BIND_ADDR` ke interface publik.
@@ -119,8 +134,9 @@ Catatan dependency yang pernah jadi masalah:
 ## solanum/entrypoint.sh
 
 1. Hapus stale pidfile.
-2. Wajibkan env `LINK_SOLANUM_SEND`, `LINK_SOLANUM_ACCEPT`, dan
-   `OPER_ADMIN_PASSWORD`; hash password oper via `openssl passwd -6`
+2. Baca `LINK_SOLANUM_SEND`, `LINK_SOLANUM_ACCEPT`, `OPER_ADMIN_PASSWORD`
+   dari `/run/secrets/<nama>` (fallback env var); wajibkan ketiganya.
+   Hash password oper via `openssl passwd -6`
    (charset dibatasi `[A-Za-z0-9._~+-]` supaya aman untuk substitusi sed).
 3. Render `/etc/solanum/ircd.conf.tmpl` → `/tmp/ircd.conf` via `sed`,
    substitusi `__LINK_SOLANUM_SEND__`, `__LINK_SOLANUM_ACCEPT__`,
@@ -135,7 +151,7 @@ Sama seperti konfig sebelumnya, bedanya blok `connect "services.int"`:
 
 ```conf
 connect "services.int" {
-	host = "__ATHEME_HOST__";              # → 172.30.99.20 dari .env
+	host = "__ATHEME_HOST__";              # → 172.31.99.20 (irc-link) dari .env
 	send_password = "__LINK_SOLANUM_SEND__";
 	accept_password = "__LINK_SOLANUM_ACCEPT__";
 	port = 6667;
@@ -147,9 +163,9 @@ connect "services.int" {
 Arah password (mudah tertukar):
 
 - solanum `send_password` = password yang solanum kirim = Atheme
-  `receive_password` → env `LINK_SOLANUM_SEND`
+  `receive_password` → secret `link-solanum-send`
 - solanum `accept_password` = password yang diharapkan solanum = Atheme
-  `send_password` → env `LINK_SOLANUM_ACCEPT`
+  `send_password` → secret `link-solanum-accept`
 
 Blok `auth` di bagian atas file **first-match-wins** — solanum mengabaikan
 blok yang muncul setelah match (`Ignoring redundant auth block` di log),
@@ -190,7 +206,8 @@ service api** (satu akun relay bisa dipakai dua service):
 - `SMTP_HOST`/`SMTP_PORT`/`SMTP_SECURITY` (`none|starttls|ssl`) — default
   `mailpit`/`1025`/`none`
 - `SMTP_USER` + `SMTP_PASSWORD` — password **tidak ditulis** ke file;
-  msmtprc memakai `passwordeval "printenv SMTP_PASSWORD"`
+  msmtprc memakai `passwordeval` yang membaca `/run/secrets/smtp-password`
+  (docker secret) atau `printenv SMTP_PASSWORD` sebagai fallback
 - `MAIL_FROM` — diekstrak ke alamat bare bila berbentuk `Name <addr>`
 
 File dirender `chmod 600` milik user `atheme`. Untuk Brevo:
@@ -235,10 +252,10 @@ Directive penting:
   (tetap di volume `soju-db`, bukan postgres)
 
 Password postgres **tidak ditulis di config** — `db postgres` connection
-string tidak berisi password; soju membaca env `PGPASSWORD` (di-set di
-`docker-compose.yml` dari `POSTGRES_PASSWORD` di `.env`). Image soju
-distroless (tanpa shell) jadi tidak bisa templating — env var adalah
-satu-satunya jalur secret.
+string tidak berisi password; soju membaca `PGPASSFILE=/run/secrets/pgpass`
+(docker secret, format `host:port:db:user:password`, digenerate
+`scripts/sync-secrets.sh`). Image soju distroless (tanpa shell) jadi tidak
+bisa templating — secret file adalah satu-satunya jalur.
 
 ## scripts/generate-certs.sh
 
