@@ -40,3 +40,4 @@ backups/
 
 # webapp build output (webapp/deploy.sh)
 webapp/public/
+webapp/.wrangler/
