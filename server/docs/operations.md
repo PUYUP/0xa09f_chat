@@ -31,8 +31,8 @@ docker exec soju /sojuctl -config /soju-config user run pointilis network status
 ```
 
 `network status` harus `[connected]`; kalau `[disconnected]` lihat error-nya
-(conn refused = solanum lagi down; TLS handshake = scheme salah, harus
-`irc+insecure://` untuk port 6667).
+(conn refused = solanum lagi down; TLS handshake/verify = scheme salah atau
+CA tidak ter-mount — upstream yang benar `ircs://solanum:6697`).
 
 ## Capacity & scaling
 
@@ -119,7 +119,7 @@ Untuk tiap akun baru service menjalankan
 `sojuctl` lewat admin socket soju (volume `soju-db`):
 
 1. `user create -username <id> -password <pw> -nick <id> -realname <id>` (non-admin)
-2. `user run <id> network create -addr irc+insecure://solanum:16668 -name solanum -nick <id> -auto-away true`
+2. `user run <id> network create -addr ircs://solanum:6697 -name solanum -nick <id> -auto-away true`
    (auto-away = away saat tidak ada perangkat tersambung → app menampilkan *Offline*)
 
 Jadi tiap akun punya nick IRC sendiri (bukan `soluser` bersama). Kalau langkah
@@ -129,29 +129,30 @@ Tanya "user ini ada?" juga lewat `sojuctl user status <id>` (admin socket,
 `BOUNCER_LOOKUP=ctl`), bukan login IRC ke soju — service ini tidak perlu
 menjangkau port tempat upstream bouncer datang (lihat *Keamanan* di bawah).
 
-Tabel port di `docs/configuration.md` sudah menyebut 6667/6697; sekarang
-tambahan **16668** (soju→solanum, plaintext, tidak pernah publik: bind
-`SOLANUM_SOJU_BIND`, default `127.0.0.1`).
+Tabel port di `docs/configuration.md` hanya mencakup `6667`/`6697` — port
+khusus soju (`16668`, plaintext) sudah dihapus: upstream soju kini TLS ke
+`ircs://solanum:6697`.
 
-### Kenapa port 16668
+### Penegakan TLS (`need_ssl`) + CA lokal
 
-Semua koneksi upstream soju datang dari **satu IP** (`172.30.99.30`), jadi
-solanum memperlakukannya berbeda dari user biasa — dan perbedaan itu tidak
-boleh bisa ditiru proses lain:
-
-- `auth { user = "*@172.30.99.30"; flags = exceed_limit, need_ident; }` —
-  hanya alamat itu yang dianggap bouncer (`exceed_limit` = bebas
-  `number_per_ip`). `need_ident` membuatnya hanya lolos kalau benar-benar
-  menjawab ident sebagai soju.
-- Auth block solanum **tidak** ditentukan urutan di file: `*@*` selalu menang,
-  jadi blok catch-all wajib memikul flag yang sama (`exceed_limit`), kalau
-  tidak bouncer "turun kelas".
-- Alamat itu berasal dari docker secret `secrets/soju-host.ip` (di-generate
-  `scripts/soju-host-ip.sh` dari `docker-compose.yml`), **bukan** env: kalau
-  filenya hilang solanum menolak start, jadi tidak mungkin diam-diam jadi `*`.
-- Port `16668` hanya untuk soju (plaintext, bind host `127.0.0.1` by default);
-  `6667`/`6697` tetap untuk client. Port bukan batas keamanan — auth yang
-  batasnya — tapi memisahkan trafik bouncer dari trafik publik.
+- Kedua `auth {}` block solanum memakai `flags = exceed_limit, need_ssl`:
+  **semua** koneksi client plaintext ditolak ("You need to use SSL/TLS to
+  use this server."). Port `6667` tetap listen hanya untuk menyajikan
+  penolakan itu — tidak ada lagi jalur password cleartext.
+- Upstream soju → `ircs://solanum:6697`; cert solanum diterbitkan **local CA**
+  (`server/pki/ca.pem`, dari `scripts/generate-certs.sh`) dan soju
+  mempercayainya lewat env `SSL_CERT_FILE=/pki/ca.pem` + mount `./pki:/pki:ro`.
+  Verifikasi hostname juga aktif — SAN cert memuat `solanum`.
+- Migrasi data lama: `Network.addr` di Postgres di-`UPDATE` massal ke
+  `ircs://solanum:6697` (pernah 428 baris `irc+insecure://solanum:6667`).
+  User baru otomatis dapat addr TLS dari `UPSTREAM_ADDR` milik service `api`.
+- Auth block `*@__SOJU_HOST__` tetap pertama (first-match-wins): hanya IP
+  soju (`secrets/soju-host.ip`) yang boleh mengklaim nick user bouncer, dan
+  `exempt {}` IP yang sama mencegah throttle saat 400+ upstream reconnect
+  bersamaan setelah restart solanum.
+- Server link solanum↔atheme tetap plaintext `6667` di bridge internal —
+  class `server` tidak melewati `auth {}`, jadi `need_ssl` tidak berlaku;
+  resikonya sniffing link password oleh container lain di `ircnet`.
 
 ```bash
 curl -s http://127.0.0.1:16680/health
@@ -336,22 +337,27 @@ Cek `docker logs solanum`. Penyebab yang sudah pernah terjadi:
 | `address already in use` saat start | race saat restart berturut-turut — tunggu, normal hilang sendiri |
 | client dapat `464 Authentication required` | soju `auth internal` → client wajib SASL |
 | client dapat `400 ... bouncer connection` | pakai `NICK/USER <user>/<network>` atau ekstensi bouncer-networks |
-| upstream `tls: first record does not look like TLS` | addr upstream pakai `irc+insecure://` untuk port plain |
-| upstream `no such host` untuk `irc.solanum.test` | nama itu hanya iklan client; di upstream pakai `solanum:6667` (docker DNS) |
+| upstream `tls: first record does not look like TLS` | addr upstream pakai `irc+insecure://`/`irc://` untuk port TLS — pakai `ircs://solanum:6697` |
+| upstream `x509: certificate signed by unknown authority` | `SSL_CERT_FILE=/pki/ca.pem` hilang di env soju atau `./pki` tidak ter-mount — jalankan `scripts/generate-certs.sh` lalu recreate soju |
+| upstream `x509: cannot validate certificate for solanum` | SAN cert tidak memuat `solanum` — cert lama self-signed; regenerate |
+| upstream `no such host` untuk `irc.solanum.test` | nama itu hanya iklan client; di upstream pakai `solanum:6697` (docker DNS) |
 
 ### Client tidak bisa connect
 
 - `nc -vz 127.0.0.1 6667` / `16667` untuk cek port terbuka.
-- TLS self-signed → matikan verify di client atau import CA.
-- Perhatikan port: jangan campur `6667` (solanum) dengan `16667` (soju).
+- Solanum menolak plaintext (`need_ssl`) — client wajib TLS ke `6697`;
+  cert di-sign local CA `server/pki/ca.pem` (import ke trust store client
+  atau matikan verify di dev).
+- Perhatikan port: jangan campur `6667`/`6697` (solanum) dengan
+  `16667`/`16697` (soju).
 
 ## Testing
 
 Lihat [testing.md](testing.md). Ringkas:
 
 ```bash
-python3 tests/server/test_solanum.py          # direct ke solanum:6667
-python3 tests/server/test_solanum.py --tls    # direct TLS :6697
+python3 tests/server/test_solanum.py          # direct TLS ke solanum:6697 (default)
+python3 tests/server/test_solanum.py --plain  # probe: plaintext harus ditolak need_ssl
 python3 tests/server/test_soju.py             # via bouncer:16667 + SASL (self-setup)
 python3 tests/server/test_soju.py --tls       # via bouncer TLS :16697
 python3 tests/server/test_tls.py              # handshake TLS kedua listener
@@ -382,17 +388,20 @@ $PWD/backups/<ts>:/<vol> alpine tar xzf /<vol>.tgz -C /data`, `up -d`.
 
 ## Security notes (dev only!)
 
-- Semua sertifikat TLS **self-signed** — jangan expose ke internet tanpa CA asli.
+- Sertifikat TLS di-sign **local CA** (`server/pki/`) — CA private key ada di
+  `pki/ca-key.pem` (gitignored); untuk expose ke internet tetap perlu CA
+  asli (Let's Encrypt/dll) karena client tidak akan trust CA lokal.
 - Password link solanum↔atheme dan password user soju `pointilis` adalah
   credential dev — ganti sebelum dipakai serius.
 - Password oper `admin` diambil dari `OPER_ADMIN_PASSWORD` di `.env` dan
   di-hash saat startup — jangan commit hash/password ke repo. Password yang
   lama (pernah ter-commit sebagai hash) sudah diganti.
 - Port default ter-bind ke `127.0.0.1` (`BIND_ADDR`). Mailpit **selalu**
-  localhost karena menampilkan email reset password. Untuk publik, hanya
-  buka port TLS (`6697`/`16697`) dan tetap waspada: tidak ada penegakan
-  `need_ssl`, jadi client plaintext bisa mengirim password NickServ
-  cleartext — pertimbangkan firewall yang hanya mengizinkan TLS.
+  localhost karena menampilkan email reset password. Untuk publik, solanum
+  sudah menegakkan TLS untuk semua client (`need_ssl` di kedua `auth {}`
+  block) — password NickServ tidak bisa lagi terkirim cleartext; upstream
+  soju→solanum juga sudah `ircs://` terverifikasi CA. Yang tersisa plaintext:
+  server link solanum↔atheme di bridge internal.
 - Atheme `httpd`/`xmlrpc` dimatikan; modul recovery password NickServ
   (`resetpass`, `setpass`, `sendpass_user`) juga dimatikan — reset password
   ditangani service `api`. Operator `jilles` (sra tanpa password) dihapus.

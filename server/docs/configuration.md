@@ -5,7 +5,7 @@
 ```bash
 cd server
 cp .env.example .env          # isi password/port sesuai kebutuhan
-./scripts/generate-certs.sh   # generate TLS cert self-signed (sekali saja)
+./scripts/generate-certs.sh   # generate local CA + cert (sekali saja)
 docker compose up -d --build
 ```
 
@@ -13,9 +13,14 @@ docker compose up -d --build
   oper `admin`, di-hash saat container start — lihat bawah), password user
   soju, kredensial postgres (`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`),
   port host, subnet, `ATHEME_HOST`.
-- `scripts/generate-certs.sh` — generate cert solanum (`ssl-*.pem`, `dh.pem`)
-  dan soju (`tls-*.pem`) dengan SAN `irc.solanum.test,localhost,127.0.0.1`.
-  Semua file cert **di-gitignore** — regenerate dengan script ini.
+- `scripts/generate-certs.sh` — buat **local CA** (`pki/ca.pem` +
+  `pki/ca-key.pem`) lalu terbitkan cert bertenaga CA untuk solanum
+  (`ssl-*.pem`, `dh.pem`) dan soju (`tls-*.pem`), SAN
+  `irc.solanum.test,solanum,localhost,127.0.0.1,172.30.99.10`.
+  CA cert di-mount ke container soju (`/pki`, env `SSL_CERT_FILE`) supaya
+  upstream `ircs://` bisa diverifikasi. Semua file cert **di-gitignore** —
+  regenerate dengan script ini (CA hanya dibuat sekali; hapus `pki/` untuk
+  rotasi total).
 - Password link disuntik via **templating**: `*.conf.tmpl` di-render oleh
   entrypoint container memakai env dari `.env` (via `env_file`).
 
@@ -26,7 +31,7 @@ default `172.30.99.0/24`). IP statis dipakai untuk semua container:
 
 | Service   | IP            | Ports ke host (default)                    |
 |-----------|---------------|--------------------------------------------|
-| solanum   | 172.30.99.10  | `6667` plain, `6697` TLS, `16668` (soju→solanum, plaintext) |
+| solanum   | 172.30.99.10  | `6667` plain*, `6697` TLS                |
 | atheme    | 172.30.99.20  | tidak ada (internal)                       |
 | soju      | 172.30.99.30  | `16667` plain, `16697` TLS                 |
 | postgres  | 172.30.99.40  | tidak ada (internal)                       |
@@ -34,13 +39,20 @@ default `172.30.99.0/24`). IP statis dipakai untuk semua container:
 Kenapa IP statis: `connect` block solanum mencocokkan `host` terhadap IP
 peer — nama docker DNS (`atheme`) **tidak** cocok (error `Invalid host`).
 `ATHEME_HOST` di `.env` harus sama dengan `ipv4_address` atheme.
-IP soju juga dipakai solanum sebagai satu-satunya alamat yang boleh login
-sebagai user bouncer (lihat `docs/operations.md`, "Kenapa port 16668"); alamat
-itu dibaca dari docker secret `secrets/soju-host.ip`, bukan dari `.env`.
+IP soju juga menjadi satu-satunya alamat yang boleh mengklaim nick user
+bouncer (auth block `*@__SOJU_HOST__` — secret `secrets/soju-host.ip`,
+bukan `.env`); IP yang sama di-`exempt` dari throttle reconnect massal.
 
 Semua port di atas bind ke `${BIND_ADDR}` (default `127.0.0.1`), dengan
-override per service: `SOLANUM_BIND`, `SOJU_BIND`, `SOLANUM_SOJU_BIND`.
-Untuk host publik, biarkan plaintext di `127.0.0.1` dan hanya buka TLS.
+override per service: `SOLANUM_BIND`, `SOJU_BIND`.
+
+*Port plaintext `6667` tetap listen tapi **tidak melayani client**: kedua
+`auth {}` block di `ircd.conf.tmpl` memakai `flags = exceed_limit, need_ssl`
+— koneksi non-TLS ditolak dengan "You need to use SSL/TLS to use this
+server." Upstream soju sudah `ircs://solanum:6697` (cert diverifikasi ke
+`pki/ca.pem` via `SSL_CERT_FILE`), jadi `need_ssl` tidak mengganggu bouncer.
+Server link solanum↔atheme tetap plaintext di docker bridge (class `server`,
+tidak kena `auth {}`).
 
 Pengecualian: **mailpit selalu `127.0.0.1`** — inbox web-nya menampilkan
 email reset password, jadi tidak boleh ikut `BIND_ADDR` ke interface publik.

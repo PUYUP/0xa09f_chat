@@ -69,7 +69,7 @@ bangkit dan saling menunggu (`depends_on: service_healthy`).
 server/
 ├── docker-compose.yml          # 4 service + network + volumes + healthcheck
 ├── .env.example                # template env (copy ke .env, gitignored)
-├── scripts/generate-certs.sh   # generate TLS cert self-signed + SAN
+├── scripts/generate-certs.sh   # local CA + cert CA-signed + SAN
 ├── solanum/
 │   ├── Dockerfile              # multi-stage build, pinned commit
 │   ├── entrypoint.sh           # render config + foreground + cleanup pidfile

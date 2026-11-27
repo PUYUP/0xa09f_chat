@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """End-to-end test for the Solanum IRCd + Atheme services.
 
-Connects directly to Solanum on port 6667 (or 6697 with --tls), negotiates
-echo-message, registers a fresh nickname via NickServ (Atheme), identifies,
-joins a channel and sends a message.
+Connects directly to Solanum on port 6697 over TLS (solanum's auth blocks
+require SSL — plaintext is refused with "You need to use SSL/TLS"; pass
+--plain to probe that rejection instead of running the full flow).
 
 Uses a unique nick per run so the test is self-contained and repeatable
 even after services.db is reset.
 
-Usage: python3 tests/server/test_solanum.py [--tls] [host] [port]
+Usage: python3 tests/server/test_solanum.py [--plain] [host] [port]
 """
 
 import random
@@ -19,10 +19,10 @@ import sys
 import time
 
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
-USE_TLS = "--tls" in sys.argv
+USE_TLS = "--plain" not in sys.argv  # need_ssl: TLS is the default
 
 HOST = args[0] if len(args) > 0 else "127.0.0.1"
-PORT = int(args[1]) if len(args) > 1 else (6697 if USE_TLS else 6667)
+PORT = int(args[1]) if len(args) > 1 else (6667 if not USE_TLS else 6697)
 
 NICK = "t" + "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
 PASSWORD = "testpass123"
@@ -33,12 +33,30 @@ raw = socket.create_connection((HOST, PORT), timeout=10)
 if USE_TLS:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE  # self-signed dev cert
+    ctx.verify_mode = ssl.CERT_NONE  # dev cert; pki/ca.pem can be trusted instead
     s = ctx.wrap_socket(raw, server_hostname=HOST)
 else:
     s = raw
 s.settimeout(15)
 f = s.makefile("rw", encoding="utf-8", newline="\r\n")
+
+if not USE_TLS:
+    # need_ssl: plaintext must be refused. Probe and expect the rejection.
+    f.write(f"NICK {NICK}\r\nUSER {NICK} 0 * :Sol Test\r\n")
+    f.flush()
+    deadline = time.time() + 10
+    saw_reject = False
+    while time.time() < deadline:
+        line = f.readline()
+        if not line:
+            break
+        print("<<", line.rstrip())
+        if "SSL/TLS" in line or "ERROR" in line:
+            saw_reject = True
+            break
+    assert saw_reject, "plaintext connection was NOT rejected (need_ssl broken?)"
+    print("[PASS] plaintext rejected by need_ssl")
+    sys.exit(0)
 
 
 def send(line):

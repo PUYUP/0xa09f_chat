@@ -17,6 +17,9 @@ server/solanum/etc/dh.pem
 server/soju/tls-cert.pem
 server/soju/tls-key.pem
 
+# Local CA + issued certs (run server/scripts/generate-certs.sh)
+server/pki/
+
 # Python
 __pycache__/
 *.pyc

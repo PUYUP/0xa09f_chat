@@ -4,8 +4,10 @@
 
 | Cara      | Address              | Catatan                    |
 |-----------|----------------------|----------------------------|
-| Plain     | `irc://localhost:6667`  | atau host `127.0.0.1`    |
-| TLS       | `ircs://localhost:6697` | sertifikat self-signed — client akan warning, accept/ignore |
+| TLS       | `ircs://localhost:6697` | **wajib** — plaintext ditolak `need_ssl`; cert di-sign local CA — import `server/pki/ca.pem` atau accept warning |
+
+Port `6667` masih listen tapi hanya menyajikan penolakan plaintext — tidak
+ada client plaintext yang bisa register.
 
 Di client IRC (WeeChat, HexChat, irssi, The Lounge, dst) cukup set host/port di atas.
 Identitas network: `irc.solanum.test` / `SolNet`.
@@ -68,7 +70,7 @@ The Lounge mendukungnya — network bisa dipilih dari UI).
 Contoh WeeChat:
 
 ```
-/set irc.server_tls_verify 0          # abaikan cert self-signed
+/set irc.server_tls_verify 0          # abaikan cert (local CA, dev)
 /connect solnet irc+insecure://localhost/16667 -n pointilis/solanum
 ```
 
@@ -89,8 +91,8 @@ lalu `/sasl add solnet plain pointilis <password>` (urutan tergantung versi).
 ## Port cheat sheet
 
 ```
-6667   solanum plain        → client langsung, upstream soju
-6697   solanum TLS          → client langsung TLS
+6667   solanum plain        → hanya penolakan need_ssl (bukan untuk client)
+6697   solanum TLS          → client langsung TLS + upstream soju
 16667  soju plain           → client via bouncer
 16697  soju TLS             → client via bouncer TLS
 ```

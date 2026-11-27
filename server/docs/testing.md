@@ -21,11 +21,12 @@ lain dalam skenario e2e).
 
 ### test_solanum.py
 
-Connect langsung ke Solanum (default `127.0.0.1:6667`).
+Connect langsung ke Solanum (default `127.0.0.1:6697` via TLS — solanum
+menolak plaintext lewat `need_ssl`).
 
 ```bash
-python3 tests/server/test_solanum.py             # plain :6667
-python3 tests/server/test_solanum.py --tls       # TLS :6697
+python3 tests/server/test_solanum.py             # TLS :6697 (default)
+python3 tests/server/test_solanum.py --plain     # probe penolakan plaintext
 python3 tests/server/test_solanum.py <host> <port>
 ```
 
@@ -57,7 +58,7 @@ Self-contained setup (idempotent, via `docker exec soju sojuctl`):
 1. `user status pointilis` → kalau belum ada, `user create`; kalau ada,
    `user update -password` (sinkron dengan `.env` `SOJU_PASSWORD`).
 2. `network status` → kalau network `SOJU_NETWORK` belum ada,
-   `network create -addr irc+insecure://solanum:16668`.
+   `network create -addr ircs://solanum:6697`.
 
 Kredensial dibaca dari `server/.env` (`SOJU_USER`, `SOJU_PASSWORD`,
 `SOJU_NETWORK`) dengan fallback default.
@@ -83,10 +84,10 @@ python3 tests/server/test_tls.py <host> <solanum_port> <soju_port>
 Memverifikasi handshake + server merespons setelah `NICK`/`USER`
 (solanum kirim `NOTICE *** Checking Ident`, soju kirim `464`).
 
-Catatan: cert self-signed → `CERT_NONE`. SNI dikirim sebagai IP literal
-(`127.0.0.1`) — **jangan** pakai `irc.solanum.test` sebagai SNI ke solanum:
-ssld solanum menolak handshake dengan alert `access_denied` untuk SNI
-tersebut (quirk upstream; client IRC pada umumnya tidak mengirim SNI).
+Catatan: cert di-sign local CA → test pakai `CERT_NONE`. SNI dikirim sebagai
+IP literal (`127.0.0.1`) — **jangan** pakai `irc.solanum.test` sebagai SNI ke
+solanum: ssld solanum menolak handshake dengan alert `access_denied` untuk
+SNI tersebut (quirk upstream; client IRC pada umumnya tidak mengirim SNI).
 
 ## tests/api/
 

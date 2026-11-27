@@ -83,7 +83,7 @@ def ensure_network():
         print(f"[SETUP] network {NETWORK} exists")
         return
     rc, out = sojuctl("user", "run", BOUNCER_USER, "network", "create",
-                      "-addr", f"irc+insecure://solanum:6667",
+                      "-addr", f"ircs://solanum:6697",
                       "-name", NETWORK, "-nick", "soluser",
                       "-realname", "Soju Test", "-enabled", "true")
     if rc != 0:
@@ -98,7 +98,7 @@ raw = socket.create_connection((HOST, PORT), timeout=10)
 if USE_TLS:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE  # self-signed dev cert
+    ctx.verify_mode = ssl.CERT_NONE  # dev cert (local CA, pki/ca.pem)
     s = ctx.wrap_socket(raw, server_hostname=HOST)
 else:
     s = raw

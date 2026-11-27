@@ -31,7 +31,7 @@ import (
 // connected, which the app shows as Offline.
 type bouncer struct {
 	sojuctl  []string
-	upstream string // e.g. irc+insecure://solanum:16668
+	upstream string // e.g. ircs://solanum:6697
 	network  string // soju network name of every user
 	ircAddr  string // soju's IRC listener inside the docker network
 	db       *pgxpool.Pool // accounts index (searchAccounts/syncAccounts)

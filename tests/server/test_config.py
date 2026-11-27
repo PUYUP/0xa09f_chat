@@ -46,6 +46,17 @@ check("entrypoint hashes OPER_ADMIN_PASSWORD",
 check("entrypoint refuses unreplaced placeholders",
       "__[A-Z_]*__" in entry)
 
+# TLS enforcement: every auth block must require SSL, and the plaintext-only
+# soju port (16668) must stay gone — upstreams use ircs://solanum:6697.
+check("need_ssl on all auth blocks",
+      tmpl.count("need_ssl") >= 2)
+check("no plaintext-only 16668 listener",
+      "port = 16668" not in tmpl and "16668" not in compose)
+check("soju trusts the local CA for upstream TLS",
+      "SSL_CERT_FILE: /pki/ca.pem" in compose and "./pki:/pki:ro" in compose)
+check("api upstream template is TLS",
+      "ircs://solanum:6697" in compose)
+
 # --- compose -----------------------------------------------------------------
 mailpit = re.search(r"mailpit:.*?ports:\s*\n(.*?)\n\s*\n", compose, re.S)
 check("mailpit binds 127.0.0.1 only",

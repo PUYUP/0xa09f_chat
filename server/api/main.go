@@ -87,7 +87,7 @@ func loadConfig() config {
 		legacySQLite:   env("LEGACY_SQLITE", "/data/register.db"),
 		sojuConfig:     env("SOJU_CONFIG", "/soju-config"),
 		sojuIRC:        env("SOJU_IRC", "soju:6667"),
-		upstream:       env("UPSTREAM_ADDR", "irc+insecure://solanum:16668"),
+		upstream:       env("UPSTREAM_ADDR", "ircs://solanum:6697"),
 		network:        env("NETWORK_NAME", "solanum"),
 		bouncerLookup:  strings.ToLower(env("BOUNCER_LOOKUP", "ctl")),
 		trustedProxies: proxies,
