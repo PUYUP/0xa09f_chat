@@ -48,6 +48,23 @@ try:
     a.post("/typing", {"to": B, "active": True})
     check("typing reaches grace", wait_until(lambda: [d for e, d in ev_b if e == "typing" and d["from"] == A], 6))
 
+    # Conference / hidden room: typing goes to the named members only.
+    C = "henry"
+    c = Api(C)
+    ev_c = []
+    sse(c.token, ev_c, stop)
+    conf = f"#conf-typing{int(time.time()) % 100000}"
+    in_conf = lambda sink: [d for e, d in sink if e == "typing" and d.get("room") == conf]
+    a.post("/typing", {"to": conf, "active": True, "members": [A, B]})
+    check("conference typing reaches a member", wait_until(lambda: in_conf(ev_b), 6))
+    time.sleep(1)
+    check("conference typing doesn't reach a non-member", not in_conf(ev_c), in_conf(ev_c))
+    check("conference typing isn't echoed to the sender", not in_conf(ev_a), in_conf(ev_a))
+    pub = f"#typing-public{int(time.time()) % 100000}"
+    a.post("/typing", {"to": pub, "active": True})
+    check("public room typing still reaches everyone",
+          wait_until(lambda: [d for e, d in ev_c if e == "typing" and d.get("room") == pub], 6))
+
     p = a.post("/prefs", {"ignore": ["Grace", "bad id!", A], "friendsOnly": True})
     check("prefs: ignore list cleaned (no self, no junk)", p.get("ignore") == [B], p)
     check("prefs: friendsOnly stored", a.get("/prefs").get("friendsOnly") is True)

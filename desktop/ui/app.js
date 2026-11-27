@@ -1649,7 +1649,7 @@ function groupMenu(e, group) {
 document.addEventListener("click", hideMenu);
 window.addEventListener("blur", hideMenu);
 
-/* ----- "is typing…" (private chats only) ----- */
+/* ----- "is typing…" (private chats and rooms) ----- */
 
 const TYPING_SEND_EVERY = 3000;     // while typing, refresh at most this often
 const TYPING_SHOW_FOR = 6000;       // hide the indicator after this long without news
@@ -1675,7 +1675,11 @@ function stopTyping() {
 }
 
 function sendTyping(to, active) {
-  socialApi("/typing", { to, active }).catch(() => {});
+  const c = conv(keyOf(to));
+  const body = { to, active };
+  // Conferences and hidden rooms: only their members may hear about it.
+  if (c?.kind === "room" && privateTyping(c)) body.members = [...c.members.keys()].filter((n) => !isService(n));
+  socialApi("/typing", body).catch(() => {});
 }
 
 function onTyping(from, active) {
@@ -4090,13 +4094,17 @@ setInterval(syncSoundButton, 60000);
 
 /* ---------- typing in rooms ---------- */
 
-/* Room typing goes to every open app (the service doesn't know who's in a
- * room), so it's never sent for hidden rooms or conferences. */
-const canShareTyping = (c) => c?.kind === "pm" || (c?.kind === "room" && !isConference(c.name) && !c.modes?.has("s"));
+/* Public rooms: typing goes to every open app (the service doesn't know who's
+ * in a room) and each keeps the rooms it's in. Conferences and hidden rooms:
+ * the app names the members, and only they get it (see sendTyping). */
+const privateTyping = (c) => isConference(c.name) || !!c.modes?.has("s");
+const canShareTyping = (c) => c?.kind === "pm" || c?.kind === "room";
 
 function onRoomTyping(d) {
   const c = conv(keyOf(d.room));
   if (!c || keyOf(d.from) === keyOf(S.me) || isIgnored(d.from)) return;
+  // Only people actually in the room (a stray or forged event is dropped).
+  if (d.active && ![...c.members.keys()].some((n) => keyOf(n) === keyOf(d.from))) return;
   S.roomTyping ||= new Map();
   const m = S.roomTyping.get(keyOf(c.name)) || new Map();
   clearTimeout(m.get(keyOf(d.from)));

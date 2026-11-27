@@ -521,11 +521,31 @@ func (s *server) profileUpdated(q *req) (any, error) {
 
 // ---- typing & read receipts ----
 
+// maxTypingMembers caps how many people one room-typing call reaches.
+const maxTypingMembers = 100
+
 func (s *server) typing(q *req) (any, error) {
 	to := q.lower("to")
 	active := q.boolean("active")
-	if isRoom(to) && len(to) <= 50 { // a room: apps keep what they're in
-		s.hub.pushAll("typing", obj{"from": q.me, "active": active, "room": to})
+	if isRoom(to) && len(to) <= 50 {
+		ev := obj{"from": q.me, "active": active, "room": to}
+		if list, ok := q.body["members"].([]any); ok {
+			// Conferences and hidden rooms: only the people in it hear about
+			// it, so the room's name and who's typing don't reach everyone.
+			// The sender names them (this service doesn't track rooms); apps
+			// drop typing for rooms they aren't in, or from non-members.
+			seen := map[string]bool{q.me: true}
+			for _, v := range list {
+				m := strings.ToLower(strings.TrimSpace(toStr(v)))
+				if len(seen) > maxTypingMembers || seen[m] || !validID(m) {
+					continue
+				}
+				seen[m] = true
+				s.hub.push(m, "typing", ev)
+			}
+		} else { // public room: every open app, each keeps the rooms it's in
+			s.hub.pushAll("typing", ev)
+		}
 	} else if validID(to) && to != q.me {
 		s.hub.push(to, "typing", obj{"from": q.me, "active": active})
 	}
