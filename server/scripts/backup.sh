@@ -19,7 +19,7 @@ mkdir -p "$DEST"
 # solanum-state = bandb ban.db
 # soju-db       = soju admin socket + legacy sqlite remnants
 # soju-uploads  = soju file uploads
-# register-data = a09f account service data
+# register-data = snailog account service data
 for vol in postgres-data atheme-data solanum-state soju-db soju-uploads register-data; do
     if docker volume inspect "${PROJECT}_${vol}" >/dev/null 2>&1; then
         echo "backing up $vol ..."

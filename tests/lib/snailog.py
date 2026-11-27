@@ -1,4 +1,4 @@
-"""Shared helpers for the a09f test suites (stdlib only).
+"""Shared helpers for the snailog test suites (stdlib only).
 
 - Irc:   a real IRC client that signs in to soju with SASL, like the app does
 - Api:   the account service (server/api) with a session token
@@ -6,7 +6,7 @@
 - Check: PASS/FAIL bookkeeping; exit code 1 when anything failed
 
 Demo accounts (alice, bob, …) use the password DEMO_PASSWORD; override with
-A09F_DEMO_PASSWORD. Hosts/ports default to the local docker stack.
+SNAILOG_DEMO_PASSWORD. Hosts/ports default to the local docker stack.
 """
 
 import base64
@@ -21,11 +21,11 @@ import time
 import urllib.error
 import urllib.request
 
-SOJU = (os.environ.get("A09F_SOJU_HOST", "127.0.0.1"), int(os.environ.get("A09F_SOJU_PORT", "16667")))
-SOLANUM = (os.environ.get("A09F_SOLANUM_HOST", "127.0.0.1"), int(os.environ.get("A09F_SOLANUM_PORT", "6667")))
-API = os.environ.get("A09F_API", "http://127.0.0.1:16680")
-MAILPIT = os.environ.get("A09F_MAILPIT", "http://127.0.0.1:16825")
-DEMO_PASSWORD = os.environ.get("A09F_DEMO_PASSWORD", "demo-1234")
+SOJU = (os.environ.get("SNAILOG_SOJU_HOST", "127.0.0.1"), int(os.environ.get("SNAILOG_SOJU_PORT", "16667")))
+SOLANUM = (os.environ.get("SNAILOG_SOLANUM_HOST", "127.0.0.1"), int(os.environ.get("SNAILOG_SOLANUM_PORT", "6667")))
+API = os.environ.get("SNAILOG_API", "http://127.0.0.1:16680")
+MAILPIT = os.environ.get("SNAILOG_MAILPIT", "http://127.0.0.1:16825")
+DEMO_PASSWORD = os.environ.get("SNAILOG_DEMO_PASSWORD", "demo-1234")
 NETWORK = "solanum"
 
 
@@ -154,7 +154,7 @@ def http(method, path, body=None, token=None, raw=False):
 class Api:
     """The account service as one user."""
 
-    def __init__(self, user, password=DEMO_PASSWORD, device="a09f tests"):
+    def __init__(self, user, password=DEMO_PASSWORD, device="snailog tests"):
         self.user = user
         r = http("POST", "/session", {"username": user, "password": password, "device": device})
         if not r.get("ok"):
@@ -228,7 +228,7 @@ def server_ms(line):
 
 
 # How to run SQL on the account service's database (test clean-up only).
-PSQL = os.environ.get("A09F_PSQL", "docker exec -i postgres psql -U soju -d a09f").split()
+PSQL = os.environ.get("SNAILOG_PSQL", "docker exec -i postgres psql -U soju -d snailog").split()
 
 
 def sql(statement):

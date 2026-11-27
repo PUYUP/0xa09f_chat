@@ -243,7 +243,7 @@ loadmodule "modules/nickserv/regnolimit";
 loadmodule "modules/nickserv/restrict";
 loadmodule "modules/nickserv/return";
 /* Password-recovery-via-email modules disabled: mta is off, so they cannot
- * deliver anything, and password reset is handled by the a09f api service
+ * deliver anything, and password reset is handled by the snailog api service
  * (sojuctl + NickServ SET PASSWORD quote). sendpass_user would let any user
  * trigger password mailings. */
 #loadmodule "modules/nickserv/resetpass";
@@ -2056,7 +2056,7 @@ general {
 	 * trigger the flood protection.
 	 * Setting this to zero disables flood protection.
 	 *
-	 * a09f: 16, not 7. Creating a room from the app sends REGISTER (counts
+	 * snailog: 16, not 7. Creating a room from the app sends REGISTER (counts
 	 * as several) + GUARD + KEEPTOPIC + MLOCK + ENTRYMSG, and opening its
 	 * settings adds INFO + FLAGS; with 7 the later ones were silently
 	 * ignored. The app also paces services commands (1.5 s apart).

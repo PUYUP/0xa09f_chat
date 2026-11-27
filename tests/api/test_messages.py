@@ -12,7 +12,7 @@ import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
-from a09f import Api, Check, Irc, fnv, server_ms, sql, sse, wait_until  # noqa: E402
+from snailog import Api, Check, Irc, fnv, server_ms, sql, sse, wait_until  # noqa: E402
 
 check = Check("message extras: delete, react, edit, pin, poll, expire, saved, send later")
 A, B = "henry", "irene"

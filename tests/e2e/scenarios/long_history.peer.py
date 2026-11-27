@@ -2,7 +2,7 @@
 for the test room (straight into soju's PostgreSQL), and removes them again."""
 import subprocess
 
-from a09f import drop_room
+from snailog import drop_room
 from peer import Peer
 
 p = Peer("bob")

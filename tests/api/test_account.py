@@ -14,7 +14,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
-from a09f import MAILPIT, Check, http  # noqa: E402
+from snailog import MAILPIT, Check, http  # noqa: E402
 
 check = Check("account service: register / email / reset")
 user = f"zzt{int(time.time()) % 100000}"

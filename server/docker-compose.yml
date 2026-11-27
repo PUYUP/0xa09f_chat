@@ -91,7 +91,7 @@ services:
       SMTP_PORT: ${SMTP_PORT:-1025}
       SMTP_SECURITY: ${SMTP_SECURITY:-none}
       SMTP_USER: ${SMTP_USER:-}
-      MAIL_FROM: ${MAIL_FROM:-a09f <no-reply@a09f.invalid>}
+      MAIL_FROM: ${MAIL_FROM:-snailog <no-reply@snailog.invalid>}
     entrypoint: /render-entrypoint.sh
     volumes:
       - ./atheme/etc:/atheme/etc
@@ -202,15 +202,15 @@ services:
       ircnet:
         ipv4_address: 172.30.99.30
 
-  # a09f account service (Go, server/api): Create account, password reset,
+  # snailog account service (Go, server/api): Create account, password reset,
   # friends, live events (SSE), message extras, rooms/people data. Creates
   # soju users + their upstream network through soju's admin socket (soju-db).
-  # Its data is in postgres (database a09f, see scripts/init-api-db.sh); data
+  # Its data is in postgres (database snailog, see scripts/init-api-db.sh); data
   # of the old Python service (register-data/register.db) is imported once.
   api:
     build:
       context: ./api
-    image: a09f-api-soju:latest
+    image: snailog-api-soju:latest
     container_name: api
     restart: unless-stopped
     security_opt:
@@ -218,15 +218,15 @@ services:
     cap_drop:
       - ALL
     environment:
-      DATABASE_URL: postgres://a09f@postgres:5432/a09f?sslmode=disable
+      DATABASE_URL: postgres://snailog@postgres:5432/snailog?sslmode=disable
       # Password comes from the secret file, not the URL (keeps it out of
       # `docker inspect` and process args).
-      DB_PASSWORD_FILE: /run/secrets/a09f-db-password
+      DB_PASSWORD_FILE: /run/secrets/snailog-db-password
       LEGACY_SQLITE: /data/register.db        # Python service data, read once (never changed)
       UPSTREAM_ADDR: ircs://solanum:6697   # TLS upstream; cert chains to pki/ca.pem
       NETWORK_NAME: ${SOJU_NETWORK:-solanum}
       SOJU_IRC: soju:6667
-      # Does a09f user exist? Answered from BouncerServ "user status" on soju's
+      # Does snailog user exist? Answered from BouncerServ "user status" on soju's
       # admin socket, instead of logging into soju from this container. The
       # service therefore gets no IRC access to solanum: one fewer path to the
       # port that soju's upstream connections come from.
@@ -239,7 +239,7 @@ services:
       SMTP_SECURITY: ${SMTP_SECURITY:-none}   # starttls | ssl | none
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD_FILE: /run/secrets/smtp-password
-      MAIL_FROM: ${MAIL_FROM:-a09f <no-reply@a09f.invalid>}
+      MAIL_FROM: ${MAIL_FROM:-snailog <no-reply@snailog.invalid>}
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${REGISTER_PORT:-16680}:8080"    # account service (HTTP + live events)
     volumes:
@@ -247,7 +247,7 @@ services:
       - soju-db:/db
       - register-data:/data:ro
     secrets:
-      - a09f-db-password
+      - snailog-db-password
       - smtp-password
     depends_on:
       soju:
@@ -255,7 +255,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "/a09f-api", "-health"]
+      test: ["CMD", "/snailog-api", "-health"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -311,8 +311,8 @@ secrets:
     file: ./secrets/oper-admin-password
   postgres-password:
     file: ./secrets/postgres-password
-  a09f-db-password:
-    file: ./secrets/a09f-db-password
+  snailog-db-password:
+    file: ./secrets/snailog-db-password
   smtp-password:
     file: ./secrets/smtp-password
   # lib/pq password file for soju (postgres:5432:db:user:password).

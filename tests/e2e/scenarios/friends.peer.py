@@ -3,7 +3,7 @@ from peer import Peer
 
 p = Peer("frank")
 p.api.post("/friends/remove", {"nick": "alice"})          # start as strangers
-p.irc.send("JOIN #a09f-presence")
+p.irc.send("JOIN #snailog-presence")
 
 
 @p.on("request")
@@ -18,12 +18,12 @@ def _(args):
 
 @p.on("status-busy")
 def _(args):
-    p.irc.send("PRIVMSG #a09f-presence :STATUS busy")
+    p.irc.send("PRIVMSG #snailog-presence :STATUS busy")
 
 
 @p.on("status-available")
 def _(args):
-    p.irc.send("PRIVMSG #a09f-presence :STATUS available")
+    p.irc.send("PRIVMSG #snailog-presence :STATUS available")
 
 
 @p.on("whois")

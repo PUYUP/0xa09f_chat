@@ -1,4 +1,4 @@
-// Command a09f-api is the a09f account service.
+// Command snailog-api is the snailog account service.
 //
 // It complements the IRC stack (solanum + Atheme + soju) with what IRC can't
 // (or shouldn't) carry: creating accounts and resetting passwords, friends
@@ -97,7 +97,7 @@ func loadConfig() config {
 	}
 	return config{
 		listen:         env("LISTEN", ":8080"),
-		databaseURL:    env("DATABASE_URL", "postgres://a09f@localhost/a09f?sslmode=disable"),
+		databaseURL:    env("DATABASE_URL", "postgres://snailog@localhost/snailog?sslmode=disable"),
 		dbPasswordFile: os.Getenv("DB_PASSWORD_FILE"),
 		legacySQLite:   env("LEGACY_SQLITE", "/data/register.db"),
 		sojuConfig:     env("SOJU_CONFIG", "/soju-config"),
@@ -112,7 +112,7 @@ func loadConfig() config {
 		smtpSecurity:   strings.ToLower(env("SMTP_SECURITY", "starttls")),
 		smtpUser:       os.Getenv("SMTP_USER"),
 		smtpPassword:   envFile("SMTP_PASSWORD"),
-		mailFrom:       env("MAIL_FROM", "a09f <no-reply@a09f.invalid>"),
+		mailFrom:       env("MAIL_FROM", "snailog <no-reply@snailog.invalid>"),
 		maxAttempts:    envInt("MAX_ATTEMPTS_PER_HOUR", 30),
 		maxCreates:     envInt("MAX_CREATES_PER_HOUR", 5),
 		maxLoginFail:   envInt("MAX_LOGIN_FAILS_PER_HOUR", 10),
@@ -121,7 +121,7 @@ func loadConfig() config {
 
 func main() {
 	health := flag.Bool("health", false, "check that the service on LISTEN answers, then exit (docker healthcheck)")
-	seed := flag.String("seed-demo", "", "create demo accounts: comma-separated IDs (password from A09F_DEMO_PASSWORD), then exit")
+	seed := flag.String("seed-demo", "", "create demo accounts: comma-separated IDs (password from SNAILOG_DEMO_PASSWORD), then exit")
 	flag.Parse()
 	cfg := loadConfig()
 	log.SetFlags(0)
@@ -148,7 +148,7 @@ func main() {
 		log.Fatalf("start: %v", err)
 	}
 	if *seed != "" {
-		if err := s.seedDemo(ctx, strings.Split(*seed, ","), env("A09F_DEMO_PASSWORD", "demo-1234")); err != nil {
+		if err := s.seedDemo(ctx, strings.Split(*seed, ","), env("SNAILOG_DEMO_PASSWORD", "demo-1234")); err != nil {
 			log.Fatalf("seed: %v", err)
 		}
 		return

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run the a09f test suites. Usage: tests/run_all.sh [server|api|e2e|visual]...
+# Run the snailog test suites. Usage: tests/run_all.sh [server|api|e2e|visual]...
 # (no argument = all of them, in that order). Exit code 1 if anything failed.
 cd "$(dirname "$0")/.." || exit 1
 groups="${*:-server api e2e visual}"

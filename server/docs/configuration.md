@@ -12,13 +12,13 @@ docker compose up -d --build
 ```
 
 - `.env` — gitignored; **satu-satunya sumber** semua password (link password,
-  `OPER_ADMIN_PASSWORD`, `POSTGRES_PASSWORD`, `A09F_DB_PASSWORD`,
+  `OPER_ADMIN_PASSWORD`, `POSTGRES_PASSWORD`, `SNAILOG_DB_PASSWORD`,
   `SMTP_PASSWORD`), port host, subnet, `ATHEME_HOST`, dan kredensial
   postgres (`POSTGRES_USER`/`POSTGRES_DB`).
 - `scripts/sync-secrets.sh` — menyalin nilai secret dari `.env` ke file
   individual di `server/secrets/` (gitignored, mode 600): `link-solanum-send`,
   `link-solanum-accept`, `oper-admin-password`, `postgres-password`,
-  `a09f-db-password`, `smtp-password`, `pgpass`. **Jalankan ulang setiap
+  `snailog-db-password`, `smtp-password`, `pgpass`. **Jalankan ulang setiap
   `.env` berubah** sebelum `docker compose up -d`. Password tidak lagi lewat
   env container — tidak terlihat di `docker inspect`.
 - `scripts/generate-certs.sh` — buat **local CA** (`pki/ca.pem` +
@@ -216,7 +216,7 @@ File dirender `chmod 600` milik user `atheme`. Untuk Brevo:
 `SMTP_PASSWORD=<SMTP key>`, `MAIL_FROM=<sender verified>`.
 
 Catatan: `auth = email` di `serverinfo` **sengaja `none`** — akun NickServ
-yang dibuat service `api` memakai email palsu (`<id>@users.a09f.invalid`),
+yang dibuat service `api` memakai email palsu (`<id>@users.snailog.invalid`),
 jadi verifikasi email NickServ akan menahan registrasi mereka. Aktifkan
 hanya kalau flow pembuatan akun di api ikut diubah.
 

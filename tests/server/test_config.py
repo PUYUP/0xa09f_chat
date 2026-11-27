@@ -65,15 +65,15 @@ check("no env_file in compose (secrets stay out of env)",
 check("compose declares the password secrets",
       all(s in compose for s in (
           "link-solanum-send", "link-solanum-accept", "oper-admin-password",
-          "postgres-password", "a09f-db-password", "smtp-password", "pgpass")))
+          "postgres-password", "snailog-db-password", "smtp-password", "pgpass")))
 check("postgres uses POSTGRES_PASSWORD_FILE",
       "POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password" in compose)
 check("soju uses PGPASSFILE, not PGPASSWORD",
       "PGPASSFILE: /run/secrets/pgpass" in compose
       and "PGPASSWORD" not in compose)
 check("api DATABASE_URL carries no password",
-      "postgres://a09f@postgres" in compose
-      and "DB_PASSWORD_FILE: /run/secrets/a09f-db-password" in compose)
+      "postgres://snailog@postgres" in compose
+      and "DB_PASSWORD_FILE: /run/secrets/snailog-db-password" in compose)
 check("secret files are gitignored",
       "server/secrets/*" in (Path(__file__).resolve().parents[2] / ".gitignore").read_text())
 

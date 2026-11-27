@@ -13,7 +13,7 @@ Semua test **self-contained** — bisa dijalankan berulang kali dan setelah
 volume di-reset, tanpa setup manual. Yang butuh docker stack menganggap
 `docker compose up -d` sudah dijalankan dari `server/`.
 
-Helper bersama ada di `tests/lib/`: `a09f.py` (client IRC lewat soju dengan
+Helper bersama ada di `tests/lib/`: `snailog.py` (client IRC lewat soju dengan
 SASL, client service akun, SSE, bookkeeping PASS/FAIL) dan `peer.py` (orang
 lain dalam skenario e2e).
 
@@ -92,9 +92,9 @@ SNI tersebut (quirk upstream; client IRC pada umumnya tidak mengirim SNI).
 ## tests/api/
 
 Butuh docker stack + akun demo (`alice`, `bob`, … / password `demo-1234`;
-override dengan `A09F_DEMO_PASSWORD`). Alamat bisa diubah lewat env
-`A09F_SOJU_HOST`/`A09F_SOJU_PORT`, `A09F_SOLANUM_HOST`/`A09F_SOLANUM_PORT`,
-`A09F_API`, `A09F_MAILPIT`.
+override dengan `SNAILOG_DEMO_PASSWORD`). Alamat bisa diubah lewat env
+`SNAILOG_SOJU_HOST`/`SNAILOG_SOJU_PORT`, `SNAILOG_SOLANUM_HOST`/`SNAILOG_SOLANUM_PORT`,
+`SNAILOG_API`, `SNAILOG_MAILPIT`.
 
 ```bash
 python3 tests/api/test_messages.py
@@ -127,7 +127,7 @@ dari stderr.
 python3 tests/e2e/run.py                       # semua skenario
 python3 tests/e2e/run.py friends rooms         # hanya ini
 python3 tests/e2e/run.py --no-build ...        # tanpa `cargo build`
-A09F_E2E_TIMEOUT=600 python3 tests/e2e/run.py  # timeout per skenario (default 420 s)
+SNAILOG_E2E_TIMEOUT=600 python3 tests/e2e/run.py  # timeout per skenario (default 420 s)
 ```
 
 Runner mem-build `desktop/src-tauri` (debug, UI di-embed), lalu untuk tiap

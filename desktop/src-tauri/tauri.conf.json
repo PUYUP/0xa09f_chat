@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "a09f",
+  "productName": "snailog",
   "version": "0.1.0",
   "identifier": "test.solanum.desktop",
   "build": {
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "a09f",
+        "title": "snailog",
         "width": 980,
         "height": 660,
         "minWidth": 720,
@@ -24,7 +24,7 @@
   },
   "plugins": {
     "deep-link": {
-      "desktop": { "schemes": ["a09f"] }
+      "desktop": { "schemes": ["snailog"] }
     }
   },
   "bundle": {

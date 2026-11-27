@@ -1,4 +1,4 @@
-# Tes a09f
+# Tes snailog
 
 **Semua tes ada di folder ini.** Tes baru juga ditaruh di sini: bukan di
 folder sementara, bukan di samping kode. Python hanya stdlib.
@@ -9,7 +9,7 @@ folder sementara, bukan di samping kode. Python hanya stdlib.
 | `api/` | service akun (`server/api`, Go) dan fitur IRC yang dipakai app, lewat HTTP dan koneksi IRC sungguhan | stack docker, akun demo |
 | `e2e/` | skenario yang dijalankan **di dalam app desktop asli** (build debug), dengan skrip "peer" sebagai orang lain | stack docker, akun demo, toolchain Rust/Tauri, sesi desktop |
 | `visual/` | UI asli dirender di Chrome headless dengan API Tauri palsu → screenshot | Google Chrome |
-| `lib/` | pembantu bersama: `a09f.py` (klien IRC lewat soju, klien service akun, SSE, laporan cek), `peer.py` (peer e2e) | — |
+| `lib/` | pembantu bersama: `snailog.py` (klien IRC lewat soju, klien service akun, SSE, laporan cek), `peer.py` (peer e2e) | — |
 
 Jalankan semua: `tests/run_all.sh` (atau satu grup: `tests/run_all.sh api`).
 Setiap skrip mencetak baris `[PASS]` / `[FAIL]` / `[SKIP]` dan keluar dengan
@@ -21,7 +21,7 @@ kode bukan nol kalau ada yang gagal.
 - Akun demo alice, bob, charlie, diana, evan, frank, grace, henry, irene, jack,
   kate, leo, mia, nina, oscar dengan password `demo-1234`, masing-masing sudah
   pernah sign in lewat app atau terdaftar di NickServ (tes moderasi memakai
-  extban akun). Password bisa diganti lewat `A09F_DEMO_PASSWORD`.
+  extban akun). Password bisa diganti lewat `SNAILOG_DEMO_PASSWORD`.
 - `server/.env` berisi `SOJU_PASSWORD` untuk `server/test_soju.py`.
 
 ## server/
@@ -59,7 +59,7 @@ python3 tests/api/bench_load.py --users 1500 --window 30
 python3 tests/api/bench_load.py --mode real --users 100    # password via SASL
 ```
 
-Akun memakai ID tetap `b1`…`bN`, password `A09F_BENCH_PASSWORD` (default
+Akun memakai ID tetap `b1`…`bN`, password `SNAILOG_BENCH_PASSWORD` (default
 `demo-1234`), dan dibuat sekali lewat `POST /register` — yang hanya
 mengizinkan 5 akun/jam per IP (`MAX_CREATES_PER_HOUR`), jadi run pertama untuk
 5.000 akun perlu jatah itu dinaikkan atau dijalankan bertahap. Satu `/events`
@@ -82,7 +82,7 @@ Catatan:
 - `test_irc_features.py` bisa SKIP cek KNOCK: solanum hanya mengizinkan satu
   knock per user setiap beberapa menit (`knock_delay`).
 - Tes membersihkan apa yang dibuatnya (room di-DROP lewat ChanServ, baris di
-  Postgres service akun dihapus; `A09F_PSQL` untuk postgres di luar docker). Run yang terputus bisa meninggalkan room
+  Postgres service akun dihapus; `SNAILOG_PSQL` untuk postgres di luar docker). Run yang terputus bisa meninggalkan room
   `#zz-test-*`; run berikutnya menghapusnya.
 
 ## e2e/
@@ -97,8 +97,8 @@ Cara kerjanya — tidak ada file source yang diubah:
 
 - Build debug app punya dua pengait tes (`desktop/src-tauri/src/lib.rs`,
   `#[cfg(debug_assertions)]`, tidak ada di build rilis): `test_scenario`
-  memberi UI skrip yang ditunjuk `$A09F_TEST_SCENARIO`, dan `test_log`
-  mencetak `A09F-TEST {json}` ke stderr.
+  memberi UI skrip yang ditunjuk `$SNAILOG_TEST_SCENARIO`, dan `test_log`
+  mencetak `SNAILOG-TEST {json}` ke stderr.
 - `run.py` menggabungkan `prelude.js` + `scenarios/<nama>.js`, menjalankan
   `scenarios/<nama>.peer.py` (kalau ada), membuka app, lalu membaca hasilnya.
   Jendela app dibawa ke depan, karena WebKit memperlambat timer di jendela

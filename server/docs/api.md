@@ -4,7 +4,7 @@ Service HTTP dalam Go (`server/api`: satu binary, PostgreSQL lewat pgx,
 `sojuctl` untuk soju) di `127.0.0.1:16680` (`REGISTER_PORT`). Ia melengkapi IRC
 untuk hal-hal yang tidak bisa (atau tidak boleh) lewat IRC: pembuatan akun,
 reset password, daftar teman di server, event live, dan metadata pesan.
-Datanya di PostgreSQL (database `a09f`); data service Python lama
+Datanya di PostgreSQL (database `snailog`); data service Python lama
 (`register.db`) diimpor sekali saat start pertama.
 
 Semua respons JSON `{"ok": true, …}` atau `{"ok": false, "error": "<kalimat untuk user>"}`
@@ -90,7 +90,7 @@ Pesan IRC tidak punya ID (soju tidak memberi `msgid`), jadi pesan dikenali dari
 - `time`: waktu server (ms) dari tag `@time`; solanum memberi waktu yang sama
   ke semua salinan pesan.
 - `hash`: FNV-1a 32-bit atas unit UTF-16 teks pesan (setelah ACTION dilepas),
-  base36 — `msgHash()` di app, `fnv()` di `tests/lib/a09f.py`.
+  base36 — `msgHash()` di app, `fnv()` di `tests/lib/snailog.py`.
 
 | Method & path | Body / query | Catatan |
 |---|---|---|
@@ -117,7 +117,7 @@ Pesan IRC tidak punya ID (soju tidak memberi `msgid`), jadi pesan dikenali dari
 | `POST /roominfo`, `GET /roominfo?rooms=` | `room, category, lang` | kategori: general games music tech sports study movies hangout other |
 | `POST /activity`, `GET /trending` | `room` | app melapor tiap pesan (bukan room hidden/conference); dipakai juga untuk zona waktu room & saran teman |
 | `GET /roomtz?rooms=` | | median offset pengirim pesan 7 hari (berbobot jumlah pesan) |
-| `GET /join/<room>` | publik | halaman HTML "Open in a09f" → `a09f://join/<room>` |
+| `GET /join/<room>` | publik | halaman HTML "Open in snailog" → `snailog://join/<room>` |
 
 ## Admin
 

@@ -1,6 +1,6 @@
-# Panduan fitur a09f
+# Panduan fitur snailog
 
-Panduan pemakaian app desktop a09f, per area. Detail teknis tiap fitur ada di
+Panduan pemakaian app desktop snailog, per area. Detail teknis tiap fitur ada di
 `desktop/README.md`, cara kerjanya di `desktop/docs/arsitektur.md`, dan API
 server di `server/docs/api.md`.
 
@@ -12,7 +12,7 @@ server di `server/docs/api.md`.
   - *Remember my ID & password* — password disimpan di keychain sistem
     (Keychain macOS / Credential Manager Windows), tidak di file.
   - *Sign me in automatically* — saat app dibuka.
-  - *Start a09f when my computer starts* — mulai tersembunyi di tray.
+  - *Start snailog when my computer starts* — mulai tersembunyi di tray.
 - **Forgot password?** — isi ID, kode 6 digit dikirim ke email pemulihan,
   isi kode + password baru. Semua perangkat yang sedang login akan keluar.
 - **🔑 Password** (toolbar):
@@ -21,7 +21,7 @@ server di `server/docs/api.md`.
   - **Signed-in devices**: perangkat yang login, kapan terakhir aktif, tombol
     *Sign out* untuk mengeluarkannya. Perangkat yang tidak dipakai 2 hari
     keluar sendiri.
-- **Menutup jendela** tidak sign out: a09f tetap jalan di tray (pesan, BUZZ,
+- **Menutup jendela** tidak sign out: snailog tetap jalan di tray (pesan, BUZZ,
   notifikasi tetap masuk). Ikon tray: klik = buka; menu Open / Sign Out / Quit.
 
 ## Status & profil

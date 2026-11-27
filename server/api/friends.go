@@ -125,7 +125,7 @@ func (s *server) friendChange(q *req, fn func(ctx context.Context, tx pgx.Tx) (s
 func (s *server) friendRequest(q *req) (any, error) {
 	me, to := q.me, q.lower("to")
 	if !validID(to) {
-		return nil, fail(400, "That doesn't look like an a09f ID.")
+		return nil, fail(400, "That doesn't look like an snailog ID.")
 	}
 	group := cleanGroup(q.raw("group"))
 	msg := cut(squash(q.raw("msg")), maxRequestMsg)
@@ -139,7 +139,7 @@ func (s *server) friendRequest(q *req) (any, error) {
 			return "", nil, fail(409, to+" is already your friend.")
 		}
 		if !s.bouncer.accountExists(ctx, to) {
-			return "", nil, fail(404, fmt.Sprintf("There's no a09f user with the ID \"%s\".", to))
+			return "", nil, fail(404, fmt.Sprintf("There's no snailog user with the ID \"%s\".", to))
 		}
 		// They already asked us: that's a yes from both sides.
 		if tx.QueryRow(ctx, `SELECT grp FROM friend_requests WHERE from_user = $1 AND to_user = $2`, to, me).Scan(&grp) == nil {

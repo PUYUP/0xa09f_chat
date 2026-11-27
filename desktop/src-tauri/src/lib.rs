@@ -6,7 +6,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 
-const KEYCHAIN_SERVICE: &str = "a09f";
+const KEYCHAIN_SERVICE: &str = "snailog";
 const AUTOSTART_ARG: &str = "--autostart";
 
 /// Thin TCP bridge to the Soju bouncer. All IRC protocol logic lives in the
@@ -133,19 +133,19 @@ fn save_export(app: AppHandle, name: String, contents: String) -> Result<String,
 
 /* ---------- test hooks (debug builds only; see tests/e2e) ---------- */
 
-/// The e2e runner points A09F_TEST_SCENARIO at a script; the UI runs it after
+/// The e2e runner points SNAILOG_TEST_SCENARIO at a script; the UI runs it after
 /// loading. Release builds don't have this command at all.
 #[cfg(debug_assertions)]
 #[tauri::command]
 fn test_scenario() -> Option<String> {
-    std::env::var("A09F_TEST_SCENARIO").ok().and_then(|p| std::fs::read_to_string(p).ok())
+    std::env::var("SNAILOG_TEST_SCENARIO").ok().and_then(|p| std::fs::read_to_string(p).ok())
 }
 
 /// Scenario results go to stderr, where the runner reads them.
 #[cfg(debug_assertions)]
 #[tauri::command]
 fn test_log(line: String) {
-    eprintln!("A09F-TEST {line}");
+    eprintln!("SNAILOG-TEST {line}");
 }
 
 /// True when the OS started us at login (autostart passes AUTOSTART_ARG).
@@ -154,7 +154,7 @@ fn launched_at_login() -> bool {
     std::env::args().any(|a| a == AUTOSTART_ARG)
 }
 
-/* ---------- tray icon: closing the window keeps a09f running ---------- */
+/* ---------- tray icon: closing the window keeps snailog running ---------- */
 
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -165,13 +165,13 @@ fn show_main(app: &AppHandle) {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open a09f", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open snailog", true, None::<&str>)?;
     let signout = MenuItem::with_id(app, "signout", "Sign Out", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit a09f", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit snailog", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&open, &signout, &sep, &quit])?;
     let mut tray = TrayIconBuilder::with_id("main")
-        .tooltip("a09f")
+        .tooltip("snailog")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -222,7 +222,7 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             build_tray(app.handle())?;
-            // a09f://join/<room>: hand invite links to the UI.
+            // snailog://join/<room>: hand invite links to the UI.
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let handle = app.handle().clone();
@@ -242,7 +242,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // The close button hides the window; a09f keeps running in the tray
+            // The close button hides the window; snailog keeps running in the tray
             // so messages, BUZZes and notifications still arrive.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
@@ -250,7 +250,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while running a09f");
+        .expect("error while running snailog");
 
     app.run(|app, event| {
         // macOS: clicking the Dock icon brings the hidden window back.

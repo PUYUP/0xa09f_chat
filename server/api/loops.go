@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// backgroundLoop runs every 10 seconds: reminders for people with a09f open
+// backgroundLoop runs every 10 seconds: reminders for people with snailog open
 // (the rest get them from /reminders/due at sign-in), disappearing messages,
 // "event starts soon", scheduled messages, and housekeeping.
 func (s *server) backgroundLoop(ctx context.Context) {

@@ -3,21 +3,6 @@
 version = 4
 
 [[package]]
-name = "a09f-desktop"
-version = "0.1.0"
-dependencies = [
- "keyring",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-deep-link",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
-]
-
-[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3676,6 +3661,21 @@ dependencies = [
  "objc2-foundation",
  "objc2-service-management",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "snailog-desktop"
+version = "0.1.0"
+dependencies = [
+ "keyring",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-deep-link",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
 ]
 
 [[package]]

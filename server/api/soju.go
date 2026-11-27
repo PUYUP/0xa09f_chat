@@ -26,7 +26,7 @@ import (
 // user's upstream comes from, so it cannot end up in a position to claim one
 // of their nicks.
 //
-// Every a09f account is a soju user with one upstream network (NETWORK_NAME)
+// Every snailog account is a soju user with one upstream network (NETWORK_NAME)
 // to solanum, created with auto-away: soju marks it away while no device is
 // connected, which the app shows as Offline.
 type bouncer struct {
@@ -93,7 +93,7 @@ func (b *bouncer) checkAuth(ctx context.Context, user, password string) (bool, e
 	dl, _ := ctx.Deadline()
 	conn.SetDeadline(dl)
 	auth := base64.StdEncoding.EncodeToString([]byte("\x00" + user + "\x00" + password))
-	for _, l := range []string{"CAP REQ :sasl", "NICK a09f-check", "USER a09f-check 0 * :check", "AUTHENTICATE PLAIN"} {
+	for _, l := range []string{"CAP REQ :sasl", "NICK snailog-check", "USER snailog-check 0 * :check", "AUTHENTICATE PLAIN"} {
 		fmt.Fprintf(conn, "%s\r\n", l)
 	}
 	rd := bufio.NewReader(conn)

@@ -539,15 +539,15 @@ func (s *server) joinPage(w http.ResponseWriter, raw string) {
 		return
 	}
 	esc := html.EscapeString(room)
-	page := `<!doctype html><html><head><meta charset="utf-8"><title>Join #` + esc + ` on a09f</title>
+	page := `<!doctype html><html><head><meta charset="utf-8"><title>Join #` + esc + ` on snailog</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{font-family:Verdana,sans-serif;background:#f3edfb;display:flex;justify-content:center;padding-top:12vh;margin:0}
 .card{background:#fff;border:1px solid #c9b8ec;border-radius:10px;padding:28px 36px;text-align:center;max-width:380px}
 h1{color:#5b2a8c;margin:0 0 6px}a.btn{display:inline-block;margin-top:18px;background:#6a3aa2;color:#fff;padding:10px 22px;
 border-radius:6px;text-decoration:none;font-weight:bold}p{color:#555;font-size:13px}code{background:#f6f2fb;padding:2px 6px}</style>
-</head><body><div class="card"><h1>a09f</h1><p>You're invited to the chat room</p><h2>#` + esc + `</h2>
-<a class="btn" href="a09f://join/` + esc + `">Open in a09f</a>
-<p>Don't have the app open? Start a09f and type <code>` + esc + `</code> in the Join box,<br>or press Ctrl/Cmd+K and paste this link.</p>
+</head><body><div class="card"><h1>snailog</h1><p>You're invited to the chat room</p><h2>#` + esc + `</h2>
+<a class="btn" href="snailog://join/` + esc + `">Open in snailog</a>
+<p>Don't have the app open? Start snailog and type <code>` + esc + `</code> in the Join box,<br>or press Ctrl/Cmd+K and paste this link.</p>
 </div></body></html>`
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")

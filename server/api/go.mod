@@ -1,4 +1,4 @@
-module a09f/api
+module snailog/api
 
 go 1.26.0
 

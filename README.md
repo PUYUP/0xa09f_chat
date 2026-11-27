@@ -1,4 +1,4 @@
-# a09f
+# snailog
 
 Messenger gaya klasik di atas IRC: stack server (Solanum + Atheme + Soju +
 service akun Go) di Docker, dan app desktop Tauri.
@@ -6,7 +6,7 @@ service akun Go) di Docker, dan app desktop Tauri.
 | Folder | Isi | Mulai dari |
 |---|---|---|
 | `server/` | stack IRC + service akun (`server/api`, Go) | [`server/docs/README.md`](server/docs/README.md) |
-| `desktop/` | app desktop a09f (Tauri) | [`desktop/README.md`](desktop/README.md), [`desktop/docs/fitur.md`](desktop/docs/fitur.md) |
+| `desktop/` | app desktop snailog (Tauri) | [`desktop/README.md`](desktop/README.md), [`desktop/docs/fitur.md`](desktop/docs/fitur.md) |
 | `tests/` | **semua** tes: server, API, e2e di dalam app, visual | [`tests/README.md`](tests/README.md) |
 
 Dokumen penting:

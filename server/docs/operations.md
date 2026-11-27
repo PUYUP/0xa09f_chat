@@ -77,7 +77,7 @@ dari IP soju — itu sebabnya IP soju di-exempt dari batas per-IP & throttle.
 | soju users/networks/history | volume `postgres-data` (DB `soju`)  | ya       |
 | soju admin socket           | volume `soju-db` → `/db`            | ya       |
 | soju uploads                 | volume `soju-uploads`               | ya       |
-| data service akun (teman, sesi, email pemulihan, reaksi, …) | volume `postgres-data` (DB `a09f`) | ya |
+| data service akun (teman, sesi, email pemulihan, reaksi, …) | volume `postgres-data` (DB `snailog`) | ya |
 | data service Python lama (hanya dibaca sekali saat impor) | volume `register-data` → `/data/register.db` | ya (tidak berubah) |
 
 Backup yang relevan: `docker exec postgres pg_dump -U soju soju > backup.sql`
@@ -98,13 +98,13 @@ Catatan: path ban.db adalah compile-time `/var/local/ban.db` — flag
 
 `server/api/` — service Go (satu binary + `sojuctl` di image Alpine) yang
 dipakai app desktop: Create account, reset password, teman, event live,
-metadata pesan, room. Datanya di Postgres (database `a09f`, role `a09f`).
+metadata pesan, room. Datanya di Postgres (database `snailog`, role `snailog`).
 
 Setup sekali (stack lama yang sudah jalan):
 
 ```bash
 docker compose up -d postgres
-./scripts/init-api-db.sh                 # A09F_DB_PASSWORD di .env + role/database a09f
+./scripts/init-api-db.sh                 # SNAILOG_DB_PASSWORD di .env + role/database snailog
 docker compose up -d --build --no-deps api
 docker compose rm -sf register 2>/dev/null   # container Python lama, kalau masih ada
 ```
@@ -191,7 +191,7 @@ solanum), semua upstream soju putus, lalu reconnect bareng dari satu IP dan
 kena throttle solanum ("Reconnecting too fast") sampai beberapa menit.
 
 Akun NickServ: app desktop yang mendaftarkan akun NickServ (password sama,
-email `<id>@users.a09f.invalid`) saat sign in pertama, lalu mengatur
+email `<id>@users.snailog.invalid`) saat sign in pertama, lalu mengatur
 `sasl set-plain` di soju. Cek: `sojuctl user run <id> sasl status -network solanum`.
 
 Hapus akun: `docker exec soju /sojuctl -config /soju-config user delete <id>`
@@ -260,7 +260,7 @@ event (buffer 256) alih-alih memperlambat yang lain.
 ### Extban akun (`extb_account`)
 
 `ircd.conf.tmpl` memuat `extensions/extb_account` (ISUPPORT `EXTBAN=$,a`).
-Semua user a09f datang dari IP soju yang sama, jadi ban/mute di app memakai
+Semua user snailog datang dari IP soju yang sama, jadi ban/mute di app memakai
 `$a:<akun>` (+ `<id>!*@*` untuk yang belum login NickServ) — **jangan pernah**
 ban berdasarkan host. Modul baru bisa dimuat tanpa restart: render ulang
 config di container lalu `kill -HUP $(cat /tmp/solanum.pid)`.
@@ -276,15 +276,15 @@ Catatan Atheme: room terdaftar memakai MLOCK default `+nt-lk`, jadi password
 (+k) dan batas (+l) hanya bisa dipasang pemilik lewat `ChanServ SET #room
 MLOCK …` (app melakukannya dari ⚙️ Settings).
 
-## Room bawaan `#lobby` & `#a09f-presence`
+## Room bawaan `#lobby` & `#snailog-presence`
 
 App desktop otomatis join `#lobby` kalau akun belum ada di room mana pun.
-Room ini (dan room tersembunyi `#a09f-presence`, MLOCK `+nts`, dipakai app
+Room ini (dan room tersembunyi `#snailog-presence`, MLOCK `+nts`, dipakai app
 untuk pesan status teman) didaftarkan ke ChanServ oleh
 `scripts/setup-rooms.py` (idempotent, ada jeda antar perintah supaya tidak
 kena flood protection Atheme):
 
-- founder: akun NickServ `a09f` (`LOBBY_OWNER`), password di `.env`
+- founder: akun NickServ `snailog` (`LOBBY_OWNER`), password di `.env`
   (`LOBBY_OWNER_PASSWORD`, dibuat otomatis kalau belum ada)
 - `GUARD ON` — ChanServ selalu di dalam room, jadi room tidak hilang saat kosong
 - `KEEPTOPIC` + `TOPICLOCK ON`, `MLOCK +nt`, topik sambutan
@@ -296,7 +296,7 @@ python3 scripts/setup-rooms.py --op-via-soju cebong # kalau room sudah berisi
 ```
 
 `--op-via-soju <user>` meminta koneksi bouncer user tsb (yang op di room)
-mengirim `MODE #lobby +o a09f` via `sojuctl ... network quote`, jadi tidak
+mengirim `MODE #lobby +o snailog` via `sojuctl ... network quote`, jadi tidak
 perlu ada yang keluar room. Solanum men-throttle reconnect cepat dari IP
 yang sama ("Reconnecting too fast") — tunggu ±1 menit antar run.
 

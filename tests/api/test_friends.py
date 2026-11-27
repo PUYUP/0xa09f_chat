@@ -9,7 +9,7 @@ import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
-from a09f import Api, Check, sse, wait_until  # noqa: E402
+from snailog import Api, Check, sse, wait_until  # noqa: E402
 
 check = Check("friends, groups, privacy, typing, devices")
 A, B = "frank", "grace"
@@ -58,7 +58,7 @@ try:
     check("search needs 2 letters", not a.get("/users/search?q=r").get("ok"))
 
     devs = a.get("/sessions")["sessions"]
-    check("devices list shows both sessions", sum(1 for d in devs if d["device"] in ("a09f tests", "second device")) >= 2)
+    check("devices list shows both sessions", sum(1 for d in devs if d["device"] in ("snailog tests", "second device")) >= 2)
     a.post("/session/revoke", {"sid": a2.sid})
     check("revoked device gets signed-out (only that one)",
           wait_until(lambda: [d for e, d in ev_a2 if e == "signed-out" and d.get("only") == a2.sid], 6))

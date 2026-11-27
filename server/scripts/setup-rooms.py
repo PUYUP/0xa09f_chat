@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Register a09f's built-in rooms with ChanServ (idempotent).
+"""Register snailog's built-in rooms with ChanServ (idempotent).
 
-Rooms: #lobby (default room) and #a09f-presence (hidden, used by the app for
+Rooms: #lobby (default room) and #snailog-presence (hidden, used by the app for
 friends' status messages). See ROOMS below.
 
 What it does, connecting straight to solanum (not through soju):
-  1. identifies as the owner account (LOBBY_OWNER, default "a09f"), registering
+  1. identifies as the owner account (LOBBY_OWNER, default "snailog"), registering
      it with NickServ first if it doesn't exist yet;
   2. joins each room and, if it isn't registered yet, registers it with
      ChanServ (needs channel op, so the room must be empty or we must be op);
@@ -25,6 +25,7 @@ Usage: python3 scripts/setup-rooms.py [--op-via-soju USER] [host] [port]
 import os
 import secrets
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -35,11 +36,11 @@ ENV_PATH = os.path.join(os.path.dirname(HERE), ".env")
 # (channel, topic, mode lock)
 ROOMS = [
     # Default room everyone lands in.
-    ("#lobby", "Welcome to a09f! Say hi and hang out here :)", "+nt"),
-    # Hidden (+s) room every a09f app joins: carries friends' status messages
+    ("#lobby", "Welcome to snailog! Say hi and hang out here :)", "+nt"),
+    # Hidden (+s) room every snailog app joins: carries friends' status messages
     # (STATUS lines, kept in soju history) and live Online/Offline via
     # away-notify. Not shown in the app's room list.
-    ("#a09f-presence", "a09f status updates (used by the app, not for chatting)", "+nts"),
+    ("#snailog-presence", "snailog status updates (used by the app, not for chatting)", "+nts"),
 ]
 
 
@@ -59,15 +60,15 @@ def ensure_password(env):
         return env["LOBBY_OWNER_PASSWORD"]
     pw = secrets.token_urlsafe(18)
     with open(ENV_PATH, "a") as fh:
-        fh.write("\n# NickServ account that owns a09f's rooms (scripts/setup-rooms.py)\n")
-        fh.write(f"LOBBY_OWNER={env.get('LOBBY_OWNER', 'a09f')}\n")
+        fh.write("\n# NickServ account that owns snailog's rooms (scripts/setup-rooms.py)\n")
+        fh.write(f"LOBBY_OWNER={env.get('LOBBY_OWNER', 'snailog')}\n")
         fh.write(f"LOBBY_OWNER_PASSWORD={pw}\n")
     print(f"[setup] generated LOBBY_OWNER_PASSWORD and saved it to {ENV_PATH}")
     return pw
 
 
 ENV = load_env()
-OWNER = ENV.get("LOBBY_OWNER", "a09f")
+OWNER = ENV.get("LOBBY_OWNER", "snailog")
 PASSWORD = ensure_password(ENV)
 argv = sys.argv[1:]
 OP_VIA_SOJU = None
@@ -75,8 +76,8 @@ if "--op-via-soju" in argv:
     i = argv.index("--op-via-soju")
     OP_VIA_SOJU = argv[i + 1]
     del argv[i:i + 2]
-HOST = argv[0] if len(argv) > 0 else "127.0.0.1"
-PORT = int(argv[1]) if len(argv) > 1 else int(ENV.get("SOLANUM_PORT", "6667"))
+HOST = argv[0] if len(argv) > 0 else "localhost"
+PORT = int(argv[1]) if len(argv) > 1 else int(ENV.get("SOLANUM_TLS_PORT", "6697"))
 NETWORK = ENV.get("SOJU_NETWORK", "solanum")
 
 
@@ -84,7 +85,12 @@ def redact(text):
     """Never print the owner password (NickServ echoes it back on REGISTER)."""
     return text.replace(PASSWORD, "****")
 
+# solanum enforces need_ssl on client connections: wrap the socket in TLS,
+# trusting the local CA that issued the server cert (server/pki/ca.pem).
+CA = os.path.join(os.path.dirname(HERE), "pki", "ca.pem")
+ctx = ssl.create_default_context(cafile=CA)
 sock = socket.create_connection((HOST, PORT), timeout=15)
+sock = ctx.wrap_socket(sock, server_hostname="solanum")
 f = sock.makefile("rw", encoding="utf-8", errors="replace", newline="\r\n")
 
 
@@ -123,7 +129,7 @@ def service_reply(service, needles, timeout=10):
 
 # --- connect -----------------------------------------------------------------
 send(f"NICK {OWNER}")
-send(f"USER {OWNER} 0 * :a09f lobby owner")
+send(f"USER {OWNER} 0 * :snailog lobby owner")
 welcome = read_until(lambda l: " 001 " in l or " 433 " in l)
 if " 433 " in welcome:
     raise SystemExit(f"[FAIL] nick {OWNER} is in use; disconnect that client and retry")
@@ -133,7 +139,7 @@ send(f"PRIVMSG NickServ :IDENTIFY {OWNER} {PASSWORD}")
 r = service_reply("NickServ", ["you are now identified", "you are now logged in", "not a registered", "invalid password",
                                "not registered"])
 if "not a registered" in r.lower() or "not registered" in r.lower():
-    send(f"PRIVMSG NickServ :REGISTER {PASSWORD} lobby@a09f.invalid")
+    send(f"PRIVMSG NickServ :REGISTER {PASSWORD} lobby@snailog.invalid")
     r = service_reply("NickServ", ["registered", "invalid", "too many"])
     if "is now registered" not in r.lower():
         raise SystemExit(f"[FAIL] NickServ REGISTER: {r}")

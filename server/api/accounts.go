@@ -25,7 +25,7 @@ const (
 var (
 	reserved = map[string]bool{
 		"admin": true, "root": true, "administrator": true, "operator": true, "oper": true, "system": true,
-		"server": true, "a09f": true, "help": true, "support": true, "staff": true,
+		"server": true, "snailog": true, "help": true, "support": true, "staff": true,
 		"soju": true, "solanum": true, "atheme": true,
 	}
 	emailRe = regexp.MustCompile(`^[^@\s<>"',;]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$`)
@@ -175,14 +175,14 @@ func (s *server) resetRequest(q *req) (any, error) {
 	ctx := q.r.Context()
 	user := q.lower("username")
 	if !validID(user) {
-		return nil, fail(400, "Please enter your a09f ID.")
+		return nil, fail(400, "Please enter your snailog ID.")
 	}
 	if !s.bouncer.userExists(ctx, user) {
-		return nil, fail(404, "There's no a09f account with that ID.")
+		return nil, fail(404, "There's no snailog account with that ID.")
 	}
 	email := s.getEmail(ctx, user)
 	if email == "" {
-		return nil, fail(409, "This account has no recovery email, so its password can't be reset here. Please contact the a09f admin.")
+		return nil, fail(409, "This account has no recovery email, so its password can't be reset here. Please contact the snailog admin.")
 	}
 	t := now()
 	var sent int64
@@ -195,10 +195,10 @@ func (s *server) resetRequest(q *req) (any, error) {
 		user, codeHash(user, code), t+resetCodeTTL, t); err != nil {
 		return nil, err
 	}
-	body := fmt.Sprintf("Hi %s,\n\nYour a09f password reset code is: %s\n\n"+
-		"Enter it in the a09f app within %d minutes to choose a new password.\n"+
+	body := fmt.Sprintf("Hi %s,\n\nYour snailog password reset code is: %s\n\n"+
+		"Enter it in the snailog app within %d minutes to choose a new password.\n"+
 		"If you didn't ask for this, you can ignore this email: your password stays the same.\n", user, code, resetCodeTTL/60)
-	if err := s.sendMail(email, "Your a09f password reset code", body); err != nil {
+	if err := s.sendMail(email, "Your snailog password reset code", body); err != nil {
 		log.Printf("reset mail for %s failed: %v", user, err)
 		s.db.Exec(ctx, `DELETE FROM resets WHERE uname = $1`, user)
 		return nil, fail(503, "Couldn't send the email right now. Please try again later.")
@@ -320,7 +320,7 @@ func (s *server) seedDemo(ctx context.Context, users []string, password string) 
 		if err := s.createAccount(ctx, u, password); err != nil {
 			return fmt.Errorf("%s: %v", u, err)
 		}
-		s.setEmail(ctx, u, u+"@demo.a09f.invalid")
+		s.setEmail(ctx, u, u+"@demo.snailog.invalid")
 		fmt.Printf("%s: created\n", u)
 	}
 	return nil

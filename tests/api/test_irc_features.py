@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""The IRC behaviour the a09f app relies on, checked against the real stack
+"""The IRC behaviour the snailog app relies on, checked against the real stack
 (soju -> solanum + atheme). Uses alice and bob (both linked to NickServ);
 the test room is registered and dropped again.
 
 - friends-only: user mode +g + ACCEPT (716/718)
-- STATUS lines in #a09f-presence reach others live
+- STATUS lines in #snailog-presence reach others live
 - moderation: $a: account extbans (mute +q, ban +b), KICK, KNOCK (710)
 - ChanServ: REGISTER, FLAGS AOP, ENTRYMSG on join, MLOCK with key/limit
 - history: CHATHISTORY BEFORE, soju SEARCH
@@ -17,7 +17,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
-from a09f import Check, Irc, DEMO_PASSWORD, drop_room  # noqa: E402
+from snailog import Check, Irc, DEMO_PASSWORD, drop_room  # noqa: E402
 
 check = Check("IRC features used by the app")
 room = "#zz-test-irc"
@@ -39,11 +39,11 @@ try:
 
     # presence room (invisible / pre-away is covered by tests/e2e)
     for c in (a, b):
-        c.send("JOIN #a09f-presence")
+        c.send("JOIN #snailog-presence")
     a.read(1); b.read(1)
-    a.send("PRIVMSG #a09f-presence :STATUS busy")
-    check("STATUS line reaches others live", b.wait(r":alice!\S+ PRIVMSG #a09f-presence :?STATUS busy", 5))
-    a.send("PRIVMSG #a09f-presence :STATUS available")
+    a.send("PRIVMSG #snailog-presence :STATUS busy")
+    check("STATUS line reaches others live", b.wait(r":alice!\S+ PRIVMSG #snailog-presence :?STATUS busy", 5))
+    a.send("PRIVMSG #snailog-presence :STATUS available")
 
     # friends-only (+g)
     a.send("ACCEPT -bob"); a.send("MODE alice +g"); a.read(1)     # bob may be on the list from the app

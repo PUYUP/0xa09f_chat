@@ -19,7 +19,7 @@ import signal
 import sys
 import time
 
-from a09f import Api, Irc
+from snailog import Api, Irc
 
 
 class Peer:

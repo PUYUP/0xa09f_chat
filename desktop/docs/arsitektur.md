@@ -1,4 +1,4 @@
-# Arsitektur app desktop a09f
+# Arsitektur app desktop snailog
 
 ## Gambaran
 
@@ -15,10 +15,10 @@
 
 - **Rust (`lib.rs`) tipis**: membuka TCP ke soju dan meneruskan baris IRC
   mentah (`connect`/`send`/`disconnect`, event `irc-line`/`irc-closed`),
-  plus keychain (`cred_*`), tray, autostart, deep link `a09f://`, nama
+  plus keychain (`cred_*`), tray, autostart, deep link `snailog://`, nama
   perangkat, dan menulis file export ke Downloads. Semua protokol IRC ada di
   JavaScript.
-- **soju** adalah bouncer: setiap akun a09f = user soju dengan satu koneksi
+- **soju** adalah bouncer: setiap akun snailog = user soju dengan satu koneksi
   upstream permanen ke solanum. Karena itu setiap akun **selalu online di
   IRC** — "offline" di app = soju `auto-away` (tidak ada perangkat
   tersambung). History, read marker, dan pencarian juga dari soju.
@@ -43,7 +43,7 @@
 
 - Online/offline: `away-notify` + WHOIS (cache WHO soju bisa basi) + MONITOR.
 - Status (Busy, custom …): baris `STATUS <kode> [teks]` di room tersembunyi
-  `#a09f-presence` (+nts), diumumkan ulang tiap sign in (history soju per akun).
+  `#snailog-presence` (+nts), diumumkan ulang tiap sign in (history soju per akun).
 - Jam aktif, zona waktu, last seen, warna nama: service akun.
 
 ## Identitas pesan

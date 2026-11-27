@@ -11,8 +11,8 @@ DOWNLOADS = os.path.expanduser("~/Downloads")
 def _(path):
     path = os.path.realpath(path)
     name = os.path.basename(path)
-    # Only ever delete an a09f export in Downloads.
-    if os.path.dirname(path) == os.path.realpath(DOWNLOADS) and name.startswith("a09f-") and name.endswith(".json"):
+    # Only ever delete an snailog export in Downloads.
+    if os.path.dirname(path) == os.path.realpath(DOWNLOADS) and name.startswith("snailog-") and name.endswith(".json"):
         os.remove(path)
         print(f"[peer bob] removed {name}", flush=True)
 

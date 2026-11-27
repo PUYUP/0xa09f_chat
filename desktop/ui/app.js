@@ -1,4 +1,4 @@
-/* a09f desktop client — IRC protocol logic over the Soju bouncer.
+/* snailog desktop client — IRC protocol logic over the Soju bouncer.
  * Rust side (src-tauri) is a raw TCP bridge: invoke('send', line) and
  * events 'irc-line' / 'irc-closed'.
  *
@@ -23,11 +23,11 @@ const NETWORK = "solanum";        // soju upstream network name
 const ACCOUNT_URL = "http://127.0.0.1:16680";     // server/api: create account, recovery email, reset, …
 const REGISTER_URL = `${ACCOUNT_URL}/register`;
 const DEFAULT_ROOM = "#lobby";    // everyone lands here if they're in no room yet
-const BURST_TOKEN = "a09f-burst-done";
-/* Hidden room every a09f app joins (server/scripts/setup-rooms.py). It carries
+const BURST_TOKEN = "snailog-burst-done";
+/* Hidden room every snailog app joins (server/scripts/setup-rooms.py). It carries
  * status messages ("STATUS busy …", kept in soju history) and, because
  * everyone shares it, live Online/Offline changes via away-notify. */
-const PRESENCE_ROOM = "#a09f-presence";
+const PRESENCE_ROOM = "#snailog-presence";
 const PRESENCE_HISTORY = 500;
 const HISTORY_LIMIT = 100;        // messages fetched per conversation
 const TARGETS_DAYS = 30;          // private chats active within this window are restored
@@ -415,7 +415,7 @@ async function accountApi(path, body) {
   const data = await res.json().catch(() => ({}));
   return { ok: res.ok && !!data.ok, data };
 }
-const OFFLINE_MSG = "Can't reach a09f right now. Please try again later.";
+const OFFLINE_MSG = "Can't reach snailog right now. Please try again later.";
 const EMAIL_RE = /^[^@\s<>"',;]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 
 function syncStatusUi() {
@@ -482,7 +482,7 @@ function renderMsg(m) {
     b.onclick = () => invoke("plugin:opener|reveal_item_in_dir", { path: m.reveal }).catch(() => {});
     div.querySelector(".txt").appendChild(b);
   }
-  const invite = !deleted && (inviteRoom((stripIrc(body).match(/a09f:\/\/join\/\S+/) || [])[0]) || inviteRoom(firstUrl(body)));
+  const invite = !deleted && (inviteRoom((stripIrc(body).match(/snailog:\/\/join\/\S+/) || [])[0]) || inviteRoom(firstUrl(body)));
   const link = withMeta && !deleted && !poll && !evm && !invite && S.token && firstUrl(body);
   if (invite) div.querySelector(".txt").insertAdjacentHTML("beforeend",
     ` <button class="invite-join" data-room="${esc(invite)}">💬 Join ${esc(roomName(invite))}</button>`);
@@ -870,7 +870,7 @@ const ROOM_ERRORS = {
   474: "You're banned from that room.",
   475: "That room needs a password.",
   477: "You need a registered name to join that room.",
-  401: "There's no a09f user with that ID.",
+  401: "There's no snailog user with that ID.",
   482: "Only the room's moderators can do that.",
 };
 
@@ -928,7 +928,7 @@ function onNumeric(num, params, trailing) {
       doDisconnect("Wrong ID or password. Please try again.", true);
       return;
   }
-  if (num === 401 && params[1]) { sysError(`There's no a09f user with the ID "${params[1]}".`); return; }
+  if (num === 401 && params[1]) { sysError(`There's no snailog user with the ID "${params[1]}".`); return; }
   if (num === 473 && isConference(params[1])) { sysError("You need a new invite to join this conference."); return; }
   if (num === 473) { offerKnock(params[1]); return; }
   if (num === 475) { addMsg(null, { who: "Error", txt: `${roomName(params[1])} needs a password.`, cls: "error", askKey: params[1] }); return; }
@@ -1041,7 +1041,7 @@ const STATUS_PRESETS = {
   // with draft/pre-away), which everyone else already reads as Offline.
   invisible: { label: "Invisible",     state: "offline" },
 };
-const invisibleKey = () => `a09f.invisible.${S.account}`;
+const invisibleKey = () => `snailog.invisible.${S.account}`;
 
 /* Effective status for a nick: {state: online|busy|away|offline|unknown, label}.
  * Offline = soju auto-away (no device connected), MONITOR offline, or no such
@@ -1150,7 +1150,7 @@ function setMyStatus(code, text) {
 }
 
 /* Initial state: WHOIS (fresh, unlike soju's cached WHO) for friends and the
- * people on screen; MONITOR covers friends who aren't on a09f/soju. */
+ * people on screen; MONITOR covers friends who aren't on snailog/soju. */
 function startPresence() {
   // Friends arrive from the account service (startSocial → applyFriends).
   clearTimeout(S.presenceTimer);
@@ -1177,7 +1177,7 @@ function onWhoisReply(num, params, trailing) {
   if (num === 401) {
     S.whois.delete(key); clearTimeout(q.addTimer);
     setPresence(q.nick, { exists: false });
-    if (q.add) addFailed(q.nick, `There's no a09f user with the ID "${q.nick}".`);
+    if (q.add) addFailed(q.nick, `There's no snailog user with the ID "${q.nick}".`);
   }
   if (num === 318 && S.whois.get(key) === q) {
     S.whois.delete(key); clearTimeout(q.addTimer);
@@ -1219,7 +1219,7 @@ async function socialApi(path, body = null, retry = true) {
 }
 
 async function openSession() {
-  S.deviceName ||= await invoke("device_name").catch(() => "a09f desktop");
+  S.deviceName ||= await invoke("device_name").catch(() => "snailog desktop");
   const { ok, data } = await accountApi("/session", { username: S.account, password: S.pw, device: S.deviceName });
   if (!ok) throw new Error(data.error || "Couldn't reach your friends list.");
   S.token = data.token;
@@ -1259,7 +1259,7 @@ async function startSocial() {
 
 /* Friends from the old this-computer-only list become friend requests. */
 async function migrateLocalFriends() {
-  const key = `a09f.friends.${S.account}`;
+  const key = `snailog.friends.${S.account}`;
   let old = [];
   try { old = JSON.parse(localStorage.getItem(key)) || []; } catch {}
   localStorage.removeItem(key);
@@ -1278,7 +1278,7 @@ function openEvents() {
     refreshFriends();
     sys(`${d.from} wants to add you as a friend. Answer in your Friends list.`, "system");
     Sound.play("buzz");
-    notify(`${d.from} wants to be your friend`, d.msg || "Open a09f to accept or decline.", null);
+    notify(`${d.from} wants to be your friend`, d.msg || "Open snailog to accept or decline.", null);
   });
   on("friend-accepted", (d) => {
     refreshFriends();
@@ -1383,7 +1383,7 @@ async function friendCall(path, body, okMessage) {
 /* Ask someone to be your friend (or accept them, if they already asked). */
 async function addFriend(nick, group = DEFAULT_GROUP, msg = "") {
   nick = (nick || "").trim().replace(/^@/, "").toLowerCase();
-  if (!/^[a-z][a-z0-9_-]{2,15}$/.test(nick)) { addErr("That doesn't look like an a09f ID."); return false; }
+  if (!/^[a-z][a-z0-9_-]{2,15}$/.test(nick)) { addErr("That doesn't look like an snailog ID."); return false; }
   if (keyOf(nick) === keyOf(S.me)) { addErr("You can't add yourself as a friend."); return false; }
   if (isFriend(nick)) { addErr(`${nick} is already your friend.`); return false; }
   if (addFormOpen()) showAddMsg(`Sending a request to ${nick}…`);
@@ -1668,7 +1668,7 @@ S.focused = document.hasFocus();
 /* Original sounds synthesized with WebAudio — no audio files. */
 const Sound = {
   ctx: null,
-  muted: localStorage.getItem("a09f.muted") === "1",
+  muted: localStorage.getItem("snailog.muted") === "1",
   ensure() {
     if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (this.ctx.state === "suspended") this.ctx.resume();
@@ -1711,7 +1711,7 @@ const Sound = {
 
 function setMuted(m) {
   Sound.muted = m;
-  localStorage.setItem("a09f.muted", m ? "1" : "0");
+  localStorage.setItem("snailog.muted", m ? "1" : "0");
   $("btnSound").firstElementChild.textContent = m ? "🔇" : "🔊";
   $("btnSound").lastElementChild.textContent = m ? "Muted" : "Sound";
   $("btnSound").title = "Sounds & Do Not Disturb";
@@ -1801,7 +1801,7 @@ function totalUnread() {
 
 function updateTitle() {
   const n = S.phase === "online" ? totalUnread() : 0;
-  const title = n ? `a09f (${n > 99 ? "99+" : n})` : "a09f";
+  const title = n ? `snailog (${n > 99 ? "99+" : n})` : "snailog";
   if (title === S.title) return;
   S.title = title;
   document.title = title;
@@ -1819,7 +1819,7 @@ document.addEventListener("pointerdown", () => { try { Sound.ensure(); } catch {
 
 /* ---------- NickServ account link + rooms you own ---------- */
 
-/* Every a09f account gets a matching NickServ (Atheme) account, so rooms can
+/* Every snailog account gets a matching NickServ (Atheme) account, so rooms can
  * be owned and nicks protected. The app does it at sign-in because it's the
  * only place that knows the password; soju then logs in by itself via SASL. */
 function checkAccountLink() {
@@ -1838,7 +1838,7 @@ function onSelfWhoisDone() {
   }
   if (!S.pw || /\s/.test(S.pw)) { S.link = "unavailable"; return; }   // Atheme can't take spaces
   S.link = "registering";
-  send(`PRIVMSG NickServ :REGISTER ${S.pw} ${S.me.toLowerCase()}@users.a09f.invalid`);
+  send(`PRIVMSG NickServ :REGISTER ${S.pw} ${S.me.toLowerCase()}@users.snailog.invalid`);
 }
 
 function onNickServ(text) {
@@ -2005,7 +2005,7 @@ function pwSend(line) {
   S.pwChange.timer = setTimeout(() => {
     if (S.pwChange?.step === step) pwFail(step === "soju"
       ? "Couldn't change your password right now. Please try again."
-      : "Your password was changed, but a09f couldn't finish updating everything. Please sign out and back in.");
+      : "Your password was changed, but snailog couldn't finish updating everything. Please sign out and back in.");
   }, PW_STEP_TIMEOUT);
   send(line);
 }
@@ -2185,7 +2185,7 @@ function doConference() {
   // Several IDs may be typed at once: "carol, dave eve"
   const others = $("cfOther").value.split(/[\s,;]+/).filter(Boolean);
   const bad = others.filter((o) => !/^[a-z][a-z0-9_-]{2,15}$/i.test(o));
-  if (bad.length) return showMsg("cfMsg", `"${bad[0]}" doesn't look like an a09f ID.`, "error");
+  if (bad.length) return showMsg("cfMsg", `"${bad[0]}" doesn't look like an snailog ID.`, "error");
   if (others.some((o) => keyOf(o) === keyOf(S.me))) return showMsg("cfMsg", "You don't need to invite yourself!", "error");
   for (const o of others) if (!picked.some((p) => keyOf(p) === keyOf(o))) picked.push(o);
   if (!picked.length) return showMsg("cfMsg", "Pick at least one person to invite.", "error");
@@ -2495,14 +2495,14 @@ const IRC_COLORS = ["#ffffff", "#000000", "#00007f", "#009300", "#ff0000", "#7f0
 const PICKER_COLORS = [1, 2, 3, 4, 5, 6, 7, 10, 12, 13, 14];     // readable on white
 
 function loadStyle() {
-  try { S.style = { b: false, i: false, u: false, color: null, ...JSON.parse(localStorage.getItem("a09f.style")) }; }
+  try { S.style = { b: false, i: false, u: false, color: null, ...JSON.parse(localStorage.getItem("snailog.style")) }; }
   catch { S.style = { b: false, i: false, u: false, color: null }; }
   syncStyleUi();
 }
 
 function setStyle(patch) {
   S.style = { ...S.style, ...patch };
-  localStorage.setItem("a09f.style", JSON.stringify(S.style));
+  localStorage.setItem("snailog.style", JSON.stringify(S.style));
   syncStyleUi();
 }
 
@@ -2613,7 +2613,7 @@ function smileyMenu(e) {
 function openFind() {
   $("findDialog").style.display = "";
   $("fdQuery").value = "";
-  $("fdResults").innerHTML = `<div class="empty-hint">Type part of an a09f ID to search.</div>`;
+  $("fdResults").innerHTML = `<div class="empty-hint">Type part of an snailog ID to search.</div>`;
   $("fdQuery").focus();
   loadSuggestions();
 }
@@ -2725,7 +2725,7 @@ function openSearch() {
     sel.add(new Option(x.kind === "room" ? roomLabel(x.name) : `Chat with ${x.name}`, x.name, false,
       c && keyOf(x.name) === keyOf(c.name)));
   }
-  $("srResults").innerHTML = `<div class="empty-hint">Search the messages a09f has kept for you.</div>`;
+  $("srResults").innerHTML = `<div class="empty-hint">Search the messages snailog has kept for you.</div>`;
   $("srQuery").focus(); $("srQuery").select();
 }
 function closeSearch() { $("searchDialog").style.display = "none"; }
@@ -2896,7 +2896,7 @@ function onMentionKey(e) {
 
 /* Everyone reaches solanum through soju from one IP, so bans and mutes must
  * never use the host: they target the account ($a:<id>, extb_account) and the
- * nick (<id>!*@*, for people not logged in to NickServ). In a09f the ID, the
+ * nick (<id>!*@*, for people not logged in to NickServ). In snailog the ID, the
  * nick and the NickServ account are the same word. */
 const personMasks = (nick) => [`$a:${nick}`, `${nick}!*@*`];
 const maskNick = (mask) => (mask.match(/^\$a:(.+)$/) || mask.match(/^([^!]+)!\*@\*$/) || [])[1] || null;
@@ -3244,12 +3244,12 @@ async function giveRoom() {
   const to = $("rdGiveTo").value.trim().toLowerCase();
   if (!c || !amFounder(c)) return;
   if (!/^[a-z][a-z0-9_-]{2,15}$/.test(to) || keyOf(to) === keyOf(S.me)) {
-    showMsg("rdMsg", "Type the a09f ID of the new owner.", "error"); return;
+    showMsg("rdMsg", "Type the snailog ID of the new owner.", "error"); return;
   }
   showMsg("rdMsg", `Giving ${roomName(c.name)} to ${to}…`);
   const r = await csAsk(`FLAGS ${c.name} ${to} +F`, /were set on|not registered|not authorized|too many/i);
   if (!r.some((l) => /were set on/i.test(l))) {
-    const why = r.find((l) => /not registered/i.test(l)) ? `${to} needs to sign in to a09f once before they can own a room.`
+    const why = r.find((l) => /not registered/i.test(l)) ? `${to} needs to sign in to snailog once before they can own a room.`
       : r.find((l) => /too many/i.test(l)) ? `${to} already owns the maximum number of rooms.`
       : "Couldn't give the room away right now.";
     showMsg("rdMsg", why, "error");
@@ -3390,9 +3390,9 @@ async function deleteMessage(m) {
   } catch (e) { sys(e.message, "error"); }
 }
 
-/* ---------- announcements from a09f admins ---------- */
+/* ---------- announcements from snailog admins ---------- */
 
-const annSeenKey = () => `a09f.annSeen.${S.account}`;
+const annSeenKey = () => `snailog.annSeen.${S.account}`;
 
 async function loadAnnouncements() {
   try {
@@ -3409,7 +3409,7 @@ function showAnnouncement(a, live = false) {
   $("annBar").style.display = "";
   if (live) {
     Sound.play("buzz");
-    notify("📢 a09f announcement", a.text, null);
+    notify("📢 snailog announcement", a.text, null);
   }
 }
 
@@ -3440,7 +3440,7 @@ async function sendAnnouncement() {
   } finally { $("anSend").disabled = false; }
 }
 
-/* ---------- people online (with a09f open) ---------- */
+/* ---------- people online (with snailog open) ---------- */
 
 function setOnlineCount(n) {
   S.onlineCount = n;
@@ -3680,7 +3680,7 @@ async function createPoll(c, spec) {
   if (parts.length < 3) { sys("Write it like: /poll Where to eat? | Bakso | Sate | Pizza", "tip"); return; }
   try {
     const { id } = await socialApi("/poll/create", { room: keyOf(c.name), question: parts[0], options: parts.slice(1) });
-    sendTo(c.name, `📊 Poll: ${parts[0]} — ${parts.slice(1).join(" / ")} (vote in a09f) [poll:${id}]`);
+    sendTo(c.name, `📊 Poll: ${parts[0]} — ${parts.slice(1).join(" / ")} (vote in snailog) [poll:${id}]`);
   } catch (e) { sys(e.message, "error"); }
 }
 
@@ -3892,7 +3892,7 @@ setInterval(() => {
 
 function setDark(on) {
   document.body.classList.toggle("dark", on);
-  localStorage.setItem("a09f.dark", on ? "1" : "0");
+  localStorage.setItem("snailog.dark", on ? "1" : "0");
   $("btnDark").textContent = on ? "☀️" : "🌙";
   $("btnDark").title = on ? "Switch to light mode" : "Switch to dark mode";
 }
@@ -4005,10 +4005,10 @@ function renderSaved() {
 /* ---------- Do Not Disturb / quiet hours ---------- */
 
 function dnd() {
-  try { return { until: 0, quiet: false, from: "22:00", to: "07:00", ...JSON.parse(localStorage.getItem("a09f.dnd")) }; }
+  try { return { until: 0, quiet: false, from: "22:00", to: "07:00", ...JSON.parse(localStorage.getItem("snailog.dnd")) }; }
   catch { return { until: 0, quiet: false, from: "22:00", to: "07:00" }; }
 }
-function setDnd(patch) { localStorage.setItem("a09f.dnd", JSON.stringify({ ...dnd(), ...patch })); syncSoundButton(); }
+function setDnd(patch) { localStorage.setItem("snailog.dnd", JSON.stringify({ ...dnd(), ...patch })); syncSoundButton(); }
 
 const minutesOf = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
 
@@ -4625,7 +4625,7 @@ async function createEvent() {
   const start = Math.floor(new Date(when).getTime() / 1000);
   try {
     const { id } = await socialApi("/event/create", { room: S.evCacheRoom, title, start });
-    sendTo(S.evCacheRoom, `📅 Event: ${title} — ${new Date(start * 1000).toISOString().replace(".000", "")} (RSVP in a09f) [event:${id}]`);
+    sendTo(S.evCacheRoom, `📅 Event: ${title} — ${new Date(start * 1000).toISOString().replace(".000", "")} (RSVP in snailog) [event:${id}]`);
     $("evName").value = "";
     showMsg("evMsg", "Event created and announced in the room.", "ok");
     loadRoomEvents();
@@ -4685,7 +4685,7 @@ async function loadSuggestions() {
     const { suggestions } = await socialApi("/suggestions");
     if ($("fdQuery").value.trim()) return;                  // they started searching meanwhile
     el.innerHTML = suggestions.length ? `<div class="fd-sugg-h">✨ People you may know</div>`
-      : `<div class="empty-hint">Type part of an a09f ID to search.</div>`;
+      : `<div class="empty-hint">Type part of an snailog ID to search.</div>`;
     for (const sgg of suggestions) {
       tzOf(sgg.nick);
       const row = document.createElement("div");
@@ -4704,9 +4704,9 @@ async function loadSuggestions() {
 /* ---------- invite links ---------- */
 
 const inviteUrl = (room) => `${ACCOUNT_URL}/join/${encodeURIComponent(roomName(room))}`;
-const INVITE_LINK_RE = new RegExp(`^(?:a09f://join/|${ACCOUNT_URL.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}/join/)([^\\s/?#]+)$`, "i");
+const INVITE_LINK_RE = new RegExp(`^(?:snailog://join/|${ACCOUNT_URL.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}/join/)([^\\s/?#]+)$`, "i");
 
-/* An invite link (a09f://join/x or the web page) -> "#x", else null. */
+/* An invite link (snailog://join/x or the web page) -> "#x", else null. */
 function inviteRoom(text) {
   const m = (text || "").trim().match(INVITE_LINK_RE);
   return m ? "#" + decodeURIComponent(m[1]).replace(/^#/, "") : null;
@@ -4812,10 +4812,10 @@ async function exportConversation(c) {
     return out;
   });
   const doc = {
-    app: "a09f", exported_by: S.me, exported_at: new Date().toISOString(), timezone: MY_TZ,
+    app: "snailog", exported_by: S.me, exported_at: new Date().toISOString(), timezone: MY_TZ,
     conversation: { name: c.name, type: c.kind === "room" ? "room" : "private" }, count: messages.length, messages,
   };
-  const name = `a09f-${roomName(c.name)}-${new Date().toISOString().slice(0, 10)}`;
+  const name = `snailog-${roomName(c.name)}-${new Date().toISOString().slice(0, 10)}`;
   try {
     const path = await invoke("save_export", { name, contents: JSON.stringify(doc, null, 2) });
     addMsg(c.name, { who: "System", txt: `⬇ Exported ${messages.length} messages to ${path}`, cls: "service", reveal: path });
@@ -4859,9 +4859,9 @@ async function doSignIn() {
     await invoke("connect", { addr: SERVER });
     send("CAP LS 302");
     send(`NICK ${u}/${NETWORK}`);
-    send(`USER ${u}/${NETWORK} 0 * :a09f`);
+    send(`USER ${u}/${NETWORK} 0 * :snailog`);
   } catch {
-    setPhase("offline", "Can't reach a09f right now. Please try again later.", true);
+    setPhase("offline", "Can't reach snailog right now. Please try again later.", true);
   }
 }
 
@@ -5109,7 +5109,7 @@ async function doCreateAccount() {
     showMsg("signinMsg", "Account created! Signing you in…", "ok");
     doSignIn();
   } catch {
-    showMsg("createMsg", "Can't reach a09f right now. Please try again later.", "error");
+    showMsg("createMsg", "Can't reach snailog right now. Please try again later.", "error");
   } finally {
     btn.disabled = false; btn.textContent = "Create Account";
   }
@@ -5119,7 +5119,7 @@ async function doCreateAccount() {
 
 async function sendResetCode() {
   const username = $("ruser").value.trim().toLowerCase();
-  if (!/^[a-z][a-z0-9_-]{2,15}$/.test(username)) { showMsg("resetMsg", "Please enter your a09f ID.", "error"); return; }
+  if (!/^[a-z][a-z0-9_-]{2,15}$/.test(username)) { showMsg("resetMsg", "Please enter your snailog ID.", "error"); return; }
   const btn = $("btnSendCode");
   btn.disabled = true; btn.textContent = "Sending…";
   showMsg("resetMsg", "");
@@ -5216,7 +5216,7 @@ async function checkRecoveryEmail() {
 
 /* The ID and the checkboxes live in localStorage; the password only ever in
  * the OS keychain (Rust cred_* commands). */
-const LS = { lastId: "a09f.lastId", remember: "a09f.remember", auto: "a09f.autoSignIn" };
+const LS = { lastId: "snailog.lastId", remember: "snailog.remember", auto: "snailog.autoSignIn" };
 
 async function initSignInOptions() {
   const remember = localStorage.getItem(LS.remember) === "1";
@@ -5379,7 +5379,7 @@ $("btnSaved").onclick = openSaved;
 $("svClose").onclick = closeSaved;
 $("savedDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") closeSaved(); });
 $("btnDark").onclick = () => setDark(!document.body.classList.contains("dark"));
-setDark(localStorage.getItem("a09f.dark") === "1");
+setDark(localStorage.getItem("snailog.dark") === "1");
 $("fmtExpire").onclick = (e) => { e.stopPropagation(); expireMenu(e); };
 $("fmtSchedule").onclick = (e) => { e.stopPropagation(); scheduleMenu(e); };
 listen("deep-link", (e) => {
@@ -5443,7 +5443,7 @@ $("fmtMore").onclick = (e) => { e.stopPropagation(); smileyMenu(e); };
 loadStyle();
 
 listen("irc-line", (e) => handleLine(e.payload))
-  .catch(() => setPhase("offline", "Something went wrong starting a09f. Please restart the app.", true));
+  .catch(() => setPhase("offline", "Something went wrong starting snailog. Please restart the app.", true));
 listen("irc-closed", () => {
   if (S.phase === "offline" || S.authFailed) return;
   const wasOnline = S.phase === "online";

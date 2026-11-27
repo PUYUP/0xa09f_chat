@@ -1,4 +1,4 @@
-# a09f Desktop
+# snailog Desktop
 
 Client desktop IRC untuk stack `server/` (Solanum + Atheme + Soju) —
 dibangun dengan Tauri (Rust backend + vanilla JS frontend).
@@ -44,21 +44,21 @@ server/protokol di layar.
   - **Offline** = soju auto-away (tidak ada perangkat tersambung; network dibuat
     dengan `-auto-away true`), live via `away-notify`, awal via `WHOIS` (301)
   - **Pesan status** = baris `STATUS <code> [text]` di room tersembunyi
-    `#a09f-presence` (+s); dibaca dari riwayat soju saat sign in, dan
+    `#snailog-presence` (+s); dibaca dari riwayat soju saat sign in, dan
     diumumkan ulang tiap sign in (riwayat soju per akun)
-  - teman non-a09f dipantau via `MONITOR`
+  - teman non-snailog dipantau via `MONITOR`
 - **BUZZ!** (tombol di bawah chat, hanya di private chat, jeda 10 detik):
   dikirim sebagai `/me BUZZ!!` (klien IRC lain melihat "* bob BUZZ!!").
-  Penerima a09f: jendela bergoyang sungguhan (`setPosition`), dibawa ke depan,
+  Penerima snailog: jendela bergoyang sungguhan (`setPosition`), dibawa ke depan,
   chat-nya terbuka, suara buzz, notifikasi. BUZZ dari riwayat tidak menggoyang
 - **Notifikasi desktop** (`tauri-plugin-notification`) untuk pesan pribadi,
   BUZZ, nick disebut di room, dan teman online — hanya saat jendela tidak
   sedang dilihat. Di build dev macOS notifikasi tampil atas nama Terminal
 - **Suara** (disintesis WebAudio, tanpa file audio): pesan masuk, mention,
   BUZZ, teman online/offline, sign in. Tombol 🔊/🔇 di toolbar (diingat)
-- Judul jendela menampilkan total belum dibaca, mis. "a09f (3)"
+- Judul jendela menampilkan total belum dibaca, mis. "snailog (3)"
 - **Akun NickServ otomatis**: saat sign in app cek `WHOIS <diri>` (330 =
-  sudah login). Kalau belum: `NickServ REGISTER <password> <id>@users.a09f.invalid`
+  sudah login). Kalau belum: `NickServ REGISTER <password> <id>@users.snailog.invalid`
   (email unik: Atheme `maxusers = 5` per email), atau `IDENTIFY` kalau nick sudah
   terdaftar, lalu `BouncerServ sasl set-plain` supaya soju login sendiri tiap
   reconnect. Password hanya disimpan di memori selama sesi. Password dengan spasi
@@ -105,10 +105,10 @@ server/protokol di layar.
   localStorage, password di keychain OS (Rust `keyring`: Keychain macOS /
   Credential Manager Windows). Password tersimpan dihapus otomatis kalau
   ditolak server
-- **Tray**: tombol tutup menyembunyikan jendela, a09f tetap jalan (pesan,
+- **Tray**: tombol tutup menyembunyikan jendela, snailog tetap jalan (pesan,
   BUZZ, notifikasi tetap masuk). Ikon tray: klik = buka; menu Open / Sign Out /
   Quit. macOS: klik ikon Dock juga membuka lagi
-- **Start a09f when my computer starts** (`tauri-plugin-autostart`): dimulai
+- **Start snailog when my computer starts** (`tauri-plugin-autostart`): dimulai
   tersembunyi di tray dengan argumen `--autostart`; kombinasikan dengan
   auto sign-in
 - **Serba live (SSE dari service akun)**: hapus teman berlaku dua arah dan
@@ -150,14 +150,14 @@ server/protokol di layar.
 - **Pengumuman admin** (📢 Announce, hanya ID di `ADMIN_USERS`): banner kuning
   di atas percakapan semua app, live + untuk yang sign in dalam 7 hari;
   ditutup dengan ✕ (diingat per akun)
-- **Jumlah online** di header: orang yang sedang membuka app a09f (koneksi
+- **Jumlah online** di header: orang yang sedang membuka app snailog (koneksi
   live ke service akun) — LUSERS tidak berguna karena soju membuat semua akun
   selalu terhubung
 - **Aksi di tiap pesan** (arahkan kursor ke pesan): 😀 reaksi (👍 ❤️ 😂 😮 😢 🙏
   🎉 🔥, chip dengan jumlah — klik untuk ikut/batal), ↩ Reply (pesan dikirim
   sebagai `↪ nama: “kutipan” balasan`, tetap terbaca di client IRC lain; di
-  a09f tampil sebagai kutipan), ✏️ Edit (pesanmu sendiri, tampil "(edited)" di
-  semua app a09f), 📌 Pin (moderator; bar di atas room, maks 5), 🗑 Hapus.
+  snailog tampil sebagai kutipan), ✏️ Edit (pesanmu sendiri, tampil "(edited)" di
+  semua app snailog), 📌 Pin (moderator; bar di atas room, maks 5), 🗑 Hapus.
   Reaksi/edit/pin disimpan service akun (`/react`, `/edit`, `/pin`,
   `/msgmeta`) dengan identitas pesan yang sama seperti hapus pesan; edit tidak
   terlihat di client IRC lain. Catatan: server tidak memverifikasi status
@@ -183,7 +183,7 @@ server/protokol di layar.
 - **Pesan menghilang** (⏳ di bar format: 1 menit / 1 jam / 1 hari): app
   mendaftarkan pesan ke service akun begitu server mengembalikannya
   (`/expire`); loop server mengubahnya jadi pesan terhapus tepat waktu.
-  Label ⏳ hitung mundur tampil di semua app a09f
+  Label ⏳ hitung mundur tampil di semua app snailog
 - **Mode gelap** (🌙/☀️ di header, diingat per komputer)
 - **Quick switcher**: Ctrl/Cmd+K → ketik sebagian nama room/teman/chat
   (huruf berurutan juga cocok: "lby" → lobby), ↑↓ Enter; bisa juga
@@ -245,15 +245,15 @@ server/protokol di layar.
   teman, orang yang aktif di room yang sama 14 hari terakhir, bonus zona waktu
   dekat
 - **Link undangan** (🔗 Link di judul room publik): link web
-  `http://…:16680/join/<room>` (halaman "Open in a09f" → `a09f://join/<room>`).
+  `http://…:16680/join/<room>` (halaman "Open in snailog" → `snailog://join/<room>`).
   Di dalam app, link undangan di chat jadi tombol "💬 Join …"; bisa ditempel
-  di kotak Join atau Cmd/Ctrl+K. Membuka `a09f://` dari luar app
+  di kotak Join atau Cmd/Ctrl+K. Membuka `snailog://` dari luar app
   (`tauri-plugin-deep-link`) bekerja di build yang terpasang, tidak di
   `tauri dev`
 - **"👁 Seen by"** di bawah pesan terakhirmu di room (room publik saja)
 - **Catatan pribadi** tentang seseorang di dialog profilnya (hanya kamu yang
   lihat), tampil juga di kartu hover
-- **⬇ Export** percakapan ke `~/Downloads/a09f-<nama>-<tanggal>.json`
+- **⬇ Export** percakapan ke `~/Downloads/snailog-<nama>-<tanggal>.json`
   (seluruh history dari soju, termasuk edit, hapus, dan reaksi); folder dipilih
   Rust, bukan JavaScript
 - **Perangkat yang login** (🔑 Password → Signed-in devices): nama perangkat
@@ -300,10 +300,10 @@ cd desktop
 npm install
 npm run dev        # tauri dev (window + hot reload frontend)
 # atau build binary:
-npm run build      # → src-tauri/target/release/bundle/macos/a09f.app
+npm run build      # → src-tauri/target/release/bundle/macos/snailog.app
 ```
 
-Binary debug juga bisa langsung: `src-tauri/target/debug/a09f-desktop`
+Binary debug juga bisa langsung: `src-tauri/target/debug/snailog-desktop`
 (setelah `cargo build` di `src-tauri/`).
 
 ## Cara kerja

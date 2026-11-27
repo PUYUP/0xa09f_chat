@@ -46,7 +46,7 @@ write_secret link-solanum-send    "$(get LINK_SOLANUM_SEND)"    required
 write_secret link-solanum-accept  "$(get LINK_SOLANUM_ACCEPT)"  required
 write_secret oper-admin-password  "$(get OPER_ADMIN_PASSWORD)"  required
 write_secret postgres-password    "$(get POSTGRES_PASSWORD)"    required
-write_secret a09f-db-password     "$(get A09F_DB_PASSWORD)"
+write_secret snailog-db-password     "$(get SNAILOG_DB_PASSWORD)"
 write_secret smtp-password        "$(get SMTP_PASSWORD)"
 
 # lib/pq reads PGPASSFILE for soju's postgres:// connection: pgpass format is

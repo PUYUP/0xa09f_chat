@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run e2e scenarios in the real a09f desktop app.
+"""Run e2e scenarios in the real snailog desktop app.
 
     python3 tests/e2e/run.py                 # all scenarios
     python3 tests/e2e/run.py friends rooms   # just these (names from scenarios/)
@@ -8,8 +8,8 @@
 How it works (no source files are touched):
   1. `cargo build` builds the debug app with the UI embedded. Debug builds
      have two test hooks (desktop/src-tauri/src/lib.rs): `test_scenario`
-     returns the file named by $A09F_TEST_SCENARIO, which app.js runs after
-     loading; `test_log` prints "A09F-TEST {json}" to stderr.
+     returns the file named by $SNAILOG_TEST_SCENARIO, which app.js runs after
+     loading; `test_log` prints "SNAILOG-TEST {json}" to stderr.
   2. For each scenario: prelude.js + scenarios/<name>.js are written to a temp
      file, scenarios/<name>.peer.py (if any) starts as the other people
      (bob, …), and the app is launched with the env var set.
@@ -33,9 +33,9 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 TAURI = os.path.join(REPO, "desktop", "src-tauri")
-APP = os.path.join(TAURI, "target", "debug", "a09f-desktop")
+APP = os.path.join(TAURI, "target", "debug", "snailog-desktop")
 SCEN = os.path.join(HERE, "scenarios")
-TIMEOUT = int(os.environ.get("A09F_E2E_TIMEOUT", "420"))
+TIMEOUT = int(os.environ.get("SNAILOG_E2E_TIMEOUT", "420"))
 
 
 def build():
@@ -72,7 +72,7 @@ def run(name):
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         time.sleep(3)                                  # let the peer sign in first
 
-    env = {**os.environ, "A09F_TEST_SCENARIO": tmp.name}
+    env = {**os.environ, "SNAILOG_TEST_SCENARIO": tmp.name}
     app = subprocess.Popen([APP], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     threading.Timer(4, bring_to_front, args=(app.pid,)).start()
 
@@ -83,9 +83,9 @@ def run(name):
         for line in app.stderr:
             if time.time() > deadline:
                 break
-            if not line.startswith("A09F-TEST "):
+            if not line.startswith("SNAILOG-TEST "):
                 continue
-            ev = json.loads(line[len("A09F-TEST "):])
+            ev = json.loads(line[len("SNAILOG-TEST "):])
             t = ev.get("type")
             if t == "check":
                 ok = ev["ok"]

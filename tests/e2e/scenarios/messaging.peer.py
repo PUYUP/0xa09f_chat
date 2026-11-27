@@ -1,7 +1,7 @@
 """Peer for messaging.js: bob."""
 import time
 
-from a09f import fnv
+from snailog import fnv
 from peer import Peer
 
 p = Peer("bob")

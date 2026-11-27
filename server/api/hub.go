@@ -90,7 +90,7 @@ func (h *hub) pushMany(users []string, event string, data any) {
 	}
 }
 
-// pushAll sends an event to everyone with a09f open.
+// pushAll sends an event to everyone with snailog open.
 func (h *hub) pushAll(event string, data any) {
 	msg := frame(event, data)
 	h.mu.RLock()
@@ -111,7 +111,7 @@ func (h *hub) listening(user string) bool {
 	return len(h.subs[user]) > 0
 }
 
-// onlineUsers is a snapshot of who has a09f open.
+// onlineUsers is a snapshot of who has snailog open.
 func (h *hub) onlineUsers() map[string]bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -128,7 +128,7 @@ func (h *hub) onlineCount() int {
 	return len(h.subs)
 }
 
-// onlineChanged tells everyone how many people have a09f open (debounced 2 s).
+// onlineChanged tells everyone how many people have snailog open (debounced 2 s).
 func (h *hub) onlineChanged() {
 	h.mu.Lock()
 	defer h.mu.Unlock()

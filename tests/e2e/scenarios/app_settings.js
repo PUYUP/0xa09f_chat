@@ -4,7 +4,7 @@
 check("signed in", await signIn("alice"));
 
 setDark(true);
-check("dark mode on", document.body.classList.contains("dark") && localStorage.getItem("a09f.dark") === "1");
+check("dark mode on", document.body.classList.contains("dark") && localStorage.getItem("snailog.dark") === "1");
 setDark(false);
 
 document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
@@ -44,7 +44,7 @@ closePwDialog();
 switchTo("#lobby");
 await exportConversation(conv("#lobby"));
 const done = conv("#lobby").msgs.at(-1);
-check("export to JSON in Downloads", /Exported \d+ messages to .*a09f-lobby-.*\.json/.test(done?.txt || ""), done?.txt);
+check("export to JSON in Downloads", /Exported \d+ messages to .*snailog-lobby-.*\.json/.test(done?.txt || ""), done?.txt);
 if (done?.reveal) peer(`rm ${done.reveal}`);
 await wait(1000);
 finish();

@@ -612,7 +612,7 @@ func (s *server) sendScheduled(ctx context.Context) {
 
 func (s *server) announce(q *req) (any, error) {
 	if !s.cfg.admins[q.me] {
-		return nil, fail(403, "Only a09f admins can send announcements.")
+		return nil, fail(403, "Only snailog admins can send announcements.")
 	}
 	text := cut(squash(q.raw("text")), 500)
 	if text == "" {

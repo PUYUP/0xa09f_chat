@@ -26,7 +26,7 @@ async function until(fn, ms = 20000) {
   return false;
 }
 async function signIn(user, password = "demo-1234") {
-  localStorage.setItem("a09f.autoSignIn", "0");
+  localStorage.setItem("snailog.autoSignIn", "0");
   if (S.phase !== "offline") { doDisconnect(""); await wait(500); }
   $("buser").value = user; $("bpass").value = password;
   doSignIn();

@@ -69,7 +69,7 @@ def main():
     if not CHROME:
         sys.exit("Google Chrome not found (set CHROME=...)")
     os.makedirs(OUT, exist_ok=True)
-    work = tempfile.mkdtemp(prefix="a09f-visual-")
+    work = tempfile.mkdtemp(prefix="snailog-visual-")
     for f in os.listdir(UI):
         if os.path.isfile(os.path.join(UI, f)):
             shutil.copy(os.path.join(UI, f), work)

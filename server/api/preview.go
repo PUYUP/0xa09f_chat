@@ -38,7 +38,7 @@ const (
 	fetchTimeout = 5 * time.Second
 	maxRedirects = 3
 	previewTTL   = 6 * time.Hour
-	previewUA    = "a09f-link-preview/1.0"
+	previewUA    = "snailog-link-preview/1.0"
 	maxPreviews  = 30 // per user per minute
 )
 

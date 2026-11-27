@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark: 5.000 user a09f aktif terhadap stack apa adanya.
+"""Benchmark: 5.000 user snailog aktif terhadap stack apa adanya.
 
 Setiap "user" adalah satu app yang terbuka, dan skrip ini mengirim persis
 permintaan yang dikirim app itu — tanpa mengubah kode server, tanpa container
@@ -24,7 +24,7 @@ semua proses mengerjakan jadwal yang sama, jadi beban ke server tetap
 "5.000 app hidup bersamaan".
 
 Akun: `POST /register` dibatasi 30 percobaan/jam dan 5 akun/jam per IP, jadi
-skrip hanya membuat akun yang belum ada (`A09F_BENCH_SEED=1`, default),
+skrip hanya membuat akun yang belum ada (`SNAILOG_BENCH_SEED=1`, default),
 dengan nama tetap `b01`…`b5000` — run berikutnya memakai akun yang sama.
 Akun baru perlu register NickServ sekali lewat IRC (app melakukannya saat
 sign in) supaya `sasl set-plain` bisa dipasang; itu juga yang dilakukan di
@@ -34,8 +34,8 @@ sini, sekaligus memastikan akun bisa dipakai mode `real`.
   python3 tests/api/bench_load.py --users 1500 --window 30
   python3 tests/api/bench_load.py --mode real --users 100   # password dicek SASL
 
-Env: A09F_BENCH_USERS, A09F_BENCH_WINDOW, A09F_BENCH_CONNS, A09F_BENCH_PROCS,
-A09F_BENCH_MODE, A09F_BENCH_SEED, A09F_DEMO_PASSWORD, A09F_API.
+Env: SNAILOG_BENCH_USERS, SNAILOG_BENCH_WINDOW, SNAILOG_BENCH_CONNS, SNAILOG_BENCH_PROCS,
+SNAILOG_BENCH_MODE, SNAILOG_BENCH_SEED, SNAILOG_DEMO_PASSWORD, SNAILOG_API.
 """
 
 import concurrent.futures as cf
@@ -51,12 +51,12 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
-from a09f import API, DEMO_PASSWORD  # noqa: E402
+from snailog import API, DEMO_PASSWORD  # noqa: E402
 
 DEMO = ["alice", "bob", "charlie", "diana", "evan", "frank", "grace", "henry",
         "irene", "jack", "kate", "leo", "mia", "nina", "oscar"]
 ROOM = "#zz-bench"
-PASSWORD = os.environ.get("A09F_BENCH_PASSWORD") or DEMO_PASSWORD
+PASSWORD = os.environ.get("SNAILOG_BENCH_PASSWORD") or DEMO_PASSWORD
 
 
 def user_id(i):
@@ -108,7 +108,7 @@ def seed(ids, workers=4):
     fixed (`b1` … `bN`) and only missing ones are created: the first run of
     `--users 5000` spreads the registration over hours (or you raise
     MAX_CREATES_PER_HOUR in server/.env); later runs create nothing. Everyone
-    registered here shares one password, `A09F_BENCH_PASSWORD`.
+    registered here shares one password, `SNAILOG_BENCH_PASSWORD`.
     """
     need = []
     last = ""
@@ -124,7 +124,7 @@ def seed(ids, workers=4):
     with cf.ThreadPoolExecutor(workers) as ex:
         reg = ex.map(lambda u: (u, call("POST", "/register",
                                         {"username": u, "password": PASSWORD,
-                                         "email": f"{u}@bench.a09f.invalid"})), need)
+                                         "email": f"{u}@bench.snailog.invalid"})), need)
         for u, (ok, r, _) in reg:
             if ok:
                 made.append(u)
@@ -141,14 +141,14 @@ def seed(ids, workers=4):
 def activate(ids):
     """Sign in over IRC like the app's first launch: register the NickServ
     account (same password) and `sasl set-plain`, so POST /session accepts it."""
-    from a09f import Irc
+    from snailog import Irc
     done = failed = 0
 
     def one(u):
         try:
             c = Irc(u, password=PASSWORD)
             time.sleep(0.3)
-            answers = c.service("NickServ", f"REGISTER {PASSWORD} {u}@users.a09f.invalid", 3)
+            answers = c.service("NickServ", f"REGISTER {PASSWORD} {u}@users.snailog.invalid", 3)
             if not any("registered" in a.lower() or "already" in a.lower() for a in answers):
                 c.service("NickServ", f"IDENTIFY {u} {PASSWORD}", 3)
             c.close()
@@ -199,12 +199,12 @@ def say(msg):
 
 def main():
     argv = sys.argv[1:]
-    users = opt(argv, "--users", "A09F_BENCH_USERS", 5000)
-    window = opt(argv, "--window", "A09F_BENCH_WINDOW", 60)
-    conns = opt(argv, "--conns", "A09F_BENCH_CONNS", 400)
-    mode = opt(argv, "--mode", "A09F_BENCH_MODE", "real")
-    think = opt(argv, "--think", "A09F_BENCH_THINK", 15)
-    procs = opt(argv, "--procs", "A09F_BENCH_PROCS", max(1, math.ceil(users / conns)))
+    users = opt(argv, "--users", "SNAILOG_BENCH_USERS", 5000)
+    window = opt(argv, "--window", "SNAILOG_BENCH_WINDOW", 60)
+    conns = opt(argv, "--conns", "SNAILOG_BENCH_CONNS", 400)
+    mode = opt(argv, "--mode", "SNAILOG_BENCH_MODE", "real")
+    think = opt(argv, "--think", "SNAILOG_BENCH_THINK", 15)
+    procs = opt(argv, "--procs", "SNAILOG_BENCH_PROCS", max(1, math.ceil(users / conns)))
 
     ids = [user_id(i) for i in range(users)]
     say(f"## {users} user aktif · {procs} proses × {conns} koneksi · window {window}s · "
@@ -298,7 +298,7 @@ if __name__ == "__main__":
     main()
 
 class Stream:
-    """One open /events connection, read the way tests/lib/a09f.py reads IRC:
+    """One open /events connection, read the way tests/lib/snailog.py reads IRC:
     non-blocking select, keep the raw line, answer nothing (SSE is one-way)."""
 
     def __init__(self, token, row):
@@ -361,7 +361,7 @@ def worker(idx, users, mode, window, think, out):
     report = {"idx": idx, "signin": [], "errors": 0, "streams": [], "frames": 0,
               "phase": "signin", "t0": time.time()}
     for u in users:
-        tok, secs = sign_in(u, f"a09f bench {idx}")
+        tok, secs = sign_in(u, f"snailog bench {idx}")
         report["signin"].append(secs)
         if not tok:
             report["errors"] += 1

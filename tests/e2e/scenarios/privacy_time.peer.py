@@ -1,7 +1,7 @@
 """Peer for privacy_time.js: frank (a stranger to alice)."""
 import time
 
-from a09f import sql
+from snailog import sql
 from peer import Peer
 
 # Commands come in through bob: messaging frank himself would put him on

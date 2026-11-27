@@ -36,7 +36,7 @@ else
 fi
 
 # MAIL_FROM may be "Name <addr>" — msmtp wants a bare address.
-MAIL_FROM=${MAIL_FROM:-a09f <no-reply@a09f.invalid>}
+MAIL_FROM=${MAIL_FROM:-snailog <no-reply@snailog.invalid>}
 if printf '%s' "$MAIL_FROM" | grep -q '<'; then
     MAIL_FROM=$(printf '%s' "$MAIL_FROM" | sed 's/.*<//; s/>.*//')
 fi

@@ -11,7 +11,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
-from a09f import API, Api, Check, sql, sse, wait_until  # noqa: E402
+from snailog import API, Api, Check, sql, sse, wait_until  # noqa: E402
 
 check = Check("rooms & people: events, categories, trending, suggestions, seen-by, notes, timezones")
 room = "#zz-test-rooms"
@@ -60,7 +60,7 @@ try:
 
     with urllib.request.urlopen(f"{API}/join/lobby") as r:
         page = r.read().decode()
-    check("invite page links to a09f://join/<room>", "a09f://join/lobby" in page)
+    check("invite page links to snailog://join/<room>", "snailog://join/lobby" in page)
     try:
         urllib.request.urlopen(f"{API}/join/%3Cscript%3E")
         check("invite page refuses odd names", False)
