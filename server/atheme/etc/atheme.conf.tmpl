@@ -240,12 +240,15 @@ loadmodule "modules/nickserv/listchans";
 loadmodule "modules/nickserv/listgroups";
 loadmodule "modules/nickserv/register";
 loadmodule "modules/nickserv/regnolimit";
-loadmodule "modules/nickserv/resetpass";
 loadmodule "modules/nickserv/restrict";
 loadmodule "modules/nickserv/return";
-loadmodule "modules/nickserv/setpass";
-#loadmodule "modules/nickserv/sendpass";
-loadmodule "modules/nickserv/sendpass_user";
+/* Password-recovery-via-email modules disabled: mta is off, so they cannot
+ * deliver anything, and password reset is handled by the a09f api service
+ * (sojuctl + NickServ SET PASSWORD quote). sendpass_user would let any user
+ * trigger password mailings.
+#loadmodule "modules/nickserv/resetpass";
+#loadmodule "modules/nickserv/setpass";
+#loadmodule "modules/nickserv/sendpass_user";
 loadmodule "modules/nickserv/set_core";
 loadmodule "modules/nickserv/set_accountname";
 loadmodule "modules/nickserv/set_email";
@@ -2306,20 +2309,10 @@ operclass "sra" {
 /* (*) Operator blocks specify accounts with certain privileges
  * Oper classes must be defined before they are used in operator blocks.
  */
-operator "jilles" {
-	/* operclass */
-	operclass = "sra";
-	/* password
-	 * Normally, the user needs to identify/log in using the account's
-	 * password, and may need to be an IRCop (see operclass::needoper
-	 * above). If you consider this not secure enough, you can
-	 * specify an additional password here, which the user must enter
-	 * using the OperServ IDENTIFY command, before the privileges can
-	 * be used.
-	 * The password must be encrypted if a crypto module is in use.
-	 */
-	#password = "$1$3gJMO9by$0G60YE6GqmuHVH3AnFPor1";
-};
+/* The former operator "jilles" (operclass sra, no password) was removed: a
+ * dormant Service Root Admin — if an account named "jilles" is ever
+ * registered it would silently gain sra privileges. Re-add deliberately with
+ * an oper password if SRA access is ever needed. */
 
 /******************************************************************************
  * INCLUDE CONFIGURATION SECTION.                                             *

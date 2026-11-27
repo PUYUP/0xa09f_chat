@@ -29,3 +29,4 @@ __pycache__/
 # test output
 tests/visual/out/
 __pycache__/
+backups/

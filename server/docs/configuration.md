@@ -175,6 +175,12 @@ Module aktif: `modules/protocol/charybdis` (kompatibel solanum),
 `#mta` dikomentari — email mati. `modules/misc/httpd` dan
 `modules/transport/xmlrpc` **dimatikan** — tidak dipakai dan httpd akan
 listen `0.0.0.0:8080` yang bisa dijangkau semua container di `ircnet`.
+Modul recovery NickServ (`resetpass`, `setpass`, `sendpass_user`) ikut
+dimatikan — reset password lewat service `api`. Operator `jilles` dihapus.
+
+Semua service (kecuali postgres) pakai `cap_drop: ALL` +
+`no-new-privileges` — postgres dikecualikan karena entrypoint image-nya
+butuh setuid (`gosu`) untuk drop ke user `postgres`.
 
 ## soju/config
 

@@ -23,6 +23,13 @@ services:
     image: solanum-local:latest
     container_name: solanum
     restart: unless-stopped
+    # Hardening: no privilege escalation, no Linux capabilities. Postgres is
+    # the exception — its entrypoint needs setuid (gosu) to drop to the
+    # postgres user, which no-new-privileges would break.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     env_file: .env
     ports:
       # Plaintext is off by default (set SOLANUM_BIND to publish it, e.g. for a
@@ -59,6 +66,10 @@ services:
     image: s0fx2/atheme-irc-services@sha256:29f42d1e01ae198e21f80867e0b7924297f5edfa9c5b532c4d0dae4a8461523b
     container_name: atheme
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     env_file: .env
     entrypoint: /render-entrypoint.sh
     volumes:
@@ -114,6 +125,10 @@ services:
     image: codeberg.org/emersion/soju@sha256:c695fb996dce168fb39449415c7523b17189ed81b48c107d4728fc93fb30e799
     container_name: soju
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       # lib/pq reads PGPASSWORD for the postgres:// connection in soju/config
       PGPASSWORD: ${POSTGRES_PASSWORD}
@@ -158,6 +173,10 @@ services:
     image: a09f-api-soju:latest
     container_name: api
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       DATABASE_URL: postgres://a09f:${A09F_DB_PASSWORD:?run scripts/init-api-db.sh}@postgres:5432/a09f?sslmode=disable
       LEGACY_SQLITE: /data/register.db        # Python service data, read once (never changed)
@@ -210,6 +229,10 @@ services:
     image: axllent/mailpit@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68  # v1.27
     container_name: mailpit
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
       # Always localhost: this inbox shows password-reset emails — it must
       # never follow BIND_ADDR to a public interface.

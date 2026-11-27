@@ -350,6 +350,29 @@ python3 tests/server/test_soju.py --tls       # via bouncer TLS :16697
 python3 tests/server/test_tls.py              # handshake TLS kedua listener
 ```
 
+## Backup
+
+Semua state persisten ada di docker volumes. `scripts/backup.sh` meng-arsip
+semuanya (read-only, aman saat stack jalan) ke `server/backups/<timestamp>/`
+(gitignored, retensi 14 set terakhir):
+
+```bash
+cd server && ./scripts/backup.sh
+```
+
+Volume yang dibackup: `postgres-data` (DB soju — history pesan),
+`atheme-data` (**services.db — semua akun NickServ/ChanServ**),
+`solanum-state` (ban.db), `soju-db`, `soju-uploads`, `register-data`.
+
+Jadwalkan via cron, mis. harian:
+
+```cron
+17 3 * * *  /path/to/server/scripts/backup.sh >> /var/log/irc-backup.log 2>&1
+```
+
+Restore: `docker compose down`, `docker run --rm -v irc_<vol>:/data -v
+$PWD/backups/<ts>:/<vol> alpine tar xzf /<vol>.tgz -C /data`, `up -d`.
+
 ## Security notes (dev only!)
 
 - Semua sertifikat TLS **self-signed** — jangan expose ke internet tanpa CA asli.
@@ -363,8 +386,10 @@ python3 tests/server/test_tls.py              # handshake TLS kedua listener
   buka port TLS (`6697`/`16697`) dan tetap waspada: tidak ada penegakan
   `need_ssl`, jadi client plaintext bisa mengirim password NickServ
   cleartext — pertimbangkan firewall yang hanya mengizinkan TLS.
-- Atheme `httpd`/`xmlrpc` dimatikan; kalau diaktifkan lagi, port 8080-nya
-  listen `0.0.0.0` di dalam container dan bisa dijangkau semua service di
-  `ircnet`.
+- Atheme `httpd`/`xmlrpc` dimatikan; modul recovery password NickServ
+  (`resetpass`, `setpass`, `sendpass_user`) juga dimatikan — reset password
+  ditangani service `api`. Operator `jilles` (sra tanpa password) dihapus.
+- Semua container (kecuali postgres — entrypoint-nya butuh setuid) jalan
+  dengan `cap_drop: ALL` + `no-new-privileges`.
 - Solanum jalan sebagai user `ircd` non-root; atheme sebagai user `atheme`;
   soju image berjalan sebagai user non-root bawaan image.
