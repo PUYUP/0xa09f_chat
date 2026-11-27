@@ -1,0 +1,12 @@
+// Snailog IM webapp on Cloudflare Workers (static assets only, no Worker script).
+// Deploy with ./deploy.sh — it fills public/ first. Docs: server/docs/deploy.md §7.
+{
+  "name": "snailog-webapp",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./public"
+  },
+  "routes": [
+    { "pattern": "im.snailog.com", "custom_domain": true }
+  ]
+}

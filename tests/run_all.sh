@@ -1,8 +1,8 @@
 #!/bin/sh
-# Run the snailog test suites. Usage: tests/run_all.sh [server|api|e2e|visual]...
+# Run the snailog test suites. Usage: tests/run_all.sh [server|api|e2e|visual|webapp]...
 # (no argument = all of them, in that order). Exit code 1 if anything failed.
 cd "$(dirname "$0")/.." || exit 1
-groups="${*:-server api e2e visual}"
+groups="${*:-server api e2e visual webapp}"
 failed=""
 
 run() {                      # run <label> <command...>
@@ -16,13 +16,16 @@ for g in $groups; do
     server)
       run server/solanum python3 tests/server/test_solanum.py
       run server/soju python3 tests/server/test_soju.py
-      run server/tls python3 tests/server/test_tls.py ;;
+      run server/tls python3 tests/server/test_tls.py
+      run server/prod-env python3 tests/server/test_prod_env.py ;;
     api)
       for t in tests/api/test_*.py; do run "api/$(basename "$t" .py)" python3 "$t"; done ;;
     e2e)
       run e2e python3 tests/e2e/run.py ;;
     visual)
       run visual python3 tests/visual/run.py ;;
+    webapp)
+      run webapp python3 tests/webapp/test_build.py ;;
     *) echo "unknown group: $g"; exit 2 ;;
   esac
 done

@@ -19,9 +19,10 @@ const IS_WEB = !!window.__TAURI__.isWebApp;   // browser build: hide desktop-onl
 const $ = (id) => document.getElementById(id);
 
 /* Fixed connection settings — like a classic messenger, nothing to pick. */
-const SERVER = "127.0.0.1:16667";
+const CONFIG = window.SNAILOG_CONFIG || {};   // config.js
+const SERVER = CONFIG.server || "127.0.0.1:16667";
 const NETWORK = "solanum";        // soju upstream network name
-const ACCOUNT_URL = "http://127.0.0.1:16680";     // server/api: create account, recovery email, reset, …
+const ACCOUNT_URL = (CONFIG.accountUrl || "http://127.0.0.1:16680").replace(/\/+$/, "");   // server/api: create account, recovery email, reset, …
 const REGISTER_URL = `${ACCOUNT_URL}/register`;
 const DEFAULT_ROOM = "#lobby";    // everyone lands here if they're in no room yet
 const BURST_TOKEN = "snailog-burst-done";

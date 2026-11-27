@@ -9,6 +9,7 @@ folder sementara, bukan di samping kode. Python hanya stdlib.
 | `api/` | service akun (`server/api`, Go) dan fitur IRC yang dipakai app, lewat HTTP dan koneksi IRC sungguhan | stack docker, akun demo |
 | `e2e/` | skenario yang dijalankan **di dalam app desktop asli** (build debug), dengan skrip "peer" sebagai orang lain | stack docker, akun demo, toolchain Rust/Tauri, sesi desktop |
 | `visual/` | UI asli dirender di Chrome headless dengan API Tauri palsu → screenshot | Google Chrome |
+| `webapp/` | build webapp untuk Cloudflare Workers (`webapp/deploy.sh --dry-run`): alamat produksi, header keamanan, override `?irc=` mati | Google Chrome |
 | `lib/` | pembantu bersama: `snailog.py` (klien IRC lewat soju, klien service akun, SSE, laporan cek), `peer.py` (peer e2e) | — |
 
 Jalankan semua: `tests/run_all.sh` (atau satu grup: `tests/run_all.sh api`).
@@ -30,6 +31,7 @@ kode bukan nol kalau ada yang gagal.
 python3 tests/server/test_solanum.py [--tls]
 python3 tests/server/test_soju.py [--tls]
 python3 tests/server/test_tls.py
+python3 tests/server/test_prod_env.py   # .env produksi (offline, tanpa docker)
 ```
 
 Rincian yang dicek: `server/docs/testing.md`.

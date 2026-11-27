@@ -16,11 +16,12 @@
 (function () {
   if (window.__TAURI__) return;
 
-  // soju WebSocket endpoint. Override with ?irc=ws://host:port/socket or
-  // localStorage "snailog.ws". Default matches docker-compose SOJU_WS_PORT.
-  const WS_URL = new URLSearchParams(location.search).get("irc")
-    || localStorage.getItem("snailog.ws")
-    || "ws://127.0.0.1:16668/socket";
+  // soju WebSocket endpoint from config.js. In dev (allowWsOverride) it can be
+  // overridden with ?irc=ws://host:port/socket or localStorage "snailog.ws".
+  const CONFIG = window.SNAILOG_CONFIG || {};
+  const WS_URL = (CONFIG.allowWsOverride && (new URLSearchParams(location.search).get("irc")
+    || localStorage.getItem("snailog.ws")))
+    || CONFIG.wsUrl || "ws://127.0.0.1:16668/socket";
 
   let ws = null;
   const handlers = new Map();   // event name -> Set<callback>

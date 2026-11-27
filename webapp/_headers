@@ -1,0 +1,20 @@
+# Security headers for im.snailog.com (Cloudflare Workers static assets).
+# CSP starts as Report-Only: check the browser console with every feature in
+# use (link previews, images, themes, notifications), then rename the header
+# to Content-Security-Policy.
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://irc.snailog.com; connect-src 'self' https://irc.snailog.com wss://irc.snailog.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+
+# index.html and config.js are always revalidated so a release shows up at once;
+# app.js / web-shim.js are fetched with ?v=<release> (deploy.sh), so they can be cached.
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/config.js
+  Cache-Control: no-cache

@@ -12,7 +12,7 @@ Stack IRC lengkap yang berjalan di atas Docker Compose:
 | mailpit | Penangkap email dev: email reset password dibaca di web | `axllent/mailpit` v1.27 | `16825` (web) |
 
 Dokumen lain di folder ini: `configuration.md`, `operations.md`, `usage.md`,
-`testing.md`, dan **`api.md`** (API service akun `api`: akun, teman,
+`testing.md`, **`deploy.md`** (persiapan produksi: snailog.com, im., irc.), dan **`api.md`** (API service akun `api`: akun, teman,
 event live, metadata pesan, room). App desktop: `desktop/README.md` dan
 `desktop/docs/`. Semua tes: `tests/README.md`.
 

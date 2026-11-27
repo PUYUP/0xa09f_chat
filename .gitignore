@@ -37,3 +37,6 @@ __pycache__/
 tests/visual/out/
 __pycache__/
 backups/
+
+# webapp build output (webapp/deploy.sh)
+webapp/public/
